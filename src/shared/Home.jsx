@@ -162,6 +162,16 @@ export default function Home() {
           ))}
         </div>
       </div>
+
+      <Link to="/changelog" style={{ textDecoration: 'none', color: 'inherit' }}>
+        <div className="card" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px' }}>
+          <span style={{ fontSize: 20 }}>📋</span>
+          <div>
+            <div style={{ fontWeight: 500, fontSize: 14 }}>搭建日志</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>记录小屋的每一步成长</div>
+          </div>
+        </div>
+      </Link>
     </div>
   )
 }
@@ -280,6 +290,18 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
           </button>
         ))}
       </div>
+
+      <div className="divider-classic">🌸 · 🌸 · 🌸</div>
+
+      <Link to="/changelog" style={{ textDecoration: 'none', color: 'inherit' }}>
+        <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px' }}>
+          <span style={{ fontSize: 20 }}>📋</span>
+          <div>
+            <div style={{ fontWeight: 500, fontSize: 14 }}>搭建日志</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>记录小屋的每一步成长</div>
+          </div>
+        </div>
+      </Link>
     </div>
   )
 }
