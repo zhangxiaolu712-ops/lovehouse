@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { getMemories, addMemory, deleteMemory } from './memoryService'
 
 // 与 CLAUDE.md 记忆大类保持一致
@@ -15,12 +15,19 @@ const LEVELS = [
 ]
 
 export default function MemoryPage() {
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const [memories, setMemories] = useState([])
   const [content, setContent] = useState('')
   const [category, setCategory] = useState('日常点滴')
   const [level, setLevel] = useState('短期')
-  const [filter, setFilter] = useState('')
+  const [filter, setFilter] = useState(() => searchParams.get('level') || '')
   const [loading, setLoading] = useState(true)
+
+  // 侧边栏点固定/短期/长期记忆时，通过 URL 参数切换筛选
+  useEffect(() => {
+    setFilter(searchParams.get('level') || '')
+  }, [searchParams])
 
   useEffect(() => { load() }, [filter])
 
@@ -79,7 +86,7 @@ export default function MemoryPage() {
           <button
             key={l.id}
             className={`btn ${filter === l.id ? '' : 'btn-ghost'}`}
-            onClick={() => setFilter(l.id)}
+            onClick={() => navigate(l.id ? `/memory?level=${l.id}` : '/memory')}
           >
             {l.label}
           </button>
@@ -92,7 +99,8 @@ export default function MemoryPage() {
             <div style={{ flex: 1 }}>
               <p style={{ whiteSpace: 'pre-wrap' }}>{m.content}</p>
               <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span className="tag">{m.category}</span>
+                {/* 点分类标签 → 跳到搜索页自动搜（相互连接） */}
+                <Link to={`/memory/search?q=${encodeURIComponent(m.category)}`} className="tag" style={{ textDecoration: 'none' }}>{m.category}</Link>
                 {m.level && <span className="tag">{m.level === '临时' ? '碎碎念' : m.level}</span>}
                 <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{new Date(m.created_at).toLocaleDateString('zh-CN')}</span>
               </div>

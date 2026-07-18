@@ -16,15 +16,15 @@ import PlaceholderPage from '../modules/placeholder/PlaceholderPage'
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
   'space/layout',
-  'ai/config',
-  'ai/games',
+  'space/games',
+  'memory/inbox',
   'ai/api',
+  'ai/config',
+  'ai/apps',
   'device/toy',
   'device/band',
   'device/smart',
   'project/updates',
-  'project/handover',
-  'settings',
   'settings/backup',
 ]
 
