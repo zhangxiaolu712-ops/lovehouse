@@ -1,4 +1,4 @@
-import { createBrowserRouter } from 'react-router-dom'
+import { createHashRouter } from 'react-router-dom'
 import AppShell from '../shared/AppShell'
 import Home from '../shared/Home'
 import DiaryPage from '../modules/diary/DiaryPage'
@@ -8,7 +8,7 @@ import TodoPage from '../modules/todo/TodoPage'
 import MoodPage from '../modules/mood/MoodPage'
 import StreamPage from '../modules/stream/StreamPage'
 
-export const router = createBrowserRouter([
+export const router = createHashRouter([
   {
     path: '/',
     element: <AppShell />,

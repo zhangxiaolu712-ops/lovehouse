@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useCallback } from 'react'
 const ThemeContext = createContext()
 
 const THEMES = {
+  classic: { id: 'classic', name: '恋爱小屋', icon: '🌸' },
   cozy: { id: 'cozy', name: '浪漫蓝', icon: '💙' },
   vintage: { id: 'vintage', name: '复古手账', icon: '📜' },
   desktop: { id: 'desktop', name: '夜空紫', icon: '🌙' },
