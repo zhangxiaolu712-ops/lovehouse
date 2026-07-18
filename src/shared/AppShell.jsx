@@ -1,37 +1,40 @@
 import { useState, useEffect } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, Link, useLocation } from 'react-router-dom'
 import { useTheme } from '../core/theme'
 
-// 六大中心（柜子）+ 各自的抽屉
+// 六大中心（柜子）+ 各自的抽屉（结构以小婷 2026-07-18 文档为准）
 const CENTERS = [
   {
     id: 'space', icon: '🏠', label: '空间中心',
     items: [
-      { path: '/', icon: '🛋️', label: '主界面' },
-      { path: '/space/layout', icon: '🧩', label: '布局系统' },
-      { path: '/space/theme', icon: '🎨', label: '主题系统' },
+      { path: '/', icon: '🛋️', label: '首页' },
+      { path: '/space/layout', icon: '🧩', label: '布局' },
+      { path: '/space/theme', icon: '🎨', label: '主题' },
       { path: '/space/notes', icon: '💌', label: '小纸条留言板' },
-      { path: '/quotes', icon: '💬', label: '语录墙' },
-      { path: '/todo', icon: '✅', label: '待办事项' },
+      { path: '/todo', icon: '✅', label: '我们的待办' },
+      { path: '/space/games', icon: '🎮', label: '游戏区' },
     ],
   },
   {
     id: 'memory', icon: '🧠', label: '记忆中心',
     items: [
+      { path: '/stream', icon: '🔒', label: '私密记录' },
       { path: '/diary', icon: '📖', label: '日记' },
       { path: '/memory', icon: '💭', label: '碎碎念' },
-      { path: '/mood', icon: '🌈', label: '心情日志' },
-      { path: '/stream', icon: '🔒', label: '私密记录' },
-      { path: '/memory/search', icon: '🔍', label: '搜索整理' },
+      { path: '/quotes', icon: '💬', label: '原句收集' },
+      { path: '/memory/inbox', icon: '📥', label: '总结待整理区' },
+      { path: '/memory', query: 'level=固定', icon: '🔒', label: '固定记忆' },
+      { path: '/memory', query: 'level=短期', icon: '⏳', label: '短期记忆' },
+      { path: '/memory', query: 'level=长期', icon: '💎', label: '长期记忆' },
+      { path: '/memory/search', icon: '🔍', label: '搜索浏览器' },
     ],
   },
   {
     id: 'ai', icon: '🤖', label: 'AI中心',
     items: [
-      { path: '/ai/config', icon: '🛠️', label: 'AI配置' },
-      { path: '/todo', icon: '📮', label: 'AI任务箱 · 待办' },
-      { path: '/ai/games', icon: '🎮', label: '小游戏区' },
       { path: '/ai/api', icon: '🔗', label: '未来API接口' },
+      { path: '/ai/config', icon: '🛡️', label: 'AI可用权限' },
+      { path: '/ai/apps', icon: '📬', label: 'AI已连软件' },
     ],
   },
   {
@@ -39,7 +42,7 @@ const CENTERS = [
     items: [
       { path: '/device/toy', icon: '🧸', label: 'Toy' },
       { path: '/device/band', icon: '⌚', label: '手环' },
-      { path: '/device/smart', icon: '💡', label: '智能设备' },
+      { path: '/device/smart', icon: '💡', label: '智能家居' },
     ],
   },
   {
@@ -47,13 +50,11 @@ const CENTERS = [
     items: [
       { path: '/changelog', icon: '🧱', label: '搭建日志' },
       { path: '/project/updates', icon: '📝', label: '更新记录' },
-      { path: '/project/handover', icon: '🤝', label: 'AI交接文档' },
     ],
   },
   {
     id: 'settings', icon: '⚙️', label: '设置中心',
     items: [
-      { path: '/settings', icon: '⚙️', label: '通用设置' },
       { path: '/settings/backup', icon: '📦', label: '备份迁移' },
     ],
   },
@@ -82,7 +83,7 @@ function findCenterId(pathname) {
 
 export default function AppShell() {
   const { themes, themeId, switchTheme } = useTheme()
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   const days = getDaysTogether()
   const [expanded, setExpanded] = useState(() => new Set([findCenterId(pathname)]))
 
@@ -126,17 +127,24 @@ export default function AppShell() {
                 <span className="chevron">▶</span>
               </button>
               <div className="sidebar-group-items">
-                {center.items.map(item => (
-                  <NavLink
-                    key={item.path}
-                    to={item.path}
-                    end
-                    className={({ isActive }) => `sidebar-link sub ${isActive ? 'active' : ''}`}
-                  >
-                    <span className="icon">{item.icon}</span>
-                    <span>{item.label}</span>
-                  </NavLink>
-                ))}
+                {center.items.map(item => {
+                  // 带 query 的抽屉（固定/短期/长期记忆）需自行判断高亮
+                  const to = item.query ? `${item.path}?${item.query}` : item.path
+                  const onPath = pathname === item.path
+                  const isActive = item.query
+                    ? onPath && search === `?${item.query}`
+                    : onPath && (item.path !== '/memory' || !search.includes('level='))
+                  return (
+                    <Link
+                      key={`${item.path}${item.query || ''}`}
+                      to={to}
+                      className={`sidebar-link sub ${isActive ? 'active' : ''}`}
+                    >
+                      <span className="icon">{item.icon}</span>
+                      <span>{item.label}</span>
+                    </Link>
+                  )
+                })}
               </div>
             </div>
           ))}

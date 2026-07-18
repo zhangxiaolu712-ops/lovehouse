@@ -2,16 +2,16 @@ import { useLocation, Link } from 'react-router-dom'
 
 // 规划中的抽屉：路由 → 介绍
 const DRAWERS = {
-  '/space/layout': { icon: '🧩', title: '布局系统', center: '🏠 空间中心', desc: '网页和手机同步布局；手机版也能开启侧边栏模式，还能自由调整房间里卡片的摆放。' },
-  '/ai/config': { icon: '🛠️', title: 'AI配置', center: '🤖 AI中心', desc: '显示小克当前拥有的权限（GitHub、Supabase、网络域名），以及接入的 AI 列表。' },
-  '/ai/games': { icon: '🎮', title: '小游戏区', center: '🤖 AI中心', desc: '收藏聊天里一起搓出来的小游戏，随时回来玩。' },
+  '/space/layout': { icon: '🧩', title: '布局', center: '🏠 空间中心', desc: '侧边栏式/底部导航式切换，手机和网页布局保持一致。' },
+  '/space/games': { icon: '🎮', title: '游戏区', center: '🏠 空间中心', desc: '收藏聊天记录里一起搓出来的小游戏文件，随时回来玩。' },
+  '/memory/inbox': { icon: '📥', title: '总结待整理区', center: '🧠 记忆中心', desc: '还没归类好的聊天记录总结先放这里，整理好再入库。' },
   '/ai/api': { icon: '🔗', title: '未来API接口', center: '🤖 AI中心', desc: '开放接口，让更多 AI 和服务接入小屋。' },
-  '/device/toy': { icon: '🧸', title: 'Toy', center: '🔌 设备中心', desc: 'Toy 设备接入。' },
-  '/device/band': { icon: '⌚', title: '手环', center: '🔌 设备中心', desc: '手环数据接入：心率、睡眠、运动。' },
-  '/device/smart': { icon: '💡', title: '智能设备', center: '🔌 设备中心', desc: '灯光、音箱等智能家居设备接入。' },
+  '/ai/config': { icon: '🛡️', title: 'AI可用权限', center: '🤖 AI中心', desc: '展示小克已有的权限：Supabase、GitHub、网络域名白名单等。' },
+  '/ai/apps': { icon: '📬', title: 'AI已连软件', center: '🤖 AI中心', desc: '展示已连接的软件：Gmail 等。' },
+  '/device/toy': { icon: '🧸', title: 'Toy', center: '🔌 设备中心', desc: '成人玩具接口预留。' },
+  '/device/band': { icon: '⌚', title: '手环', center: '🔌 设备中心', desc: '运动手环接入，界面里可以看心跳和睡眠。' },
+  '/device/smart': { icon: '💡', title: '智能家居', center: '🔌 设备中心', desc: '灯光、音箱等智能家居设备接入。' },
   '/project/updates': { icon: '📝', title: '更新记录', center: '📋 项目中心', desc: '面向使用者的版本更新说明（搭建日志的精简版）。' },
-  '/project/handover': { icon: '🤝', title: 'AI交接文档', center: '📋 项目中心', desc: '站内展示 docs/ 交接文档，任何 AI 都能接手维护。' },
-  '/settings': { icon: '⚙️', title: '通用设置', center: '⚙️ 设置中心', desc: '用户配置持久化：昵称、纪念日、偏好设置。' },
   '/settings/backup': { icon: '📦', title: '备份迁移', center: '⚙️ 设置中心', desc: '一键导出全部数据（记忆/日记/纸条/私密记录），数据永远属于你，随时可以搬家。' },
 }
 
