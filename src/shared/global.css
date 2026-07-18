@@ -1,3 +1,4 @@
+@import '../themes/classic/style.css';
 @import '../themes/cozy/style.css';
 @import '../themes/vintage/style.css';
 @import '../themes/desktop/style.css';
@@ -503,6 +504,123 @@ body {
   right: 16px;
   font-size: 18px;
   opacity: 0.5;
+}
+
+/* ========== 经典小屋装饰（仅 classic 主题生效） ========== */
+[data-theme="classic"] {
+  font-family: 'Noto Serif SC', 'Georgia', serif;
+}
+
+[data-theme="classic"] .home-hero .subtitle {
+  color: var(--pink-deep);
+  font-style: italic;
+}
+
+[data-theme="classic"] .welcome-banner {
+  background: var(--accent-gradient);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 16px;
+  position: relative;
+  overflow: hidden;
+  border: none;
+}
+
+[data-theme="classic"] .welcome-banner::before {
+  content: '';
+  position: absolute;
+  top: -20px;
+  right: -20px;
+  width: 120px;
+  height: 120px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+}
+
+[data-theme="classic"] .welcome-banner::after {
+  content: '🌸';
+  position: absolute;
+  top: 18px;
+  right: 24px;
+  font-size: 36px;
+  opacity: 0.7;
+}
+
+[data-theme="classic"] .days-counter {
+  position: relative;
+}
+
+[data-theme="classic"] .days-counter::before {
+  content: '🌸';
+  position: absolute;
+  top: 12px;
+  right: 20px;
+  font-size: 20px;
+  opacity: 0.5;
+}
+
+[data-theme="classic"] .days-counter::after {
+  content: '🌸';
+  position: absolute;
+  bottom: 12px;
+  left: 20px;
+  font-size: 16px;
+  opacity: 0.4;
+  transform: rotate(-20deg);
+}
+
+[data-theme="classic"] .quote-card {
+  position: relative;
+}
+
+[data-theme="classic"] .quote-card::after {
+  content: '🌸';
+  position: absolute;
+  bottom: 10px;
+  right: 18px;
+  font-size: 20px;
+  opacity: 0.4;
+}
+
+[data-theme="classic"] .card {
+  box-shadow: 0 2px 12px rgba(61, 43, 31, 0.06);
+}
+
+[data-theme="classic"] .divider-classic {
+  text-align: center;
+  font-size: 14px;
+  padding: 10px;
+  opacity: 0.35;
+  letter-spacing: 8px;
+}
+
+[data-theme="classic"] .status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 11px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+[data-theme="classic"] .status-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--sage);
+  border-radius: 50%;
+  display: inline-block;
+}
+
+[data-theme="classic"] .section-label-classic {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--pink-deep);
+  text-transform: uppercase;
+  margin: 20px 0 10px;
+  font-weight: 600;
 }
 
 /* ========== 滚动条美化 ========== */

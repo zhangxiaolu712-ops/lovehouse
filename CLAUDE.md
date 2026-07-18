@@ -73,9 +73,10 @@ lovehouse/
 │   │       └── StreamPage.jsx
 │   │
 │   ├── themes/                  ← 主题样式（每套独立 CSS）
-│   │   ├── cozy/style.css       ← 🏠 温馨小屋（浪漫蓝，清新淡蓝色调）
+│   │   ├── classic/style.css    ← 🌸 恋爱小屋（奶油色+粉色，原版风格）
+│   │   ├── cozy/style.css       ← 💙 浪漫蓝（清新淡蓝色调）
 │   │   ├── vintage/style.css    ← 📜 复古手账（米色泛黄，纸质感）
-│   │   └── desktop/style.css    ← 🖥️ 桌面空间（深色调）
+│   │   └── desktop/style.css    ← 🌙 夜空紫（深色调）
 │   │
 │   └── shared/                  ← 共享组件
 │       ├── AppShell.jsx         ← 应用外壳 + 底部导航
@@ -125,6 +126,24 @@ lovehouse/
 - 新增 vintage 主题 → 复古手账风格
 - 重新设计首页布局（天数计数、心情打卡、每日语录、功能入口）
 - 更新底部导航样式
+
+### 2026-07-18 | 经典小屋主题 + GitHub Pages 部署
+
+**操作**: 还原旧版风格为可切换主题，配置自动部署
+
+完成内容：
+- 新增 classic 主题（🌸 恋爱小屋）— 完整还原旧版网页风格
+- 经典主题首页：问候语、欢迎卡片、心情天气、快速心情输入、花瓣分隔符
+- 配置 GitHub Actions 自动构建部署到 GitHub Pages
+- 使用 HashRouter 兼容 GitHub Pages 静态托管
+- Vite base 配置为 /lovehouse/
+- 部署地址: https://zhangxiaolu712-ops.github.io/lovehouse/
+
+当前 4 套主题：🌸恋爱小屋、💙浪漫蓝、📜复古手账、🌙夜空紫
+
+**注意**: GitHub 仓库需要配置两个 Secrets:
+- VITE_SUPABASE_URL
+- VITE_SUPABASE_ANON_KEY
 
 ---
 

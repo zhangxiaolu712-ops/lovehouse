@@ -1,0 +1,25 @@
+[data-theme="classic"] {
+  --bg-primary: linear-gradient(180deg, #FAF7F2 0%, #FBF5EE 50%, #FFFCF9 100%);
+  --bg-flat: #FAF7F2;
+  --bg-secondary: rgba(255, 252, 249, 0.6);
+  --bg-card: #FFFCF9;
+  --bg-card-hover: #FFFFFF;
+  --text-primary: #3D2B1F;
+  --text-secondary: #7A5C50;
+  --text-muted: #A8917E;
+  --accent: #E8A598;
+  --accent-soft: rgba(232, 165, 152, 0.12);
+  --accent-gradient: linear-gradient(135deg, #F5DDD8, #EDD5CE, #E8CECC);
+  --love: #C97B6E;
+  --love-soft: rgba(201, 123, 110, 0.1);
+  --border: #EDE0DA;
+  --shadow: 0 2px 12px rgba(61, 43, 31, 0.06);
+  --shadow-lg: 0 6px 20px rgba(61, 43, 31, 0.1);
+  --radius: 20px;
+  --radius-sm: 10px;
+  --nav-bg: rgba(255, 252, 249, 0.96);
+  --font-display: 'Noto Serif SC', 'Georgia', serif;
+  --sage: #A8C5A0;
+  --pink-light: #F5E6E2;
+  --pink-deep: #C97B6E;
+}
