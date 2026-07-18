@@ -1,0 +1,398 @@
+/* ===== 恋爱小屋 · 全局样式 ===== */
+
+/* 字体 */
+@import url('https://fonts.loli.net/css2?family=Noto+Serif+SC:wght@300;400;600&display=swap');
+
+:root {
+  --cream: #FAF7F2;
+  --pink: #E8A598;
+  --pink-light: #F5E6E2;
+  --pink-deep: #C97B6E;
+  --sage: #A8C5A0;
+  --brown: #3D2B1F;
+  --brown-light: #7A5C50;
+  --warm-white: #FFFCF9;
+  --border: #EDE0DA;
+  --shadow: 0 2px 12px rgba(61,43,31,0.06);
+  --radius: 16px;
+  --radius-sm: 10px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--cream);
+  color: var(--brown);
+  font-family: 'Noto Serif SC', serif;
+  min-height: 100vh;
+  max-width: 480px;
+  margin: 0 auto;
+  padding-bottom: 80px;
+}
+
+/* ===== 顶部导航 ===== */
+.header {
+  padding: 24px 20px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.header-greeting-en {
+  font-size: 12px;
+  color: var(--pink-deep);
+  letter-spacing: 0.5px;
+  font-style: italic;
+  margin-bottom: 2px;
+}
+
+.header-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--brown);
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--warm-white);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 11px;
+  font-size: 11px;
+  color: var(--brown-light);
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--sage);
+  border-radius: 50%;
+}
+
+/* ===== 区块标签 ===== */
+.section-label {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--pink-deep);
+  text-transform: uppercase;
+  margin: 20px 20px 10px;
+  font-weight: 600;
+}
+
+/* ===== 卡片 ===== */
+.card {
+  background: var(--warm-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin: 0 20px;
+  box-shadow: var(--shadow);
+}
+
+.card + .card {
+  margin-top: 10px;
+}
+
+/* ===== 欢迎卡片 ===== */
+.welcome-card {
+  margin: 18px 20px 0;
+  background: linear-gradient(135deg, #F5DDD8, #EDD5CE, #E8CECC);
+  border-radius: 20px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.welcome-card::before {
+  content: '';
+  position: absolute;
+  top: -20px; right: -20px;
+  width: 120px; height: 120px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 50%;
+}
+
+.welcome-card::after {
+  content: '🌸';
+  position: absolute;
+  top: 18px; right: 24px;
+  font-size: 36px;
+  opacity: 0.7;
+}
+
+.welcome-en {
+  font-size: 13px;
+  color: var(--pink-deep);
+  font-style: italic;
+  margin-bottom: 4px;
+}
+
+.welcome-zh {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--brown);
+  line-height: 1.3;
+}
+
+.welcome-sub {
+  font-size: 13px;
+  color: var(--brown-light);
+  margin-top: 10px;
+  line-height: 1.6;
+}
+
+.welcome-tags {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.tag {
+  background: rgba(255,255,255,0.5);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--brown-light);
+}
+
+/* ===== 输入框 ===== */
+.input {
+  background: var(--warm-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--brown);
+  font-family: 'Noto Serif SC', serif;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.2s;
+}
+
+.input:focus {
+  border-color: var(--pink);
+}
+
+textarea.input {
+  resize: none;
+  height: 120px;
+  line-height: 1.7;
+}
+
+/* ===== 按钮 ===== */
+.btn {
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
+  font-size: 13px;
+  font-family: 'Noto Serif SC', serif;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.btn:active { opacity: 0.8; }
+
+.btn-primary {
+  background: var(--pink);
+  color: white;
+}
+
+.btn-secondary {
+  background: var(--warm-white);
+  color: var(--brown-light);
+  border: 1px solid var(--border);
+}
+
+.btn-full {
+  width: 100%;
+  padding: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  margin: 0 20px;
+  width: calc(100% - 40px);
+}
+
+/* ===== 列表项 ===== */
+.list-item {
+  background: var(--warm-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin: 0 20px 10px;
+  box-shadow: var(--shadow);
+}
+
+.item-date {
+  font-size: 10px;
+  color: var(--brown-light);
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.item-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--brown);
+  margin-bottom: 4px;
+}
+
+.item-content {
+  font-size: 13px;
+  color: var(--brown-light);
+  line-height: 1.7;
+}
+
+.item-badge {
+  display: inline-block;
+  background: var(--pink-light);
+  color: var(--pink-deep);
+  border-radius: 8px;
+  padding: 2px 10px;
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+/* ===== 语录 ===== */
+.quote-item {
+  position: relative;
+  padding-top: 20px;
+}
+
+.quote-mark {
+  font-size: 48px;
+  color: var(--pink-light);
+  position: absolute;
+  top: 0; left: 14px;
+  line-height: 1;
+  font-family: Georgia, serif;
+}
+
+.quote-speaker {
+  font-size: 11px;
+  color: var(--pink-deep);
+  text-align: right;
+  margin-top: 8px;
+}
+
+/* ===== 记忆 ===== */
+.memory-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.memory-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--pink);
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.memory-cat {
+  display: inline-block;
+  background: var(--pink-light);
+  color: var(--pink-deep);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 10px;
+  margin-top: 5px;
+}
+
+/* ===== 底部导航 ===== */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  background: var(--warm-white);
+  border-top: 1px solid var(--border);
+  display: flex;
+  padding: 10px 0 20px;
+  z-index: 100;
+}
+
+.nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  padding: 6px 0;
+  transition: opacity 0.2s;
+  text-decoration: none;
+}
+
+.nav-icon { font-size: 22px; }
+
+.nav-label {
+  font-size: 10px;
+  color: var(--brown-light);
+  letter-spacing: 0.5px;
+  font-family: 'Noto Serif SC', serif;
+}
+
+.nav-item.active .nav-label {
+  color: var(--pink-deep);
+  font-weight: 600;
+}
+
+/* ===== 空状态 ===== */
+.empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--brown-light);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.empty-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+  display: block;
+}
+
+/* ===== 加载 ===== */
+.loading {
+  text-align: center;
+  padding: 30px;
+  color: var(--brown-light);
+  font-size: 13px;
+}
+
+/* ===== 行内组合 ===== */
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.flex-1 { flex: 1; }
+
+/* ===== 装饰 ===== */
+.divider {
+  text-align: center;
+  font-size: 14px;
+  padding: 10px;
+  opacity: 0.35;
+  letter-spacing: 8px;
+}

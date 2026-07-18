@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>语录 · 恋爱小屋</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-greeting-en">Words we love,</div>
+    <div class="header-title">语录</div>
+  </div>
+</div>
+
+<div style="height:16px"></div>
+
+<!-- 快速添加 -->
+<div class="row" style="margin:0 20px 16px;">
+  <input class="input flex-1" id="quote-input" placeholder="记录一句让你心动的话..." />
+  <button class="btn btn-primary" onclick="saveQuote()">存入</button>
+</div>
+
+<!-- 语录列表 -->
+<div id="quotes-list">
+  <div class="loading">加载中...</div>
+</div>
+
+<nav class="bottom-nav">
+  <a class="nav-item" href="index.html"><div class="nav-icon">🏠</div><div class="nav-label">小屋</div></a>
+  <a class="nav-item" href="diary.html"><div class="nav-icon">📔</div><div class="nav-label">日记</div></a>
+  <a class="nav-item active" href="quotes.html"><div class="nav-icon">💬</div><div class="nav-label">语录</div></a>
+  <a class="nav-item" href="memory.html"><div class="nav-icon">🌸</div><div class="nav-label">记忆</div></a>
+  <a class="nav-item" href="todo.html"><div class="nav-icon">🎀</div><div class="nav-label">小票</div></a>
+</nav>
+
+<script src="js/config.js"></script>
+<script>
+async function saveQuote() {
+  const input = document.getElementById('quote-input');
+  const val = input.value.trim();
+  if (!val) return;
+  try {
+    await DB.post('quotes', { content: val, speaker: '小婷' });
+    input.value = '';
+    loadQuotes();
+  } catch(e) { alert('保存失败'); }
+}
+
+async function loadQuotes() {
+  const el = document.getElementById('quotes-list');
+  try {
+    const items = await DB.get('quotes', 'order=created_at.desc');
+    if (!items || items.length === 0) {
+      el.innerHTML = '<div class="empty"><span class="empty-icon">💬</span>还没有语录<br>记录一句让你心动的话吧</div>';
+      return;
+    }
+    el.innerHTML = items.map(q => `
+      <div class="list-item quote-item">
+        <div class="quote-mark">"</div>
+        <div class="item-content">${q.content}</div>
+        <div class="quote-speaker">— ${q.speaker}</div>
+        <div class="item-date" style="text-align:right;">${formatDate(q.created_at)}</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="empty">加载失败</div>';
+  }
+}
+
+loadQuotes();
+</script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>日记 · 恋爱小屋</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- 顶部 -->
+<div class="header">
+  <div>
+    <div class="header-greeting-en">Dear diary,</div>
+    <div class="header-title">日记</div>
+  </div>
+</div>
+
+<div style="height:16px"></div>
+
+<!-- 写日记按钮 -->
+<button class="btn btn-primary btn-full" onclick="toggleForm()">✦ 写日记</button>
+
+<!-- 写日记表单 -->
+<div id="write-form" style="display:none; margin:12px 20px 0;">
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    <input class="input" id="diary-title" placeholder="标题（选填）" />
+    <textarea class="input" id="diary-content" placeholder="今天想说什么..."></textarea>
+    <input class="input" id="diary-mood" placeholder="心情（选填，如：闪闪发光）" />
+    <div class="row">
+      <button class="btn btn-primary flex-1" onclick="saveDiary()">保存</button>
+      <button class="btn btn-secondary" onclick="toggleForm()">取消</button>
+    </div>
+  </div>
+</div>
+
+<div style="height:16px"></div>
+
+<!-- 日记列表 -->
+<div id="diary-list">
+  <div class="loading">加载中...</div>
+</div>
+
+<!-- 底部导航 -->
+<nav class="bottom-nav">
+  <a class="nav-item" href="index.html">
+    <div class="nav-icon">🏠</div>
+    <div class="nav-label">小屋</div>
+  </a>
+  <a class="nav-item active" href="diary.html">
+    <div class="nav-icon">📔</div>
+    <div class="nav-label">日记</div>
+  </a>
+  <a class="nav-item" href="quotes.html">
+    <div class="nav-icon">💬</div>
+    <div class="nav-label">语录</div>
+  </a>
+  <a class="nav-item" href="memory.html">
+    <div class="nav-icon">🌸</div>
+    <div class="nav-label">记忆</div>
+  </a>
+  <a class="nav-item" href="todo.html">
+    <div class="nav-icon">🎀</div>
+    <div class="nav-label">小票</div>
+  </a>
+</nav>
+
+<script src="js/config.js"></script>
+<script>
+let formVisible = false;
+
+function toggleForm() {
+  formVisible = !formVisible;
+  document.getElementById('write-form').style.display = formVisible ? 'block' : 'none';
+}
+
+async function saveDiary() {
+  const title = document.getElementById('diary-title').value.trim();
+  const content = document.getElementById('diary-content').value.trim();
+  const mood = document.getElementById('diary-mood').value.trim();
+  if (!content) { alert('请写点什么～'); return; }
+  try {
+    await DB.post('diary', { title: title || null, content, mood: mood || null });
+    document.getElementById('diary-title').value = '';
+    document.getElementById('diary-content').value = '';
+    document.getElementById('diary-mood').value = '';
+    toggleForm();
+    loadDiary();
+  } catch(e) {
+    alert('保存失败，请检查网络');
+  }
+}
+
+async function loadDiary() {
+  const el = document.getElementById('diary-list');
+  try {
+    const items = await DB.get('diary', 'order=created_at.desc');
+    if (!items || items.length === 0) {
+      el.innerHTML = '<div class="empty"><span class="empty-icon">📔</span>还没有日记<br>写下今天的故事吧</div>';
+      return;
+    }
+    el.innerHTML = items.map(d => `
+      <div class="list-item">
+        <div class="item-date">${formatDateTime(d.created_at)}</div>
+        ${d.title ? `<div class="item-title">${d.title}</div>` : ''}
+        <div class="item-content">${d.content}</div>
+        ${d.mood ? `<div class="item-badge">${d.mood}</div>` : ''}
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="empty">加载失败，请检查网络</div>';
+  }
+}
+
+loadDiary();
+</script>
+</body>
+</html>
