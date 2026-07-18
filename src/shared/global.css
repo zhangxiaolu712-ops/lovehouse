@@ -702,6 +702,109 @@ body {
   color: var(--text-muted);
 }
 
+/* ========== 小纸条留言板 ========== */
+.notes-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.note-paper {
+  position: relative;
+  padding: 28px 16px 12px;
+  border-radius: 4px 14px 4px 14px;
+  box-shadow: var(--shadow);
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.2s;
+  color: #4a3f35;
+}
+
+.note-paper:nth-child(odd) { transform: rotate(-1.2deg); }
+.note-paper:nth-child(even) { transform: rotate(1deg); }
+.note-paper:hover { transform: rotate(0) scale(1.02); z-index: 2; }
+
+.note-color-pink { background: #ffe4ec; }
+.note-color-blue { background: #dcedff; }
+.note-color-yellow { background: #fff3c4; }
+.note-color-green { background: #dff2e0; }
+
+.note-pin {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%) rotate(10deg);
+  font-size: 18px;
+}
+
+.note-content {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.note-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 14px;
+  color: #4a3f35;
+}
+
+.note-author-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.note-toggle-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.note-toggle-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.note-color-picker {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.note-color-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.2s;
+}
+
+.note-color-dot.active {
+  border-color: var(--accent);
+  transform: scale(1.15);
+}
+
 /* ========== 复古手账装饰（仅 vintage 主题生效） ========== */
 [data-theme="vintage"] .card {
   border-style: dashed;
