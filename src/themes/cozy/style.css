@@ -1,0 +1,13 @@
+[data-theme="cozy"] {
+  --bg-primary: #fdf6ec;
+  --bg-secondary: #fff8f0;
+  --bg-card: #ffffff;
+  --text-primary: #5d4e37;
+  --text-secondary: #8b7355;
+  --accent: #e8985e;
+  --accent-light: #f5c89a;
+  --border: #f0e0c8;
+  --shadow: 0 2px 12px rgba(93, 78, 55, 0.08);
+  --radius: 16px;
+  --nav-bg: rgba(253, 246, 236, 0.95);
+}

@@ -1,0 +1,13 @@
+[data-theme="desktop"] {
+  --bg-primary: #1e1e2e;
+  --bg-secondary: #282840;
+  --bg-card: #2d2d44;
+  --text-primary: #e0def4;
+  --text-secondary: #908caa;
+  --accent: #c4a7e7;
+  --accent-light: #44426a;
+  --border: #393958;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --radius: 12px;
+  --nav-bg: rgba(30, 30, 46, 0.95);
+}
