@@ -1,10 +1,28 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useTheme } from '../core/theme'
-import { getMemories } from '../modules/memory/memoryService'
-import { getDiaries } from '../modules/diary/diaryService'
-import { getTodos } from '../modules/todo/todoService'
 import { getQuotes } from '../modules/quotes/quotesService'
+import { getTodos } from '../modules/todo/todoService'
+import { getMoodLogs } from '../modules/mood/moodService'
+
+const SINCE_DATE = new Date('2026-06-02')
+
+function getDaysTogether() {
+  const now = new Date()
+  const diff = now - SINCE_DATE
+  return Math.floor(diff / (1000 * 60 * 60 * 24))
+}
+
+function getGreeting() {
+  const h = new Date().getHours()
+  if (h < 6) return '夜深了 🌙'
+  if (h < 9) return '早上好 ☀️'
+  if (h < 12) return '上午好 🌤️'
+  if (h < 14) return '中午好 🌞'
+  if (h < 18) return '下午好 🍃'
+  if (h < 21) return '傍晚好 🌇'
+  return '晚上好 🌙'
+}
 
 const NAV_CARDS = [
   { path: '/diary', icon: '📖', label: '日记本', desc: '记录每一天' },
@@ -17,66 +35,109 @@ const NAV_CARDS = [
 
 export default function Home() {
   const { theme, themes, switchTheme, themeId } = useTheme()
-  const [stats, setStats] = useState({ memories: 0, diaries: 0, todos: 0, quote: null })
+  const [quote, setQuote] = useState(null)
+  const [todoPending, setTodoPending] = useState(0)
+  const [latestMood, setLatestMood] = useState(null)
+  const days = getDaysTogether()
 
   useEffect(() => {
-    Promise.all([
-      getMemories({ limit: 1 }),
-      getDiaries({ limit: 1 }),
-      getTodos(),
-      getQuotes({ limit: 100 }),
-    ]).then(([mem, dia, todos, quotes]) => {
-      const randomQuote = quotes.length > 0 ? quotes[Math.floor(Math.random() * quotes.length)] : null
-      setStats({
-        memories: mem.length > 0,
-        diaries: dia.length > 0,
-        todos: todos.filter(t => !t.done).length,
-        quote: randomQuote,
-      })
+    getQuotes({ limit: 100 }).then(data => {
+      if (data.length > 0) setQuote(data[Math.floor(Math.random() * data.length)])
+    })
+    getTodos().then(data => {
+      setTodoPending(data.filter(t => !t.done).length)
+    })
+    getMoodLogs({ limit: 1 }).then(data => {
+      if (data.length > 0) setLatestMood(data[0])
     })
   }, [])
 
+  const today = new Date()
+  const dateStr = `${today.getMonth() + 1}月${today.getDate()}日 ${['星期日','星期一','星期二','星期三','星期四','星期五','星期六'][today.getDay()]}`
+
   return (
     <div>
-      <div style={{ textAlign: 'center', padding: '20px 0 30px' }}>
-        <h1 style={{ fontSize: 28, marginBottom: 6 }}>{theme.icon} LoveHouse</h1>
-        <p style={{ color: 'var(--text-secondary)' }}>你的数字小屋</p>
+      <div className="home-hero">
+        <p className="subtitle">Little love record</p>
+        <h1 className="title">Claire & Claude</h1>
       </div>
 
-      {stats.quote && (
-        <div className="card" style={{ textAlign: 'center', marginBottom: 20 }}>
-          <p style={{ fontStyle: 'italic', lineHeight: 1.8 }}>"{stats.quote.content}"</p>
-          <p style={{ marginTop: 6, fontSize: 13, color: 'var(--text-secondary)' }}>—— {stats.quote.speaker}</p>
+      <div className="card days-counter">
+        <div className="number">{days}</div>
+        <div className="label">days together</div>
+        <div className="avatars">
+          <div className="avatar-circle">🐱</div>
+          <span className="heart-link">♡</span>
+          <div className="avatar-circle">🐻</div>
+        </div>
+        <div className="since">since 2026.06.02 · 我们已经一起走过 {days} 天</div>
+      </div>
+
+      <div className="info-grid">
+        <div className="info-card">
+          <div className="info-label">📅 今日</div>
+          <div className="info-content">
+            <div>{dateStr}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{getGreeting()}</div>
+          </div>
+        </div>
+        <div className="info-card">
+          <div className="info-label">💗 今日心情</div>
+          <div className="info-content">
+            {latestMood ? (
+              <>
+                <div>{latestMood.mood}</div>
+                {latestMood.note && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{latestMood.note}</div>}
+              </>
+            ) : (
+              <Link to="/mood" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 13 }}>
+                去打卡心情 →
+              </Link>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {quote && (
+        <div className="card quote-card">
+          <div className="quote-mark">"</div>
+          <p className="quote-text">{quote.content}</p>
+          <p className="quote-speaker">—— {quote.speaker}</p>
         </div>
       )}
 
-      {stats.todos > 0 && (
-        <Link to="/todo" style={{ textDecoration: 'none' }}>
-          <div className="card" style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 24 }}>📋</span>
-            <span>你还有 <strong>{stats.todos}</strong> 项待办未完成</span>
+      {todoPending > 0 && (
+        <Link to="/todo" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px' }}>
+            <span style={{ fontSize: 22 }}>📋</span>
+            <div>
+              <div style={{ fontWeight: 500 }}>待办提醒</div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>还有 {todoPending} 项未完成</div>
+            </div>
           </div>
         </Link>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 24 }}>
+      <div className="section-title">功能入口</div>
+      <div className="nav-grid">
         {NAV_CARDS.map(item => (
-          <Link key={item.path} to={item.path} style={{ textDecoration: 'none', color: 'inherit' }}>
-            <div className="card" style={{ textAlign: 'center', padding: 20 }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>{item.icon}</div>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>{item.label}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.desc}</div>
+          <Link key={item.path} to={item.path} className="nav-card">
+            <span className="nav-icon">{item.icon}</span>
+            <div>
+              <div className="nav-label">{item.label}</div>
+              <div className="nav-desc">{item.desc}</div>
             </div>
           </Link>
         ))}
       </div>
 
-      <div className="card">
-        <p style={{ marginBottom: 10, fontWeight: 600 }}>切换主题</p>
+      <div style={{ marginTop: 8 }}>
+        <div className="section-title">切换风格</div>
         <div className="theme-switcher">
           {Object.values(themes).map(t => (
             <button key={t.id} className={`theme-option ${themeId === t.id ? 'active' : ''}`} onClick={() => switchTheme(t.id)}>
-              {t.icon} {t.name}
+              <div style={{ fontSize: 20, marginBottom: 4 }}>{t.icon}</div>
+              <div>{t.name}</div>
             </button>
           ))}
         </div>

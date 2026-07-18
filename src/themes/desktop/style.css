@@ -1,13 +1,22 @@
 [data-theme="desktop"] {
-  --bg-primary: #1e1e2e;
-  --bg-secondary: #282840;
-  --bg-card: #2d2d44;
-  --text-primary: #e0def4;
-  --text-secondary: #908caa;
-  --accent: #c4a7e7;
-  --accent-light: #44426a;
-  --border: #393958;
-  --shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
-  --radius: 12px;
-  --nav-bg: rgba(30, 30, 46, 0.95);
+  --bg-primary: linear-gradient(180deg, #1a1b2e 0%, #1e1f35 50%, #22233d 100%);
+  --bg-flat: #1e1f35;
+  --bg-secondary: rgba(255, 255, 255, 0.04);
+  --bg-card: rgba(255, 255, 255, 0.06);
+  --bg-card-hover: rgba(255, 255, 255, 0.1);
+  --text-primary: #e0dff4;
+  --text-secondary: #8886ab;
+  --text-muted: #5c5a7a;
+  --accent: #b8a5d6;
+  --accent-soft: rgba(184, 165, 214, 0.12);
+  --accent-gradient: linear-gradient(135deg, #b8a5d6, #c9b8e2);
+  --love: #e88ba5;
+  --love-soft: rgba(232, 139, 165, 0.15);
+  --border: rgba(255, 255, 255, 0.06);
+  --shadow: 0 2px 16px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --radius: 18px;
+  --radius-sm: 10px;
+  --nav-bg: rgba(26, 27, 46, 0.94);
+  --font-display: 'Georgia', serif;
 }

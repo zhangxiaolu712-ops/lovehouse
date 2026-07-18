@@ -3,9 +3,9 @@ import { createContext, useContext, useState, useCallback } from 'react'
 const ThemeContext = createContext()
 
 const THEMES = {
-  cozy: { id: 'cozy', name: '温馨小屋', icon: '🏠' },
-  minimal: { id: 'minimal', name: '极简模式', icon: '✨' },
-  desktop: { id: 'desktop', name: '桌面空间', icon: '🖥️' },
+  cozy: { id: 'cozy', name: '浪漫蓝', icon: '💙' },
+  vintage: { id: 'vintage', name: '复古手账', icon: '📜' },
+  desktop: { id: 'desktop', name: '夜空紫', icon: '🌙' },
 }
 
 export function ThemeProvider({ children }) {

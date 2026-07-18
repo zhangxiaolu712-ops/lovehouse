@@ -1,13 +1,23 @@
 [data-theme="cozy"] {
-  --bg-primary: #fdf6ec;
-  --bg-secondary: #fff8f0;
-  --bg-card: #ffffff;
-  --text-primary: #5d4e37;
-  --text-secondary: #8b7355;
-  --accent: #e8985e;
-  --accent-light: #f5c89a;
-  --border: #f0e0c8;
-  --shadow: 0 2px 12px rgba(93, 78, 55, 0.08);
-  --radius: 16px;
-  --nav-bg: rgba(253, 246, 236, 0.95);
+  --bg-primary: linear-gradient(180deg, #dce8f5 0%, #e8f0fa 30%, #f0f5fd 100%);
+  --bg-flat: #e4edf8;
+  --bg-secondary: rgba(255, 255, 255, 0.55);
+  --bg-card: rgba(255, 255, 255, 0.72);
+  --bg-card-hover: rgba(255, 255, 255, 0.88);
+  --text-primary: #2c3e5a;
+  --text-secondary: #7a8ea8;
+  --text-muted: #a8b8cc;
+  --accent: #6a9fd8;
+  --accent-soft: rgba(106, 159, 216, 0.15);
+  --accent-gradient: linear-gradient(135deg, #6a9fd8, #8bb5e2);
+  --love: #e87e9a;
+  --love-soft: rgba(232, 126, 154, 0.12);
+  --border: rgba(106, 159, 216, 0.15);
+  --shadow: 0 2px 16px rgba(44, 62, 90, 0.06);
+  --shadow-lg: 0 8px 32px rgba(44, 62, 90, 0.1);
+  --radius: 20px;
+  --radius-sm: 12px;
+  --nav-bg: rgba(228, 237, 248, 0.92);
+  --glass: backdrop-filter: blur(16px);
+  --font-display: 'Georgia', serif;
 }
