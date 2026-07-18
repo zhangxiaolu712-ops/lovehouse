@@ -9,6 +9,7 @@ import MoodPage from '../modules/mood/MoodPage'
 import StreamPage from '../modules/stream/StreamPage'
 import ChangelogPage from '../modules/changelog/ChangelogPage'
 import ThemePage from '../modules/space/ThemePage'
+import NotesPage from '../modules/notes/NotesPage'
 import PlaceholderPage from '../modules/placeholder/PlaceholderPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
@@ -42,6 +43,7 @@ export const router = createHashRouter([
       { path: 'stream', element: <StreamPage /> },
       { path: 'changelog', element: <ChangelogPage /> },
       { path: 'space/theme', element: <ThemePage /> },
+      { path: 'space/notes', element: <NotesPage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },
