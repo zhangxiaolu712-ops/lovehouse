@@ -10,16 +10,14 @@ import StreamPage from '../modules/stream/StreamPage'
 import ChangelogPage from '../modules/changelog/ChangelogPage'
 import ThemePage from '../modules/space/ThemePage'
 import NotesPage from '../modules/notes/NotesPage'
+import SearchPage from '../modules/memory/SearchPage'
 import PlaceholderPage from '../modules/placeholder/PlaceholderPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
   'space/layout',
-  'memory/tags',
-  'memory/search',
   'ai/config',
-  'ai/tasks',
-  'ai/app',
+  'ai/games',
   'ai/api',
   'device/toy',
   'device/band',
@@ -27,6 +25,7 @@ const PLACEHOLDER_PATHS = [
   'project/updates',
   'project/handover',
   'settings',
+  'settings/backup',
 ]
 
 export const router = createHashRouter([
@@ -44,6 +43,7 @@ export const router = createHashRouter([
       { path: 'changelog', element: <ChangelogPage /> },
       { path: 'space/theme', element: <ThemePage /> },
       { path: 'space/notes', element: <NotesPage /> },
+      { path: 'memory/search', element: <SearchPage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },

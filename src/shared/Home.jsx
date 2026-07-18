@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useTheme } from '../core/theme'
+import WeatherCard from './WeatherCard'
 import { getQuotes } from '../modules/quotes/quotesService'
 import { getTodos } from '../modules/todo/todoService'
 import { getMoodLogs, addMoodLog } from '../modules/mood/moodService'
@@ -94,13 +95,7 @@ export default function Home() {
       </div>
 
       <div className="info-grid">
-        <div className="info-card">
-          <div className="info-label">📅 今日</div>
-          <div className="info-content">
-            <div>{dateStr}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{getGreeting()} ☀️</div>
-          </div>
-        </div>
+        <WeatherCard />
         <div className="info-card">
           <div className="info-label">💗 今日心情</div>
           <div className="info-content">
@@ -217,6 +212,10 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
           <div className="avatar-circle">🐻</div>
         </div>
         <div className="since">since 2026.06.02 · 我们已经一起走过 {days} 天</div>
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <WeatherCard />
       </div>
 
       <div className="section-label-classic">Today's Little Note</div>
