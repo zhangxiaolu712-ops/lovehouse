@@ -18,11 +18,10 @@ const CENTERS = [
   {
     id: 'memory', icon: '🧠', label: '记忆中心',
     items: [
-      { path: '/diary', icon: '📖', label: '日常记录 · 日记' },
-      { path: '/mood', icon: '🌈', label: '日常记录 · 心情' },
-      { path: '/stream', icon: '🌊', label: '日常记录 · 动态' },
-      { path: '/memory', icon: '💎', label: '长期记忆' },
-      { path: '/memory/tags', icon: '🏷️', label: '标签分类' },
+      { path: '/diary', icon: '📖', label: '日记' },
+      { path: '/memory', icon: '💭', label: '碎碎念' },
+      { path: '/mood', icon: '🌈', label: '心情日志' },
+      { path: '/stream', icon: '🔒', label: '私密记录' },
       { path: '/memory/search', icon: '🔍', label: '搜索整理' },
     ],
   },
@@ -30,8 +29,8 @@ const CENTERS = [
     id: 'ai', icon: '🤖', label: 'AI中心',
     items: [
       { path: '/ai/config', icon: '🛠️', label: 'AI配置' },
-      { path: '/ai/tasks', icon: '📮', label: 'AI任务箱' },
-      { path: '/ai/app', icon: '📱', label: 'App AI模式' },
+      { path: '/todo', icon: '📮', label: 'AI任务箱 · 待办' },
+      { path: '/ai/games', icon: '🎮', label: '小游戏区' },
       { path: '/ai/api', icon: '🔗', label: '未来API接口' },
     ],
   },
@@ -55,6 +54,7 @@ const CENTERS = [
     id: 'settings', icon: '⚙️', label: '设置中心',
     items: [
       { path: '/settings', icon: '⚙️', label: '通用设置' },
+      { path: '/settings/backup', icon: '📦', label: '备份迁移' },
     ],
   },
 ]
