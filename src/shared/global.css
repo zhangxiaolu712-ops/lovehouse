@@ -120,8 +120,59 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 16px 0;
+  gap: 2px;
+  padding: 12px 0;
+}
+
+/* 中心分组（柜子） */
+.sidebar-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  border-radius: var(--radius-sm, 12px);
+  transition: background 0.25s;
+  text-align: left;
+}
+
+.sidebar-group-header:hover {
+  background: var(--bg-card-hover);
+}
+
+.sidebar-group-header .icon {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.sidebar-group-header .chevron {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 0.25s;
+}
+
+.sidebar-group.open .chevron {
+  transform: rotate(90deg);
+}
+
+.sidebar-group-items {
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 6px;
+}
+
+.sidebar-group.open .sidebar-group-items {
+  display: flex;
 }
 
 .sidebar-link {
@@ -151,6 +202,17 @@ body {
 .sidebar-link .icon {
   font-size: 18px;
   line-height: 1;
+}
+
+/* 抽屉子链接 */
+.sidebar-link.sub {
+  padding: 7px 10px 7px 34px;
+  font-size: 13px;
+  gap: 9px;
+}
+
+.sidebar-link.sub .icon {
+  font-size: 15px;
 }
 
 .sidebar-footer {
