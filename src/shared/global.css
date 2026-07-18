@@ -36,6 +36,169 @@ body {
   width: 100%;
 }
 
+/* ========== 侧边栏（桌面端） ========== */
+.sidebar {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .app-shell {
+    flex-direction: row;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 232px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    padding: 24px 16px;
+    background: var(--nav-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+  }
+
+  .app-content {
+    max-width: 640px;
+    padding: 24px 32px 48px;
+  }
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-logo {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.sidebar-title {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+
+.sidebar-days {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-days-number {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 500;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.sidebar-days-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 0;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 12px);
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  transition: all 0.25s;
+}
+
+.sidebar-link:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+.sidebar-link.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sidebar-link .icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.sidebar-footer {
+  padding: 14px 8px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-footer-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.sidebar-themes {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-theme-dot {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--bg-card);
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s;
+  padding: 0;
+}
+
+.sidebar-theme-dot:hover {
+  transform: translateY(-2px);
+}
+
+.sidebar-theme-dot.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 复古手账主题的侧边栏也用虚线边框 */
+[data-theme="vintage"] .sidebar {
+  border-right-style: dashed;
+}
+
 /* ========== 底部导航 ========== */
 .nav-bar {
   position: fixed;
@@ -74,6 +237,13 @@ body {
 .nav-item span.icon {
   font-size: 22px;
   line-height: 1;
+}
+
+/* 桌面端用侧边栏，隐藏底部导航（需放在 .nav-bar 定义之后） */
+@media (min-width: 768px) {
+  .nav-bar {
+    display: none;
+  }
 }
 
 /* ========== 通用卡片 ========== */
