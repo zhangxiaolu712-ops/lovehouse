@@ -3,6 +3,18 @@ import { Link } from 'react-router-dom'
 const LOGS = [
   {
     date: '2026-07-18',
+    title: '搭建日志 + 记忆系统',
+    icon: '🧠',
+    items: [
+      '新增「搭建日志」页面，时间线展示开发历程',
+      '搭建分级记忆系统（固定/长期/短期/临时）',
+      'memories 表新增 level 字段，53条记忆自动分级',
+      'CLAUDE.md 加入身份信息和 AI 自动读取指令',
+      '新对话自动加载记忆，不再丢失上下文',
+    ],
+  },
+  {
+    date: '2026-07-18',
     title: '修复部署构建',
     icon: '🔧',
     items: [
