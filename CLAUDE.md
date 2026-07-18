@@ -38,7 +38,8 @@ LoveHouse 是一个个人数字空间（情侣向），使用 React + Vite + Sup
 
 ```
 lovehouse/
-├── .env                         ← Supabase 密钥（不提交到 Git）
+├── .env                         ← Supabase 密钥（不提交到 Git，本地开发用）
+├── .env.production              ← Supabase 公开配置（已提交，构建部署用）
 ├── .env.example                 ← 环境变量模板
 ├── index.html                   ← 入口 HTML
 ├── package.json                 ← 依赖管理
@@ -141,9 +142,15 @@ lovehouse/
 
 当前 4 套主题：🌸恋爱小屋、💙浪漫蓝、📜复古手账、🌙夜空紫
 
-**注意**: GitHub 仓库需要配置两个 Secrets:
-- VITE_SUPABASE_URL
-- VITE_SUPABASE_ANON_KEY
+### 2026-07-18 | 修复部署构建
+
+**操作**: 添加 .env.production 解决 GitHub Actions 构建时无法读取环境变量的问题
+
+完成内容：
+- 创建 .env.production（Supabase 公开客户端配置，受 RLS 保护）
+- Vite 构建时自动加载 .env.production，无需 GitHub Secrets
+- 简化 deploy.yml，移除 secrets 依赖
+- PR #2 和 PR #3 已合并，GitHub Pages 自动部署已触发
 
 ---
 
