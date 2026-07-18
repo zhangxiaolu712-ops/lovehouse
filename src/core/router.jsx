@@ -7,6 +7,7 @@ import QuotesPage from '../modules/quotes/QuotesPage'
 import TodoPage from '../modules/todo/TodoPage'
 import MoodPage from '../modules/mood/MoodPage'
 import StreamPage from '../modules/stream/StreamPage'
+import ChangelogPage from '../modules/changelog/ChangelogPage'
 
 export const router = createHashRouter([
   {
@@ -20,6 +21,7 @@ export const router = createHashRouter([
       { path: 'todo', element: <TodoPage /> },
       { path: 'mood', element: <MoodPage /> },
       { path: 'stream', element: <StreamPage /> },
+      { path: 'changelog', element: <ChangelogPage /> },
     ],
   },
 ])
