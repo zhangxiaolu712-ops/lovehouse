@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>今日小票 · 恋爱小屋</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--warm-white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 0 20px 10px;
+}
+.todo-check {
+  width: 20px; height: 20px;
+  border: 2px solid var(--pink);
+  border-radius: 50%;
+  flex-shrink: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.todo-check.done {
+  background: var(--pink);
+}
+.todo-check.done::after {
+  content: '✓';
+  color: white;
+  font-size: 12px;
+}
+.todo-text {
+  flex: 1;
+  font-size: 14px;
+  color: var(--brown);
+  line-height: 1.5;
+}
+.todo-text.done {
+  text-decoration: line-through;
+  color: var(--brown-light);
+}
+.todo-date { font-size: 10px; color: var(--brown-light); margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-greeting-en">Today's receipt,</div>
+    <div class="header-title">今日小票</div>
+  </div>
+</div>
+
+<div style="height:16px"></div>
+
+<!-- 添加 -->
+<div class="row" style="margin:0 20px 16px;">
+  <input class="input flex-1" id="todo-input" placeholder="今天想做什么..." />
+  <button class="btn btn-primary" onclick="addTodo()">添加</button>
+</div>
+
+<!-- 列表 -->
+<div id="todo-list">
+  <div class="loading">加载中...</div>
+</div>
+
+<nav class="bottom-nav">
+  <a class="nav-item" href="index.html"><div class="nav-icon">🏠</div><div class="nav-label">小屋</div></a>
+  <a class="nav-item" href="diary.html"><div class="nav-icon">📔</div><div class="nav-label">日记</div></a>
+  <a class="nav-item" href="quotes.html"><div class="nav-icon">💬</div><div class="nav-label">语录</div></a>
+  <a class="nav-item" href="memory.html"><div class="nav-icon">🌸</div><div class="nav-label">记忆</div></a>
+  <a class="nav-item active" href="todo.html"><div class="nav-icon">🎀</div><div class="nav-label">小票</div></a>
+</nav>
+
+<script src="js/config.js"></script>
+<script>
+let todos = [];
+
+async function addTodo() {
+  const input = document.getElementById('todo-input');
+  const val = input.value.trim();
+  if (!val) return;
+  try {
+    await DB.post('todo', { content: val, done: false });
+    input.value = '';
+    loadTodo();
+  } catch(e) { alert('保存失败'); }
+}
+
+async function toggleTodo(id, done) {
+  try {
+    await fetch(`${LOVEHOUSE_CONFIG.supabase.url}/rest/v1/todo?id=eq.${id}`, {
+      method: 'PATCH',
+      headers: { ...HEADERS, 'Prefer': 'return=representation' },
+      body: JSON.stringify({ done: !done })
+    });
+    loadTodo();
+  } catch(e) {}
+}
+
+async function loadTodo() {
+  const el = document.getElementById('todo-list');
+  try {
+    const items = await DB.get('todo', 'order=created_at.desc');
+    if (!items || items.length === 0) {
+      el.innerHTML = '<div class="empty"><span class="empty-icon">🎀</span>今天还没有计划<br>写下今天想做的事吧</div>';
+      return;
+    }
+    el.innerHTML = items.map(t => `
+      <div class="todo-item">
+        <div class="todo-check ${t.done ? 'done' : ''}" onclick="toggleTodo(${t.id}, ${t.done})"></div>
+        <div class="flex-1">
+          <div class="todo-text ${t.done ? 'done' : ''}">${t.content}</div>
+          <div class="todo-date">${formatDate(t.created_at)}</div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="empty">加载失败</div>';
+  }
+}
+
+loadTodo();
+</script>
+</body>
+</html>
