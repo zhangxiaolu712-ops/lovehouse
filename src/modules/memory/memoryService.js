@@ -1,0 +1,20 @@
+import { supabase } from '../../core/supabase'
+
+export async function getMemories({ category, limit = 50 } = {}) {
+  let query = supabase.from('memories').select('*').order('created_at', { ascending: false }).limit(limit)
+  if (category) query = query.eq('category', category)
+  const { data, error } = await query
+  if (error) throw error
+  return data
+}
+
+export async function addMemory({ content, category = '日常', importance = 1 }) {
+  const { data, error } = await supabase.from('memories').insert({ content, category, importance }).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteMemory(id) {
+  const { error } = await supabase.from('memories').delete().eq('id', id)
+  if (error) throw error
+}

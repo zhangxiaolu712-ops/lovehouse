@@ -1,0 +1,22 @@
+[data-theme="vintage"] {
+  --bg-primary: linear-gradient(180deg, #f5efe6 0%, #f8f2ea 50%, #faf6f0 100%);
+  --bg-flat: #f3ece2;
+  --bg-secondary: rgba(243, 236, 226, 0.6);
+  --bg-card: rgba(255, 252, 247, 0.85);
+  --bg-card-hover: rgba(255, 252, 247, 0.95);
+  --text-primary: #4a3f35;
+  --text-secondary: #8c7e72;
+  --text-muted: #b8a99a;
+  --accent: #8b7355;
+  --accent-soft: rgba(139, 115, 85, 0.1);
+  --accent-gradient: linear-gradient(135deg, #8b7355, #a08b6e);
+  --love: #c4877a;
+  --love-soft: rgba(196, 135, 122, 0.12);
+  --border: rgba(139, 115, 85, 0.12);
+  --shadow: 0 2px 12px rgba(74, 63, 53, 0.06);
+  --shadow-lg: 0 6px 24px rgba(74, 63, 53, 0.1);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --nav-bg: rgba(243, 236, 226, 0.94);
+  --font-display: 'Georgia', serif;
+}
