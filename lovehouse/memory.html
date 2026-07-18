@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>记忆 · 恋爱小屋</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-greeting-en">Things I know,</div>
+    <div class="header-title">记忆</div>
+  </div>
+</div>
+
+<div style="height:16px"></div>
+
+<!-- 记忆列表 -->
+<div id="memory-list">
+  <div class="loading">加载中...</div>
+</div>
+
+<nav class="bottom-nav">
+  <a class="nav-item" href="index.html"><div class="nav-icon">🏠</div><div class="nav-label">小屋</div></a>
+  <a class="nav-item" href="diary.html"><div class="nav-icon">📔</div><div class="nav-label">日记</div></a>
+  <a class="nav-item" href="quotes.html"><div class="nav-icon">💬</div><div class="nav-label">语录</div></a>
+  <a class="nav-item active" href="memory.html"><div class="nav-icon">🌸</div><div class="nav-label">记忆</div></a>
+  <a class="nav-item" href="todo.html"><div class="nav-icon">🎀</div><div class="nav-label">小票</div></a>
+</nav>
+
+<script src="js/config.js"></script>
+<script>
+async function loadMemory() {
+  const el = document.getElementById('memory-list');
+  try {
+    const items = await DB.get('memories', 'order=importance.desc,created_at.desc');
+    if (!items || items.length === 0) {
+      el.innerHTML = '<div class="empty"><span class="empty-icon">🌸</span>还没有记忆</div>';
+      return;
+    }
+    el.innerHTML = items.map(m => `
+      <div class="list-item memory-item">
+        <div class="memory-dot"></div>
+        <div class="flex-1">
+          <div class="item-content">${m.content}</div>
+          <div class="memory-cat">${m.category}</div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="empty">加载失败</div>';
+  }
+}
+
+loadMemory();
+</script>
+</body>
+</html>
