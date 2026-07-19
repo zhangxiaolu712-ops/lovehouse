@@ -30,7 +30,7 @@ except ImportError:
 CONFIG_FILE = Path(__file__).parent / "toy_config.json"
 
 SUPABASE_URL = "https://cvyguanuaxcypsvoozeo.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2eWd1YW51YXhjeXBzdm9vemVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4MzM4NDgsImV4cCI6MjA2ODQwOTg0OH0.bM1qlnkNFnMaIpQ-Xi0FPxbcFj0z0dCLykotXMb3LSE"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2eWd1YW51YXhjeXBzdm9vemVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMDYzMTMsImV4cCI6MjA5OTg4MjMxM30.bj-NKf82ahA-zvUtW-pMmfY56Q-Ansh8ezh9K-T65SI"
 
 DEFAULT_CONFIG = {
     "slider": {
