@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Outlet, NavLink, Link, useLocation } from 'react-router-dom'
 import { useTheme } from '../core/theme'
 
@@ -86,12 +86,44 @@ export default function AppShell() {
   const { pathname, search } = useLocation()
   const days = getDaysTogether()
   const [expanded, setExpanded] = useState(() => new Set([findCenterId(pathname)]))
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const touchRef = useRef({ startX: 0, startY: 0 })
 
   // 从别处跳转时，自动展开当前页所在的中心
   useEffect(() => {
     const id = findCenterId(pathname)
     setExpanded(prev => (prev.has(id) ? prev : new Set(prev).add(id)))
   }, [pathname])
+
+  // 跳转页面时自动关闭移动端侧边栏
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [pathname, search])
+
+  // 左边缘滑动手势打开侧边栏
+  const handleTouchStart = useCallback((e) => {
+    touchRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY }
+  }, [])
+
+  const handleTouchEnd = useCallback((e) => {
+    const dx = e.changedTouches[0].clientX - touchRef.current.startX
+    const dy = Math.abs(e.changedTouches[0].clientY - touchRef.current.startY)
+    if (touchRef.current.startX < 30 && dx > 60 && dy < 80) {
+      setMobileOpen(true)
+    }
+    if (mobileOpen && dx < -60) {
+      setMobileOpen(false)
+    }
+  }, [mobileOpen])
+
+  useEffect(() => {
+    document.addEventListener('touchstart', handleTouchStart, { passive: true })
+    document.addEventListener('touchend', handleTouchEnd, { passive: true })
+    return () => {
+      document.removeEventListener('touchstart', handleTouchStart)
+      document.removeEventListener('touchend', handleTouchEnd)
+    }
+  }, [handleTouchStart, handleTouchEnd])
 
   function toggleCenter(id) {
     setExpanded(prev => {
@@ -103,8 +135,16 @@ export default function AppShell() {
 
   return (
     <div className="app-shell">
-      {/* 侧边栏（桌面端显示） */}
-      <aside className="sidebar">
+      {/* 移动端汉堡按钮 */}
+      <button className="mobile-menu-btn" onClick={() => setMobileOpen(true)} aria-label="打开菜单">
+        <span className="hamburger-icon" />
+      </button>
+
+      {/* 移动端遮罩 */}
+      <div className={`sidebar-overlay ${mobileOpen ? 'open' : ''}`} onClick={() => setMobileOpen(false)} />
+
+      {/* 侧边栏（桌面固定 + 移动侧滑） */}
+      <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
           <div className="sidebar-logo">🏡</div>
           <div>

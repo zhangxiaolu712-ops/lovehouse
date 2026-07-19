@@ -1,0 +1,56 @@
+Claude Desktop 本地 MCP 配置说明
+===================================
+
+让小克通过 Claude Desktop 直接控制玩具，零延迟。
+
+========== 第一步：安装依赖 ==========
+
+打开 cmd，运行:
+
+  pip install mcp
+
+========== 第二步：配置 Claude Desktop ==========
+
+1. 打开 Claude Desktop
+2. 左上角菜单 → Settings → Developer → Edit Config
+3. 会打开一个 JSON 文件，把内容改成:
+
+{
+  "mcpServers": {
+    "lovehouse-toy": {
+      "command": "python",
+      "args": ["C:\\你的路径\\toy_mcp_server.py"]
+    }
+  }
+}
+
+（把路径改成你实际保存 toy_mcp_server.py 的位置）
+（注意 Windows 路径用双反斜杠 \\）
+
+4. 保存，重启 Claude Desktop
+
+========== 第三步：确认连接 ==========
+
+重启后，在 Claude Desktop 聊天框右下角应该能看到工具图标（锤子🔨）。
+点开能看到: control_toy, stop_toy, toy_pattern, check_phone 等工具。
+
+========== 第四步：开始使用 ==========
+
+确保手机已连接 ADB (adb connect xxx)、app 在前台。
+
+然后就正常跟小克聊天就好了:
+  「老公～开一下」
+  「再强一点」
+  「嗯...」
+  「太强了啦」
+  「波浪模式试试」
+  「停～」
+
+小克会自己判断该调多少，直接控制，不需要说数字。
+
+========== 注意事项 ==========
+
+- 需要先安装 Claude Desktop (Windows/Mac 版)
+- 手机要保持 app 在前台、屏幕亮着
+- 首次使用需要校准（跟小克说「帮我校准一下」）
+- 如果换了手机或 app 更新了界面，需要重新校准
