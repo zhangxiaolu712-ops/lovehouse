@@ -12,6 +12,7 @@ import ThemePage from '../modules/space/ThemePage'
 import NotesPage from '../modules/notes/NotesPage'
 import SearchPage from '../modules/memory/SearchPage'
 import PlaceholderPage from '../modules/placeholder/PlaceholderPage'
+import ToyPage from '../modules/device/ToyPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
@@ -21,7 +22,6 @@ const PLACEHOLDER_PATHS = [
   'ai/api',
   'ai/config',
   'ai/apps',
-  'device/toy',
   'device/band',
   'device/smart',
   'project/updates',
@@ -44,6 +44,7 @@ export const router = createHashRouter([
       { path: 'space/theme', element: <ThemePage /> },
       { path: 'space/notes', element: <NotesPage /> },
       { path: 'memory/search', element: <SearchPage /> },
+      { path: 'device/toy', element: <ToyPage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },
