@@ -57,21 +57,28 @@ def save_config(cfg):
 
 def adb(*args):
     cmd = ["adb"] + list(args)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    return r.stdout.strip(), r.returncode
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return r.stdout.strip(), r.returncode
+    except FileNotFoundError:
+        return "", -1
 
 
 def check_adb():
     out, code = adb("devices")
+    if code == -1:
+        print("找不到 adb 命令。")
+        print("如需连接玩具，请安装 Android Platform Tools:")
+        print("  https://developer.android.com/tools/releases/platform-tools")
+        print("下载解压后，把文件夹路径加到系统 PATH 环境变量里。")
+        return False
     if code != 0:
-        print("找不到 adb，请先安装 Android Platform Tools")
-        print("下载地址: https://developer.android.com/tools/releases/platform-tools")
+        print("adb 运行出错。")
         return False
     lines = [l for l in out.split("\n")[1:] if l.strip() and "device" in l]
     if not lines:
-        print("没有检测到已连接的手机。")
-        print("请先执行: adb connect <手机IP>:<端口>")
-        print("手机上: 设置 → 开发者选项 → 无线调试 → 查看 IP 和端口")
+        print("ADB 已安装，但没有检测到手机。")
+        print("请执行: adb connect <手机IP>:<端口>")
         return False
     print(f"已连接设备: {lines[0].split()[0]}")
     return True
@@ -183,12 +190,16 @@ def calibrate():
 
 def listen():
     """监听 Supabase 指令并执行"""
-    if not check_adb():
-        return
-
     cfg = load_config()
     interval = cfg.get("poll_interval", 1.5)
     cleanup_counter = 0
+
+    has_adb = check_adb()
+    if not has_adb:
+        print()
+        print("(ADB 未连接，脚本照常监听，收到指令会显示但不执行)")
+        print("(连好 ADB 后重新运行即可)")
+        print()
 
     print("=" * 50)
     print("Toy Controller 已启动!")
@@ -208,7 +219,10 @@ def listen():
                 intensity = cmd.get("intensity", 0)
                 pattern = cmd.get("pattern", "")
                 print(f"  收到指令: 强度={intensity}%{f' 模式={pattern}' if pattern else ''}")
-                swipe_to(intensity, cfg)
+                if has_adb:
+                    swipe_to(intensity, cfg)
+                else:
+                    print(f"  (ADB 未连接，跳过执行)")
                 mark_executed(cmd["id"])
 
             cleanup_counter += 1
@@ -219,7 +233,8 @@ def listen():
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\n正在停止...")
-        swipe_to(0, cfg)
+        if has_adb:
+            swipe_to(0, cfg)
         print("已安全停止。")
 
 
