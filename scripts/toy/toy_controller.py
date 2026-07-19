@@ -1,36 +1,44 @@
 """
-LoveHouse Toy Controller (ADB 万能法)
-======================================
-通过 ADB 模拟手指滑动官方 app 的控制滑条来控制玩具。
+LoveHouse Toy Controller (ADB 万能法 + Supabase 云端中转)
+=========================================================
+通过 Supabase 接收小克的控制指令，用 ADB 模拟手指滑动官方 app 控制玩具。
 
-链路: 小克(AI) → 这个脚本(电脑上跑) → ADB(WiFi) → 手机官方 app → 蓝牙 → 玩具
+链路: 小克(聊天/小屋网页) → Supabase toy_commands 表 → 这个脚本(电脑上跑) → ADB → 手机 app → 蓝牙 → 玩具
 
 使用方法:
   1. 手机打开「开发者模式」→「无线调试」→ 记下 IP 和端口
   2. 电脑安装 ADB: https://developer.android.com/tools/releases/platform-tools
-  3. 连接手机: adb connect 192.168.x.x:xxxxx
-  4. 手机打开司沃康 app，进入控制界面
-  5. 运行校准: python toy_controller.py calibrate
-  6. 启动服务: python toy_controller.py serve
+  3. 电脑安装 Python 依赖: pip install requests
+  4. 连接手机: adb connect 192.168.x.x:xxxxx
+  5. 手机打开司沃康 app，进入控制界面
+  6. 运行校准: python toy_controller.py calibrate
+  7. 启动监听: python toy_controller.py listen
 """
 
 import subprocess
 import sys
 import json
-import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import time
 from pathlib import Path
+
+try:
+    import requests
+except ImportError:
+    print("请先安装 requests: pip install requests")
+    sys.exit(1)
 
 CONFIG_FILE = Path(__file__).parent / "toy_config.json"
 
+SUPABASE_URL = "https://cvyguanuaxcypsvoozeo.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2eWd1YW51YXhjeXBzdm9vemVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4MzM4NDgsImV4cCI6MjA2ODQwOTg0OH0.bM1qlnkNFnMaIpQ-Xi0FPxbcFj0z0dCLykotXMb3LSE"
+
 DEFAULT_CONFIG = {
-    "phone_ip": "",
     "slider": {
         "x": 540,
         "y_min": 1600,
         "y_max": 800,
     },
-    "port": 8269,
+    "poll_interval": 1.5,
 }
 
 
@@ -81,8 +89,55 @@ def swipe_to(intensity, cfg):
     return y_target
 
 
-def tap(x, y):
-    adb("shell", "input", "tap", str(x), str(y))
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+
+
+def fetch_pending_commands():
+    """从 Supabase 获取未执行的指令"""
+    url = f"{SUPABASE_URL}/rest/v1/toy_commands"
+    params = {
+        "executed": "eq.false",
+        "order": "created_at.asc",
+        "limit": "10",
+    }
+    headers = supabase_headers()
+    headers["Prefer"] = "return=representation"
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=5)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"  获取指令失败: {e}")
+    return []
+
+
+def mark_executed(cmd_id):
+    """标记指令为已执行"""
+    url = f"{SUPABASE_URL}/rest/v1/toy_commands?id=eq.{cmd_id}"
+    try:
+        requests.patch(url, headers=supabase_headers(),
+                       json={"executed": True}, timeout=5)
+    except Exception:
+        pass
+
+
+def cleanup_old_commands():
+    """清理1小时前的已执行指令"""
+    url = f"{SUPABASE_URL}/rest/v1/toy_commands"
+    params = {
+        "executed": "eq.true",
+        "created_at": f"lt.{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 3600))}",
+    }
+    try:
+        requests.delete(url, headers=supabase_headers(), params=params, timeout=5)
+    except Exception:
+        pass
 
 
 def calibrate():
@@ -126,87 +181,67 @@ def calibrate():
     print("如果没反应，重新运行 calibrate 调整坐标。")
 
 
-class ToyHandler(BaseHTTPRequestHandler):
-    config = None
-
-    def do_POST(self):
-        if self.path == "/control":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            intensity = max(0, min(100, int(body.get("intensity", 0))))
-            swipe_to(intensity, self.config)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"ok": True, "intensity": intensity}).encode())
-        elif self.path == "/stop":
-            swipe_to(0, self.config)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"ok": True, "stopped": True}).encode())
-        else:
-            self.send_error(404)
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    def log_message(self, fmt, *args):
-        print(f"  [{self.log_date_time_string()}] {fmt % args}")
-
-
-def serve():
-    """启动 HTTP 服务，等待 AI 发来控制指令"""
+def listen():
+    """监听 Supabase 指令并执行"""
     if not check_adb():
         return
 
     cfg = load_config()
-    port = cfg.get("port", 8269)
-
-    ToyHandler.config = cfg
-    server = HTTPServer(("0.0.0.0", port), ToyHandler)
+    interval = cfg.get("poll_interval", 1.5)
+    cleanup_counter = 0
 
     print("=" * 50)
-    print(f"Toy Controller 已启动!")
-    print(f"监听端口: {port}")
+    print("Toy Controller 已启动!")
     print("=" * 50)
     print()
-    print("接口:")
-    print(f"  POST http://localhost:{port}/control")
-    print(f"    body: {{\"intensity\": 0~100}}")
-    print(f"  POST http://localhost:{port}/stop")
+    print("监听模式: 轮询 Supabase toy_commands 表")
+    print(f"轮询间隔: {interval}s")
     print()
+    print("小克现在可以通过聊天控制了~")
     print("等待指令中... (Ctrl+C 停止)")
     print()
 
     try:
-        server.serve_forever()
+        while True:
+            commands = fetch_pending_commands()
+            for cmd in commands:
+                intensity = cmd.get("intensity", 0)
+                pattern = cmd.get("pattern", "")
+                print(f"  收到指令: 强度={intensity}%{f' 模式={pattern}' if pattern else ''}")
+                swipe_to(intensity, cfg)
+                mark_executed(cmd["id"])
+
+            cleanup_counter += 1
+            if cleanup_counter >= 200:
+                cleanup_old_commands()
+                cleanup_counter = 0
+
+            time.sleep(interval)
     except KeyboardInterrupt:
-        print("\n已停止。")
+        print("\n正在停止...")
         swipe_to(0, cfg)
-        server.server_close()
+        print("已安全停止。")
 
 
 def main():
     if len(sys.argv) < 2:
+        print("LoveHouse Toy Controller")
+        print("=" * 40)
+        print()
         print("用法:")
-        print("  python toy_controller.py calibrate  - 校准滑条位置")
-        print("  python toy_controller.py serve      - 启动控制服务")
+        print("  python toy_controller.py calibrate   - 校准滑条位置")
+        print("  python toy_controller.py listen      - 监听小克的指令")
         print("  python toy_controller.py test <0~100> - 测试指定强度")
+        print()
+        print("首次使用请按顺序: calibrate → listen")
         return
 
     cmd = sys.argv[1]
 
     if cmd == "calibrate":
         calibrate()
-    elif cmd == "serve":
-        serve()
+    elif cmd in ("listen", "serve"):
+        listen()
     elif cmd == "test":
         if not check_adb():
             return

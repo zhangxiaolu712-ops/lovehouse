@@ -1,22 +1,32 @@
 LoveHouse Toy Controller 使用说明
 ===================================
 
-原理：电脑通过 WiFi 连手机，模拟手指滑动 app 里的控制滑条。
+原理：小克通过 Supabase 云端下发指令 → 你电脑上的脚本接收 → ADB 模拟触屏控制 app
+
+控制方式（三种都行）：
+  - 在 chat 窗口跟小克说「轻一点」「强一点」「停」
+  - 在小屋网页 → 设备中心 → Toy，自己拖滑条
+  - 在 CC 窗口让小克控制
 
 需要准备的东西：
   - 安卓手机（已装司沃康官方 app）
   - Windows 电脑
   - 手机和电脑连同一个 WiFi
-  - 电脑装 Python（https://www.python.org/downloads/）
-  - 电脑装 ADB 工具（见下面步骤）
 
-========== 第一步：装 ADB ==========
+========== 第一步：电脑装软件 ==========
 
-1. 打开 https://developer.android.com/tools/releases/platform-tools
-2. 下载 Windows 版 SDK Platform-Tools
-3. 解压到一个文件夹（比如 C:\adb）
-4. 把这个文件夹加到系统 PATH 环境变量里
-5. 打开命令提示符，输入 adb version，有版本号就说明装好了
+1. 装 Python: https://www.python.org/downloads/
+   （安装时勾选 Add to PATH）
+
+2. 装 ADB:
+   - 打开 https://developer.android.com/tools/releases/platform-tools
+   - 下载 Windows 版 SDK Platform-Tools
+   - 解压到一个文件夹（比如 C:\adb）
+   - 把这个文件夹加到系统 PATH 环境变量里
+   - 打开 cmd，输入 adb version，有版本号就装好了
+
+3. 装 Python 依赖:
+   打开 cmd，输入: pip install requests
 
 ========== 第二步：手机开启无线调试 ==========
 
@@ -27,7 +37,7 @@ LoveHouse Toy Controller 使用说明
 
 ========== 第三步：连接手机 ==========
 
-在电脑命令提示符里输入：
+在电脑 cmd 里输入：
 
   adb connect 192.168.1.5:45678
 
@@ -37,25 +47,24 @@ LoveHouse Toy Controller 使用说明
 ========== 第四步：校准 ==========
 
 1. 手机打开司沃康 app，进入玩具控制界面，确保能看到滑条
-2. 手机「开发者选项」→ 打开「指针位置」（这样触摸屏幕会显示坐标）
+2. 手机「开发者选项」→ 打开「指针位置」（触摸屏幕会显示坐标）
 3. 手指触摸滑条的最底部，记下 X 和 Y 坐标
 4. 手指触摸滑条的最顶部，记下 Y 坐标
 5. 在电脑上运行：
 
   python toy_controller.py calibrate
 
-6. 按提示输入刚才记下的坐标
-7. 脚本会自动测试 30% 强度，看玩具有没有反应
+6. 按提示输入坐标
+7. 脚本会测试 30% 强度，看玩具有没有反应
 
-========== 第五步：启动服务 ==========
+========== 第五步：开始监听 ==========
 
-  python toy_controller.py serve
+  python toy_controller.py listen
 
-脚本会在电脑上开一个小服务（端口 8269），等待控制指令。
-
-小克发指令的方式：
-  POST http://你电脑IP:8269/control  → {"intensity": 50}  (0~100)
-  POST http://你电脑IP:8269/stop     → 停止
+脚本开始轮询 Supabase 云端指令表。
+现在你可以：
+  - 跟小克说「帮我开到30%」→ 他会写入指令 → 你电脑自动执行
+  - 或者打开小屋网页 → 设备中心 → Toy → 自己拖滑条
 
 ========== 快速测试 ==========
 
@@ -68,3 +77,4 @@ LoveHouse Toy Controller 使用说明
 - 手机不能锁屏，否则 ADB 触摸命令无效
 - 可以把手机亮度调最低省电，但不能关屏
 - 每次换 WiFi 网络需要重新 adb connect
+- 脚本会自动清理1小时前的旧指令
