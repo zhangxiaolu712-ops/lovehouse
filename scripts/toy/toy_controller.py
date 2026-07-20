@@ -55,6 +55,8 @@ def save_config(cfg):
     print(f"配置已保存到 {CONFIG_FILE}")
 
 
+current_touch = None
+
 def adb(*args):
     cmd = ["adb"] + list(args)
     try:
@@ -62,6 +64,14 @@ def adb(*args):
         return r.stdout.strip(), r.returncode
     except FileNotFoundError:
         return "", -1
+
+
+def adb_bg(*args):
+    cmd = ["adb"] + list(args)
+    try:
+        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return None
 
 
 def check_adb():
@@ -85,13 +95,23 @@ def check_adb():
 
 
 def swipe_to(intensity, cfg):
-    """intensity: 0~100, 0=关闭, 100=最强"""
+    """intensity: 0~100, 0=关闭, 100=最强。长按模式: 按住目标位置不放"""
+    global current_touch
+    if current_touch and current_touch.poll() is None:
+        current_touch.kill()
+        current_touch.wait()
+        current_touch = None
+
     slider = cfg["slider"]
     x = slider["x"]
     y_range = slider["y_min"] - slider["y_max"]
     y_target = slider["y_min"] - int(y_range * intensity / 100)
-    adb("shell", "input", "swipe",
-        str(x), str(slider["y_min"]), str(x), str(y_target), "800")
+
+    if intensity == 0:
+        return y_target
+
+    current_touch = adb_bg("shell", "input", "swipe",
+                           str(x), str(y_target + 10), str(x), str(y_target - 10), "30000")
     return y_target
 
 
