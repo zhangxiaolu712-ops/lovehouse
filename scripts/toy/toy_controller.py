@@ -34,9 +34,9 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 DEFAULT_CONFIG = {
     "slider": {
-        "x": 540,
-        "y_min": 1600,
-        "y_max": 800,
+        "x": 400,
+        "y_min": 1970,
+        "y_max": 450,
     },
     "poll_interval": 1.5,
 }
@@ -90,9 +90,11 @@ def swipe_to(intensity, cfg):
     x = slider["x"]
     y_range = slider["y_min"] - slider["y_max"]
     y_target = slider["y_min"] - int(y_range * intensity / 100)
-    y_current = slider["y_min"]
-    adb("shell", "input", "swipe",
-        str(x), str(y_current), str(x), str(y_target), "300")
+    if intensity == 0:
+        adb("shell", "input", "tap", str(x), str(slider["y_min"]))
+    else:
+        adb("shell", "input", "swipe",
+            str(x), str(y_target), str(x), str(y_target), "600")
     return y_target
 
 
