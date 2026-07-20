@@ -90,11 +90,8 @@ def swipe_to(intensity, cfg):
     x = slider["x"]
     y_range = slider["y_min"] - slider["y_max"]
     y_target = slider["y_min"] - int(y_range * intensity / 100)
-    if intensity == 0:
-        adb("shell", "input", "tap", str(x), str(slider["y_min"]))
-    else:
-        adb("shell", "input", "swipe",
-            str(x), str(y_target), str(x), str(y_target), "600")
+    adb("shell", "input", "swipe",
+        str(x), str(slider["y_min"]), str(x), str(y_target), "800")
     return y_target
 
 
