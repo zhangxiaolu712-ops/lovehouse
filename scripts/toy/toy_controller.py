@@ -56,9 +56,13 @@ def save_config(cfg):
 
 
 current_touch = None
+device_serial = None
 
 def adb(*args):
-    cmd = ["adb"] + list(args)
+    cmd = ["adb"]
+    if device_serial:
+        cmd += ["-s", device_serial]
+    cmd += list(args)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         return r.stdout.strip(), r.returncode
@@ -67,7 +71,10 @@ def adb(*args):
 
 
 def adb_bg(*args):
-    cmd = ["adb"] + list(args)
+    cmd = ["adb"]
+    if device_serial:
+        cmd += ["-s", device_serial]
+    cmd += list(args)
     try:
         return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
@@ -75,6 +82,7 @@ def adb_bg(*args):
 
 
 def check_adb():
+    global device_serial
     out, code = adb("devices")
     if code == -1:
         print("找不到 adb 命令。")
@@ -88,9 +96,14 @@ def check_adb():
     lines = [l for l in out.split("\n")[1:] if l.strip() and "device" in l]
     if not lines:
         print("ADB 已安装，但没有检测到手机。")
-        print("请执行: adb connect <手机IP>:<端口>")
+        print("请用 USB 数据线连接手机，并打开 USB 调试。")
         return False
-    print(f"已连接设备: {lines[0].split()[0]}")
+    usb_devices = [l for l in lines if not l.split()[0].startswith("192.") and not l.split()[0].startswith("adb-")]
+    if usb_devices:
+        device_serial = usb_devices[0].split()[0]
+    else:
+        device_serial = lines[0].split()[0]
+    print(f"已连接设备: {device_serial}")
     return True
 
 
