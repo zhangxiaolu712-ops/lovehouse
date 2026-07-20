@@ -1201,3 +1201,122 @@ body {
   background: var(--border);
   border-radius: 4px;
 }
+
+/* ========== Clawd 桌宠 ========== */
+.clawd-wrap {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  cursor: pointer;
+  z-index: 10;
+  transition: left 0.05s linear;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.clawd {
+  animation: clawd-bob 1.5s ease-in-out infinite;
+}
+
+.clawd-sleeping {
+  animation: clawd-bob 3s ease-in-out infinite;
+}
+
+.clawd-body {
+  width: 48px;
+  height: 36px;
+  background: #c87850;
+  border-radius: 6px 6px 4px 4px;
+  position: relative;
+  image-rendering: pixelated;
+  box-shadow: inset -4px -4px 0 rgba(0,0,0,0.12), inset 4px 4px 0 rgba(255,255,255,0.1);
+}
+
+.clawd-eyes {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  padding-top: 10px;
+}
+
+.clawd-eye {
+  width: 6px;
+  height: 6px;
+  background: #1a1a1a;
+  border-radius: 1px;
+}
+
+.clawd-eye-closed {
+  height: 2px;
+  margin-top: 2px;
+  border-radius: 0;
+  background: #1a1a1a;
+}
+
+.clawd-mouth {
+  text-align: center;
+  font-size: 8px;
+  line-height: 1;
+  margin-top: 2px;
+  color: #1a1a1a;
+  font-weight: bold;
+}
+
+.clawd-legs {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.clawd-leg {
+  width: 4px;
+  height: 10px;
+  background: #c87850;
+  border-radius: 0 0 2px 2px;
+  box-shadow: inset -1px 0 0 rgba(0,0,0,0.15);
+}
+
+.clawd-leg-anim-1 {
+  animation: clawd-step-1 0.4s ease-in-out infinite;
+}
+
+.clawd-leg-anim-2 {
+  animation: clawd-step-2 0.4s ease-in-out infinite;
+}
+
+.clawd-zzz {
+  position: absolute;
+  top: -28px;
+  right: -8px;
+  font-size: 16px;
+  animation: clawd-float 2s ease-in-out infinite;
+}
+
+.clawd-hearts {
+  position: absolute;
+  top: -28px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 16px;
+  animation: clawd-float 1s ease-in-out infinite;
+}
+
+@keyframes clawd-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+
+@keyframes clawd-step-1 {
+  0%, 100% { height: 10px; }
+  50% { height: 6px; }
+}
+
+@keyframes clawd-step-2 {
+  0%, 100% { height: 6px; }
+  50% { height: 10px; }
+}
+
+@keyframes clawd-float {
+  0%, 100% { transform: translateX(-50%) translateY(0); opacity: 1; }
+  50% { transform: translateX(-50%) translateY(-8px); opacity: 0.7; }
+}

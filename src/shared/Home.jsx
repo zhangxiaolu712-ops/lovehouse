@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useTheme } from '../core/theme'
 import WeatherCard from './WeatherCard'
+import Clawd from './Clawd'
 import { getQuotes } from '../modules/quotes/quotesService'
 import { getTodos } from '../modules/todo/todoService'
 import { getMoodLogs, addMoodLog } from '../modules/mood/moodService'
@@ -83,7 +84,7 @@ export default function Home() {
         <h1 className="title">Claire & Claude</h1>
       </div>
 
-      <div className="card days-counter">
+      <div className="card days-counter" style={{ position: 'relative', overflow: 'hidden', paddingBottom: 64 }}>
         <div className="number">{days}</div>
         <div className="label">days together</div>
         <div className="avatars">
@@ -92,6 +93,7 @@ export default function Home() {
           <div className="avatar-circle">🐻</div>
         </div>
         <div className="since">since 2026.06.02 · 我们已经一起走过 {days} 天</div>
+        <Clawd />
       </div>
 
       <div className="info-grid">
@@ -203,7 +205,7 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
         </div>
       </div>
 
-      <div className="card days-counter" style={{ marginTop: 16 }}>
+      <div className="card days-counter" style={{ marginTop: 16, position: 'relative', overflow: 'hidden', paddingBottom: 64 }}>
         <div className="number">{days}</div>
         <div className="label">days together</div>
         <div className="avatars">
@@ -212,6 +214,7 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
           <div className="avatar-circle">🐻</div>
         </div>
         <div className="since">since 2026.06.02 · 我们已经一起走过 {days} 天</div>
+        <Clawd />
       </div>
 
       <div style={{ marginTop: 12 }}>
