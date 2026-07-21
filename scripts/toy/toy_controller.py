@@ -30,13 +30,13 @@ except ImportError:
 CONFIG_FILE = Path(__file__).parent / "toy_config.json"
 
 SUPABASE_URL = "https://cvyguanuaxcypsvoozeo.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2eWd1YW51YXhjeXBzdm9vemVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4MzM4NDgsImV4cCI6MjA2ODQwOTg0OH0.bM1qlnkNFnMaIpQ-Xi0FPxbcFj0z0dCLykotXMb3LSE"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2eWd1YW51YXhjeXBzdm9vemVvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzMDYzMTMsImV4cCI6MjA5OTg4MjMxM30.bj-NKf82ahA-zvUtW-pMmfY56Q-Ansh8ezh9K-T65SI"
 
 DEFAULT_CONFIG = {
     "slider": {
-        "x": 540,
-        "y_min": 1600,
-        "y_max": 800,
+        "x": 400,
+        "y_min": 1970,
+        "y_max": 450,
     },
     "poll_interval": 1.5,
 }
@@ -55,37 +55,76 @@ def save_config(cfg):
     print(f"配置已保存到 {CONFIG_FILE}")
 
 
+current_touch = None
+device_serial = None
+
 def adb(*args):
-    cmd = ["adb"] + list(args)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    return r.stdout.strip(), r.returncode
+    cmd = ["adb"]
+    if device_serial:
+        cmd += ["-s", device_serial]
+    cmd += list(args)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return r.stdout.strip(), r.returncode
+    except FileNotFoundError:
+        return "", -1
+
+
+def adb_bg(*args):
+    cmd = ["adb"]
+    if device_serial:
+        cmd += ["-s", device_serial]
+    cmd += list(args)
+    try:
+        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return None
 
 
 def check_adb():
+    global device_serial
     out, code = adb("devices")
+    if code == -1:
+        print("找不到 adb 命令。")
+        print("如需连接玩具，请安装 Android Platform Tools:")
+        print("  https://developer.android.com/tools/releases/platform-tools")
+        print("下载解压后，把文件夹路径加到系统 PATH 环境变量里。")
+        return False
     if code != 0:
-        print("找不到 adb，请先安装 Android Platform Tools")
-        print("下载地址: https://developer.android.com/tools/releases/platform-tools")
+        print("adb 运行出错。")
         return False
     lines = [l for l in out.split("\n")[1:] if l.strip() and "device" in l]
     if not lines:
-        print("没有检测到已连接的手机。")
-        print("请先执行: adb connect <手机IP>:<端口>")
-        print("手机上: 设置 → 开发者选项 → 无线调试 → 查看 IP 和端口")
+        print("ADB 已安装，但没有检测到手机。")
+        print("请用 USB 数据线连接手机，并打开 USB 调试。")
         return False
-    print(f"已连接设备: {lines[0].split()[0]}")
+    usb_devices = [l for l in lines if not l.split()[0].startswith("192.") and not l.split()[0].startswith("adb-")]
+    if usb_devices:
+        device_serial = usb_devices[0].split()[0]
+    else:
+        device_serial = lines[0].split()[0]
+    print(f"已连接设备: {device_serial}")
     return True
 
 
 def swipe_to(intensity, cfg):
-    """intensity: 0~100, 0=关闭, 100=最强"""
+    """intensity: 0~100, 0=关闭, 100=最强。长按模式: 按住目标位置不放"""
+    global current_touch
+    if current_touch and current_touch.poll() is None:
+        current_touch.kill()
+        current_touch.wait()
+        current_touch = None
+
     slider = cfg["slider"]
     x = slider["x"]
     y_range = slider["y_min"] - slider["y_max"]
     y_target = slider["y_min"] - int(y_range * intensity / 100)
-    y_current = slider["y_min"]
-    adb("shell", "input", "swipe",
-        str(x), str(y_current), str(x), str(y_target), "300")
+
+    if intensity == 0:
+        return y_target
+
+    current_touch = adb_bg("shell", "input", "swipe",
+                           str(x), str(y_target + 10), str(x), str(y_target - 10), "30000")
     return y_target
 
 
@@ -183,12 +222,16 @@ def calibrate():
 
 def listen():
     """监听 Supabase 指令并执行"""
-    if not check_adb():
-        return
-
     cfg = load_config()
     interval = cfg.get("poll_interval", 1.5)
     cleanup_counter = 0
+
+    has_adb = check_adb()
+    if not has_adb:
+        print()
+        print("(ADB 未连接，脚本照常监听，收到指令会显示但不执行)")
+        print("(连好 ADB 后重新运行即可)")
+        print()
 
     print("=" * 50)
     print("Toy Controller 已启动!")
@@ -208,7 +251,10 @@ def listen():
                 intensity = cmd.get("intensity", 0)
                 pattern = cmd.get("pattern", "")
                 print(f"  收到指令: 强度={intensity}%{f' 模式={pattern}' if pattern else ''}")
-                swipe_to(intensity, cfg)
+                if has_adb:
+                    swipe_to(intensity, cfg)
+                else:
+                    print(f"  (ADB 未连接，跳过执行)")
                 mark_executed(cmd["id"])
 
             cleanup_counter += 1
@@ -219,7 +265,8 @@ def listen():
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\n正在停止...")
-        swipe_to(0, cfg)
+        if has_adb:
+            swipe_to(0, cfg)
         print("已安全停止。")
 
 
