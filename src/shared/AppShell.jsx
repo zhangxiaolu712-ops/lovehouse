@@ -11,6 +11,7 @@ const CENTERS = [
       { path: '/space/layout', icon: '🧩', label: '布局' },
       { path: '/space/theme', icon: '🎨', label: '主题' },
       { path: '/space/notes', icon: '💌', label: '小纸条留言板' },
+      { path: '/space/clawd', icon: '🐾', label: '养小克' },
       { path: '/todo', icon: '✅', label: '我们的待办' },
       { path: '/space/games', icon: '🎮', label: '游戏区' },
     ],
