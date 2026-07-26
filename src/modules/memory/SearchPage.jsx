@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { supabase } from '../../core/supabase'
 
 // 各数据源的检索配置：表名、内容字段、展示信息
