@@ -147,7 +147,14 @@ export default function AppShell() {
       {/* 侧边栏（桌面固定 + 移动侧滑） */}
       <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
-          <div className="sidebar-logo">🏡</div>
+          <div className="sidebar-logo">
+            <img
+              className="sidebar-logo-image"
+              src={`${import.meta.env.BASE_URL}favicon.svg`}
+              alt=""
+              aria-hidden="true"
+            />
+          </div>
           <div>
             <div className="sidebar-title">LoveHouse</div>
             <div className="sidebar-subtitle">Claire &amp; Claude</div>

@@ -1,0 +1,268 @@
+@import './auth.css';
+
+[data-theme="prince"] {
+  --bg-primary:
+    radial-gradient(circle at 14% 8%, rgba(183, 146, 75, 0.08) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 84% 18%, rgba(47, 42, 38, 0.08) 0 1px, transparent 1.6px),
+    linear-gradient(180deg, #f8f3ea 0%, #fbf8f1 48%, #f4ede2 100%);
+  --bg-flat: #f6f0e6;
+  --bg-secondary: rgba(252, 249, 243, 0.82);
+  --bg-card: rgba(255, 253, 248, 0.92);
+  --bg-card-hover: #fffefa;
+  --text-primary: #302b27;
+  --text-secondary: #71685f;
+  --text-muted: #a3978a;
+  --accent: #a88443;
+  --accent-soft: rgba(168, 132, 67, 0.12);
+  --accent-gradient: linear-gradient(135deg, #2f2a26, #514940);
+  --love: #9d3f43;
+  --love-soft: rgba(157, 63, 67, 0.1);
+  --border: rgba(74, 63, 53, 0.16);
+  --shadow: 0 7px 24px rgba(63, 51, 40, 0.055);
+  --shadow-lg: 0 16px 42px rgba(63, 51, 40, 0.1);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --nav-bg: rgba(248, 243, 234, 0.96);
+  --font-display: 'Songti SC', 'STSong', 'Noto Serif SC', Georgia, serif;
+  --rose: #9d3f43;
+  --star: #b7924b;
+}
+
+[data-theme="prince"]::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.62;
+  background-image:
+    radial-gradient(circle at 10% 13%, var(--star) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 92% 10%, var(--text-muted) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 84% 72%, var(--star) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 18% 88%, var(--text-muted) 0 1px, transparent 1.6px);
+}
+
+[data-theme="prince"] .app-shell,
+[data-theme="prince"] .auth-screen,
+[data-theme="prince"] .launch-screen {
+  position: relative;
+  z-index: 1;
+}
+
+[data-theme="prince"] .sidebar {
+  background:
+    linear-gradient(rgba(248, 243, 234, 0.97), rgba(248, 243, 234, 0.97)),
+    repeating-linear-gradient(0deg, transparent 0 25px, rgba(74, 63, 53, 0.025) 25px 26px);
+  border-right-color: rgba(74, 63, 53, 0.2);
+  box-shadow: 12px 0 34px rgba(74, 63, 53, 0.04);
+}
+
+[data-theme="prince"] .sidebar-brand {
+  padding-bottom: 18px;
+}
+
+[data-theme="prince"] .sidebar-title {
+  font-size: 18px;
+  letter-spacing: 0.08em;
+}
+
+[data-theme="prince"] .sidebar-subtitle {
+  color: var(--star);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+[data-theme="prince"] .sidebar-logo-image {
+  border: 1px solid var(--border);
+  background: #fffaf1;
+  box-shadow: none;
+}
+
+[data-theme="prince"] .sidebar-days-number {
+  color: var(--rose);
+}
+
+[data-theme="prince"] .sidebar-link.active,
+[data-theme="prince"] .sidebar-group-header:hover {
+  background: transparent;
+  color: var(--text-primary);
+}
+
+[data-theme="prince"] .sidebar-link.active {
+  box-shadow: inset 2px 0 0 var(--star);
+}
+
+[data-theme="prince"] .sidebar-group-header .icon,
+[data-theme="prince"] .sidebar-link .icon,
+[data-theme="prince"] .nav-item .icon,
+[data-theme="prince"] .nav-card .nav-icon,
+[data-theme="prince"] .info-label {
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+
+[data-theme="prince"] .nav-bar {
+  border-top-color: rgba(74, 63, 53, 0.2);
+  box-shadow: 0 -10px 30px rgba(74, 63, 53, 0.05);
+}
+
+[data-theme="prince"] .nav-item.active {
+  color: var(--rose);
+}
+
+[data-theme="prince"] .card,
+[data-theme="prince"] .info-card,
+[data-theme="prince"] .nav-card,
+[data-theme="prince"] .theme-option {
+  border-color: rgba(74, 63, 53, 0.17);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+[data-theme="prince"] .card {
+  position: relative;
+}
+
+[data-theme="prince"] .card::after {
+  content: '✦';
+  position: absolute;
+  top: 10px;
+  right: 13px;
+  color: var(--star);
+  font-size: 9px;
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+[data-theme="prince"] .home-hero {
+  position: relative;
+  min-height: 144px;
+  padding-top: 42px;
+}
+
+[data-theme="prince"] .home-hero::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  width: 116px;
+  height: 54px;
+  border: 1px solid rgba(74, 63, 53, 0.34);
+  border-color: rgba(74, 63, 53, 0.34) transparent transparent;
+  border-radius: 50%;
+  transform: translateX(-50%) rotate(-8deg);
+}
+
+[data-theme="prince"] .home-hero::after {
+  content: '✦  ·  ♡  ·  ✦';
+  display: block;
+  margin-top: 14px;
+  color: var(--star);
+  font-family: Georgia, serif;
+  font-size: 12px;
+  letter-spacing: 0.3em;
+}
+
+[data-theme="prince"] .home-hero .subtitle {
+  color: var(--star);
+  font-size: 10px;
+  letter-spacing: 0.34em;
+}
+
+[data-theme="prince"] .home-hero .title {
+  margin-bottom: 0;
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+
+[data-theme="prince"] .days-counter {
+  overflow: hidden;
+}
+
+[data-theme="prince"] .days-counter::before {
+  content: '';
+  position: absolute;
+  right: -36px;
+  bottom: -58px;
+  width: 138px;
+  height: 138px;
+  border: 1px solid rgba(74, 63, 53, 0.16);
+  border-radius: 50%;
+}
+
+[data-theme="prince"] .days-counter .number {
+  color: var(--rose);
+  font-weight: 400;
+}
+
+[data-theme="prince"] .avatar-circle {
+  background: transparent;
+  border-width: 1px;
+  filter: grayscale(1);
+}
+
+[data-theme="prince"] .heart-link {
+  color: var(--rose);
+}
+
+[data-theme="prince"] .quote-card .quote-mark {
+  color: var(--star);
+}
+
+[data-theme="prince"] .quote-card .quote-text {
+  font-family: var(--font-display);
+  font-style: normal;
+}
+
+[data-theme="prince"] .btn,
+[data-theme="prince"] .auth-primary {
+  background: var(--accent-gradient);
+  color: #fffaf1;
+}
+
+[data-theme="prince"] .input,
+[data-theme="prince"] .textarea,
+[data-theme="prince"] .auth-form input {
+  background: rgba(255, 253, 248, 0.8);
+  border-color: rgba(74, 63, 53, 0.22);
+}
+
+[data-theme="prince"] .theme-option.active,
+[data-theme="prince"] .sidebar-theme-dot.active {
+  border-color: var(--star);
+  background: rgba(183, 146, 75, 0.08);
+}
+
+[data-theme="prince"] .page-header {
+  border-bottom-color: rgba(74, 63, 53, 0.2);
+}
+
+[data-theme="prince"] .page-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+}
+
+[data-theme="prince"] .tag,
+[data-theme="prince"] .status-badge {
+  border: 1px solid rgba(74, 63, 53, 0.16);
+  background: transparent;
+}
+
+@media (max-width: 480px) {
+  [data-theme="prince"] .home-hero {
+    min-height: 126px;
+  }
+
+  [data-theme="prince"] .home-hero .title {
+    font-size: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="prince"] *,
+  [data-theme="prince"] *::before,
+  [data-theme="prince"] *::after {
+    scroll-behavior: auto !important;
+  }
+}

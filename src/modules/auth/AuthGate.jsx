@@ -10,18 +10,53 @@ import {
 const PIN_LENGTH = 6
 const LOCK_AFTER_HIDDEN_MS = 30_000
 const MAX_PIN_ATTEMPTS = 5
+const MIN_SPLASH_MS = 1_500
 
 function cleanPin(value) {
   return value.replace(/\D/g, '').slice(0, PIN_LENGTH)
 }
 
+function AppMark({ className = '' }) {
+  return (
+    <img
+      className={className}
+      src={`${import.meta.env.BASE_URL}favicon.svg`}
+      alt=""
+      aria-hidden="true"
+    />
+  )
+}
+
+function LaunchScreen() {
+  return (
+    <main className="launch-screen" aria-label="正在打开 LoveHouse">
+      <span className="launch-star launch-star-one" aria-hidden="true">✦</span>
+      <span className="launch-star launch-star-two" aria-hidden="true">·</span>
+      <span className="launch-star launch-star-three" aria-hidden="true">✧</span>
+      <div className="launch-mark-wrap" aria-hidden="true">
+        <span className="launch-orbit-dot" />
+        <AppMark className="launch-mark" />
+      </div>
+      <p className="launch-eyebrow">LOVEHOUSE</p>
+      <h1>循着星光，回到小屋</h1>
+      <p className="launch-caption">Claire &amp; Claude · since 2026.06.02</p>
+      <div className="launch-progress" aria-hidden="true"><span /></div>
+    </main>
+  )
+}
+
 function AccessCard({ eyebrow, title, subtitle, children, installPrompt, onInstall }) {
   return (
     <main className="auth-screen">
-      <div className="auth-glow auth-glow-one" />
-      <div className="auth-glow auth-glow-two" />
+      <div className="auth-orbit auth-orbit-one" aria-hidden="true" />
+      <div className="auth-orbit auth-orbit-two" aria-hidden="true" />
+      <span className="auth-star auth-star-one" aria-hidden="true">✦</span>
+      <span className="auth-star auth-star-two" aria-hidden="true">·</span>
+      <span className="auth-star auth-star-three" aria-hidden="true">✧</span>
       <section className="auth-card" aria-live="polite">
-        <div className="auth-app-icon" aria-hidden="true">🏡</div>
+        <div className="auth-app-icon" aria-hidden="true">
+          <AppMark className="auth-app-mark" />
+        </div>
         <p className="auth-eyebrow">{eyebrow}</p>
         <h1>{title}</h1>
         <p className="auth-subtitle">{subtitle}</p>
@@ -40,6 +75,7 @@ function AccessCard({ eyebrow, title, subtitle, children, installPrompt, onInsta
 export default function AuthGate({ children }) {
   const [session, setSession] = useState(null)
   const [booting, setBooting] = useState(true)
+  const [splashDone, setSplashDone] = useState(false)
   const [pinExists, setPinExists] = useState(false)
   const [unlocked, setUnlocked] = useState(false)
   const [email, setEmail] = useState('')
@@ -52,6 +88,11 @@ export default function AuthGate({ children }) {
   const [installPrompt, setInstallPrompt] = useState(null)
   const hiddenAtRef = useRef(null)
   const userIdRef = useRef(null)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSplashDone(true), MIN_SPLASH_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   const syncAccessState = useCallback(nextSession => {
     setSession(nextSession)
@@ -231,19 +272,7 @@ export default function AuthGate({ children }) {
     setError('')
   }
 
-  if (booting) {
-    return (
-      <AccessCard
-        eyebrow="LOVEHOUSE"
-        title="正在打开小屋"
-        subtitle="正在确认这台设备的登录状态…"
-        installPrompt={installPrompt}
-        onInstall={installApp}
-      >
-        <div className="auth-loader" aria-label="加载中" />
-      </AccessCard>
-    )
-  }
+  if (!splashDone || booting) return <LaunchScreen />
 
   if (!session) {
     return (
