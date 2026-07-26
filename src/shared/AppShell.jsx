@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Outlet, NavLink, Link, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, Link, useLocation } from 'react-router'
 import { useTheme } from '../core/theme'
 
 // 六大中心（柜子）+ 各自的抽屉（结构以小婷 2026-07-18 文档为准）

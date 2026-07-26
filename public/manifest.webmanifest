@@ -1,0 +1,34 @@
+{
+  "id": "./",
+  "name": "LoveHouse 小屋",
+  "short_name": "LoveHouse",
+  "description": "只属于你的小屋，装进手机与桌面。",
+  "lang": "zh-CN",
+  "start_url": "./#/",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "background_color": "#f7f4ff",
+  "theme_color": "#7f6df2",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "写日记",
+      "short_name": "日记",
+      "url": "./#/diary"
+    },
+    {
+      "name": "查看待办",
+      "short_name": "待办",
+      "url": "./#/todo"
+    }
+  ]
+}

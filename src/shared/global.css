@@ -1381,3 +1381,257 @@ body {
   25% { transform: rotate(-8deg); }
   75% { transform: rotate(8deg); }
 }
+
+/* ========== App 登录与本机 PIN 锁屏 ========== */
+.auth-screen {
+  position: relative;
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  overflow: hidden;
+  padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle at 20% 10%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 32%),
+    radial-gradient(circle at 90% 90%, color-mix(in srgb, var(--pink-deep, #ff86a4) 18%, transparent), transparent 34%),
+    var(--bg-primary);
+}
+
+.auth-glow {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  border-radius: 999px;
+  filter: blur(14px);
+  opacity: 0.24;
+  pointer-events: none;
+}
+
+.auth-glow-one {
+  top: -100px;
+  right: -70px;
+  background: var(--accent);
+}
+
+.auth-glow-two {
+  bottom: -120px;
+  left: -80px;
+  background: var(--pink-deep, #ff86a4);
+}
+
+.auth-card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 410px);
+  padding: 36px 30px 28px;
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  box-shadow: 0 26px 70px rgba(32, 24, 80, 0.16);
+  text-align: center;
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+}
+
+.auth-app-icon {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 18px;
+  place-items: center;
+  border-radius: 22px;
+  background: var(--accent-gradient);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--accent) 35%, transparent);
+  font-size: 34px;
+}
+
+.auth-eyebrow {
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.auth-card h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: clamp(26px, 7vw, 34px);
+  line-height: 1.2;
+}
+
+.auth-subtitle {
+  max-width: 320px;
+  margin: 12px auto 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.auth-form {
+  display: grid;
+  gap: 15px;
+  text-align: left;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.auth-form label > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.auth-form input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 15px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  outline: none;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+
+.auth-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.auth-form .auth-pin-input {
+  height: 58px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 750;
+  letter-spacing: 0.42em;
+}
+
+.auth-primary,
+.auth-install,
+.auth-link-button {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.auth-primary {
+  min-height: 52px;
+  margin-top: 3px;
+  border-radius: 16px;
+  background: var(--accent-gradient);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 24%, transparent);
+  color: white;
+  font-weight: 750;
+}
+
+.auth-primary:disabled,
+.auth-link-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.auth-link-button {
+  padding: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.auth-error {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, #d9435f 24%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, #d9435f 9%, transparent);
+  color: #c93652;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+}
+
+.auth-install {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 22px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.auth-privacy {
+  margin-top: 18px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.auth-loader {
+  width: 28px;
+  height: 28px;
+  margin: 8px auto;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: auth-spin 0.8s linear infinite;
+}
+
+@keyframes auth-spin {
+  to { transform: rotate(360deg); }
+}
+
+.app-lock-button {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  right: 12px;
+  z-index: 190;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  box-shadow: var(--shadow);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+@media (min-width: 768px) {
+  .app-lock-button {
+    top: 14px;
+    right: 18px;
+  }
+}
+
+@media (max-width: 420px) {
+  .auth-card {
+    padding: 30px 20px 24px;
+    border-radius: 26px;
+  }
+
+  .app-lock-button span:last-child {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-loader {
+    animation-duration: 1.8s;
+  }
+}

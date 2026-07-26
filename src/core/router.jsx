@@ -1,4 +1,4 @@
-import { createHashRouter } from 'react-router-dom'
+import { createHashRouter } from 'react-router'
 import AppShell from '../shared/AppShell'
 import Home from '../shared/Home'
 import DiaryPage from '../modules/diary/DiaryPage'

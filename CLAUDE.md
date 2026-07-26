@@ -3,6 +3,9 @@
 > 这个文件记录了 LoveHouse 项目的所有开发步骤和决策。
 > 任何 AI 修改本项目前，必须先读取此文件了解当前状态。
 
+> [!IMPORTANT]
+> **Codex、Claude Code（CC）及其他开发者共同规则：**修改项目前必须先完整阅读根目录 `PROJECT_RULES.md`，并查看 `docs/changes/` 中最近的变更记录。只要修改了项目文件，结束前必须在 `docs/changes/` 新建本次任务记录，写清楚“做了什么、为什么、验证结果、风险和下一步计划”。当本文件旧说明与 `PROJECT_RULES.md` 冲突时，以 `PROJECT_RULES.md` 为准。
+
 ---
 
 ## AI 自动读取指令
