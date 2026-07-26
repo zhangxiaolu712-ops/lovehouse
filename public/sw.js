@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lovehouse-shell-v1'
+const CACHE_NAME = 'lovehouse-shell-v2'
 const APP_ROOT = new URL('./', self.registration.scope).toString()
 const SHELL_FILES = [
   APP_ROOT,
