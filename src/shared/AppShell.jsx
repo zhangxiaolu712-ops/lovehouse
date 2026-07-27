@@ -7,61 +7,60 @@ const CENTERS = [
   {
     id: 'space', icon: '🏠', label: '空间中心',
     items: [
-      { path: '/', icon: '🛋️', label: '首页' },
-      { path: '/space/layout', icon: '🧩', label: '布局' },
-      { path: '/space/theme', icon: '🎨', label: '主题' },
-      { path: '/space/notes', icon: '💌', label: '小纸条留言板' },
-      { path: '/space/clawd', icon: '🐾', label: '养小克' },
-      { path: '/todo', icon: '✅', label: '我们的待办' },
-      { path: '/space/games', icon: '🎮', label: '游戏区' },
+      { path: '/', icon: '⌂', label: '首页' },
+      { path: '/space/layout', icon: '◇', label: '布局' },
+      { path: '/space/theme', icon: '◐', label: '主题' },
+      { path: '/space/notes', icon: '✉', label: '小纸条留言板' },
+      { path: '/space/clawd', icon: '◌', label: '养小克' },
+      { path: '/todo', icon: '✓', label: '我们的待办' },
+      { path: '/space/games', icon: '⌘', label: '游戏区' },
     ],
   },
   {
     id: 'memory', icon: '🧠', label: '记忆中心',
     items: [
-      { path: '/stream', icon: '🔒', label: '私密记录' },
-      { path: '/diary', icon: '📖', label: '日记' },
-      { path: '/memory', icon: '💭', label: '碎碎念' },
-      { path: '/quotes', icon: '💬', label: '原句收集' },
-      { path: '/memory/inbox', icon: '📥', label: '总结待整理区' },
-      { path: '/memory', query: 'level=固定', icon: '🔒', label: '固定记忆' },
-      { path: '/memory', query: 'level=短期', icon: '⏳', label: '短期记忆' },
-      { path: '/memory', query: 'level=长期', icon: '💎', label: '长期记忆' },
-      { path: '/memory/search', icon: '🔍', label: '搜索浏览器' },
+      { path: '/stream', icon: '▣', label: '私密记录' },
+      { path: '/diary', icon: '□', label: '日记' },
+      { path: '/memory', icon: '◇', label: '碎碎念' },
+      { path: '/quotes', icon: '“', label: '原句收集' },
+      { path: '/memory/inbox', icon: '⌑', label: '总结待整理区' },
+      { path: '/memory', query: 'level=固定', icon: '●', label: '固定记忆' },
+      { path: '/memory', query: 'level=短期', icon: '◒', label: '短期记忆' },
+      { path: '/memory', query: 'level=长期', icon: '◆', label: '长期记忆' },
+      { path: '/memory/search', icon: '⌕', label: '搜索浏览器' },
     ],
   },
   {
     id: 'ai', icon: '🤖', label: 'AI中心',
     items: [
-      { path: '/ai/api', icon: '🔗', label: '未来API接口' },
-      { path: '/ai/config', icon: '🛡️', label: 'AI可用权限' },
-      { path: '/ai/apps', icon: '📬', label: 'AI已连软件' },
+      { path: '/ai/api', icon: '↗', label: '未来API接口' },
+      { path: '/ai/config', icon: '◇', label: 'AI可用权限' },
+      { path: '/ai/apps', icon: '□', label: 'AI已连软件' },
     ],
   },
   {
     id: 'device', icon: '🔌', label: '设备中心',
     items: [
-      { path: '/device/toy', icon: '🧸', label: 'Toy' },
-      { path: '/device/band', icon: '⌚', label: '手环' },
-      { path: '/device/smart', icon: '💡', label: '智能家居' },
+      { path: '/device/toy', icon: '○', label: 'Toy' },
+      { path: '/device/band', icon: '◉', label: '手环' },
+      { path: '/device/smart', icon: '✧', label: '智能家居' },
     ],
   },
   {
     id: 'project', icon: '📋', label: '项目中心',
     items: [
-      { path: '/changelog', icon: '🧱', label: '搭建日志' },
-      { path: '/project/updates', icon: '📝', label: '更新记录' },
+      { path: '/changelog', icon: '▦', label: '搭建日志' },
+      { path: '/project/updates', icon: '≡', label: '更新记录' },
     ],
   },
   {
     id: 'settings', icon: '⚙️', label: '设置中心',
     items: [
-      { path: '/settings/backup', icon: '📦', label: '备份迁移' },
+      { path: '/settings/backup', icon: '⇄', label: '备份迁移' },
     ],
   },
 ]
 
-// 移动端底部导航保持常用 6 项
 const NAV_ITEMS = [
   { path: '/', icon: '🏠', label: '首页' },
   { path: '/diary', icon: '📖', label: '日记' },
@@ -69,6 +68,19 @@ const NAV_ITEMS = [
   { path: '/quotes', icon: '💬', label: '语录' },
   { path: '/todo', icon: '✅', label: '待办' },
   { path: '/mood', icon: '🌈', label: '心情' },
+]
+
+const PRINCE_NAV_ITEMS = [
+  { path: '/', icon: '⌂', label: '首页' },
+  { path: '/diary', icon: '□', label: '日记' },
+  { path: '/memory', icon: '◇', label: '记忆' },
+]
+
+const QUICK_ITEMS = [
+  { path: '/space/notes', mark: '01', label: '小纸条', desc: '留一句悄悄话' },
+  { path: '/todo', mark: '02', label: '待办', desc: '看看今天要做什么' },
+  { path: '/mood', mark: '03', label: '心情', desc: '记录此刻的天气' },
+  { path: '/quotes', mark: '04', label: '语录', desc: '收藏说过的话' },
 ]
 
 const SINCE_DATE = new Date('2026-06-02')
@@ -82,39 +94,40 @@ function findCenterId(pathname) {
   return center ? center.id : 'space'
 }
 
+function findPageLabel(pathname) {
+  const item = CENTERS.flatMap(center => center.items).find(candidate => candidate.path === pathname)
+  return item?.label || 'LoveHouse'
+}
+
 export default function AppShell() {
   const { themes, themeId, switchTheme } = useTheme()
   const { pathname, search } = useLocation()
   const days = getDaysTogether()
+  const isPrince = themeId === 'prince'
   const [expanded, setExpanded] = useState(() => new Set([findCenterId(pathname)]))
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [quickOpen, setQuickOpen] = useState(false)
   const touchRef = useRef({ startX: 0, startY: 0 })
 
-  // 从别处跳转时，自动展开当前页所在的中心
   useEffect(() => {
     const id = findCenterId(pathname)
     setExpanded(prev => (prev.has(id) ? prev : new Set(prev).add(id)))
   }, [pathname])
 
-  // 跳转页面时自动关闭移动端侧边栏
   useEffect(() => {
     setMobileOpen(false)
+    setQuickOpen(false)
   }, [pathname, search])
 
-  // 左边缘滑动手势打开侧边栏
-  const handleTouchStart = useCallback((e) => {
-    touchRef.current = { startX: e.touches[0].clientX, startY: e.touches[0].clientY }
+  const handleTouchStart = useCallback((event) => {
+    touchRef.current = { startX: event.touches[0].clientX, startY: event.touches[0].clientY }
   }, [])
 
-  const handleTouchEnd = useCallback((e) => {
-    const dx = e.changedTouches[0].clientX - touchRef.current.startX
-    const dy = Math.abs(e.changedTouches[0].clientY - touchRef.current.startY)
-    if (touchRef.current.startX < 30 && dx > 60 && dy < 80) {
-      setMobileOpen(true)
-    }
-    if (mobileOpen && dx < -60) {
-      setMobileOpen(false)
-    }
+  const handleTouchEnd = useCallback((event) => {
+    const dx = event.changedTouches[0].clientX - touchRef.current.startX
+    const dy = Math.abs(event.changedTouches[0].clientY - touchRef.current.startY)
+    if (touchRef.current.startX < 30 && dx > 60 && dy < 80) setMobileOpen(true)
+    if (mobileOpen && dx < -60) setMobileOpen(false)
   }, [mobileOpen])
 
   useEffect(() => {
@@ -129,22 +142,22 @@ export default function AppShell() {
   function toggleCenter(id) {
     setExpanded(prev => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }
 
   return (
-    <div className="app-shell">
-      {/* 移动端汉堡按钮 */}
-      <button className="mobile-menu-btn" onClick={() => setMobileOpen(true)} aria-label="打开菜单">
-        <span className="hamburger-icon" />
-      </button>
+    <div className={`app-shell ${isPrince ? 'editorial-shell' : ''}`}>
+      {!isPrince && (
+        <button className="mobile-menu-btn" onClick={() => setMobileOpen(true)} aria-label="打开菜单">
+          <span className="hamburger-icon" />
+        </button>
+      )}
 
-      {/* 移动端遮罩 */}
       <div className={`sidebar-overlay ${mobileOpen ? 'open' : ''}`} onClick={() => setMobileOpen(false)} />
 
-      {/* 侧边栏（桌面固定 + 移动侧滑） */}
       <aside className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
         <div className="sidebar-brand">
           <div className="sidebar-logo">
@@ -163,7 +176,7 @@ export default function AppShell() {
 
         <div className="sidebar-days">
           <span className="sidebar-days-number">{days}</span>
-          <span className="sidebar-days-label">days together 💗</span>
+          <span className="sidebar-days-label">days together · still counting</span>
         </div>
 
         <nav className="sidebar-nav">
@@ -172,11 +185,10 @@ export default function AppShell() {
               <button className="sidebar-group-header" onClick={() => toggleCenter(center.id)}>
                 <span className="icon">{center.icon}</span>
                 <span>{center.label}</span>
-                <span className="chevron">▶</span>
+                <span className="chevron">›</span>
               </button>
               <div className="sidebar-group-items">
                 {center.items.map(item => {
-                  // 带 query 的抽屉（固定/短期/长期记忆）需自行判断高亮
                   const to = item.query ? `${item.path}?${item.query}` : item.path
                   const onPath = pathname === item.path
                   const isActive = item.query
@@ -201,14 +213,14 @@ export default function AppShell() {
         <div className="sidebar-footer">
           <div className="sidebar-footer-label">主题风格</div>
           <div className="sidebar-themes">
-            {Object.values(themes).map(t => (
+            {Object.values(themes).map(theme => (
               <button
-                key={t.id}
-                title={t.name}
-                className={`sidebar-theme-dot ${themeId === t.id ? 'active' : ''}`}
-                onClick={() => switchTheme(t.id)}
+                key={theme.id}
+                title={theme.name}
+                className={`sidebar-theme-dot ${themeId === theme.id ? 'active' : ''}`}
+                onClick={() => switchTheme(theme.id)}
               >
-                {t.icon}
+                {theme.icon}
               </button>
             ))}
           </div>
@@ -216,23 +228,100 @@ export default function AppShell() {
       </aside>
 
       <main className="app-content">
-        <Outlet />
+        {isPrince && (
+          <header className="editorial-topbar">
+            <button className="editorial-menu-button" onClick={() => setMobileOpen(true)} aria-label="打开全部房间">
+              <span />
+              <span />
+            </button>
+            <div className="editorial-topbar-title">
+              <span className="editorial-topbar-kicker">STAR &amp; ROSE</span>
+              <span>{findPageLabel(pathname)}</span>
+            </div>
+            <span className="editorial-online"><i /> ONLINE</span>
+          </header>
+        )}
+        <div className="route-stage">
+          <Outlet />
+        </div>
       </main>
 
-      {/* 底部导航（移动端显示） */}
-      <nav className="nav-bar">
-        {NAV_ITEMS.map(item => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            end={item.path === '/'}
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-          >
-            <span className="icon">{item.icon}</span>
-            <span>{item.label}</span>
-          </NavLink>
-        ))}
-      </nav>
+      {isPrince ? (
+        <>
+          <nav className="nav-bar editorial-nav">
+            {PRINCE_NAV_ITEMS.slice(0, 2).map(item => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                end={item.path === '/'}
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <span className="icon">{item.icon}</span>
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+            <button
+              className={`editorial-nav-action ${quickOpen ? 'active' : ''}`}
+              type="button"
+              onClick={() => setQuickOpen(open => !open)}
+              aria-label="打开快捷房间"
+              aria-expanded={quickOpen}
+            >
+              <span>＋</span>
+            </button>
+            {PRINCE_NAV_ITEMS.slice(2).map(item => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              >
+                <span className="icon">{item.icon}</span>
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+            <button className="nav-item editorial-more" type="button" onClick={() => setMobileOpen(true)}>
+              <span className="icon">···</span>
+              <span>更多</span>
+            </button>
+          </nav>
+
+          <div className={`editorial-quick-layer ${quickOpen ? 'open' : ''}`} aria-hidden={!quickOpen}>
+            <button className="editorial-quick-backdrop" type="button" onClick={() => setQuickOpen(false)} aria-label="关闭快捷房间" />
+            <section className="editorial-quick-sheet" aria-label="快捷房间">
+              <div className="editorial-sheet-heading">
+                <div>
+                  <span>QUICK ROOMS</span>
+                  <h2>今晚想去哪里？</h2>
+                </div>
+                <button type="button" onClick={() => setQuickOpen(false)} aria-label="关闭">×</button>
+              </div>
+              <div className="editorial-quick-grid">
+                {QUICK_ITEMS.map(item => (
+                  <Link key={item.path} to={item.path}>
+                    <span>{item.mark}</span>
+                    <strong>{item.label}</strong>
+                    <small>{item.desc}</small>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          </div>
+        </>
+      ) : (
+        <nav className="nav-bar">
+          {NAV_ITEMS.map(item => (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              end={item.path === '/'}
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            >
+              <span className="icon">{item.icon}</span>
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      )}
     </div>
   )
 }

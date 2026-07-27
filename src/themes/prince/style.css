@@ -266,3 +266,1071 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ========== 星球玫瑰 2.0：新的信息架构与版式 ========== */
+[data-theme="prince"] {
+  --editorial-ink: #242322;
+  --editorial-paper: #f8f4ec;
+  --editorial-paper-strong: #fffdf8;
+  --editorial-gold: #aa8748;
+  --editorial-rose: #98494c;
+  --editorial-line: rgba(36, 35, 34, 0.16);
+  --editorial-hairline: rgba(36, 35, 34, 0.1);
+  --editorial-shadow: 0 18px 50px rgba(51, 42, 34, 0.09);
+}
+
+[data-theme="prince"] .editorial-shell {
+  background:
+    radial-gradient(circle at 92% 10%, rgba(170, 135, 72, 0.11), transparent 24rem),
+    radial-gradient(circle at 6% 46%, rgba(152, 73, 76, 0.07), transparent 26rem),
+    var(--editorial-paper);
+}
+
+[data-theme="prince"] .editorial-shell .app-content {
+  max-width: none;
+  padding: 0 0 122px;
+}
+
+[data-theme="prince"] .route-stage {
+  width: 100%;
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+[data-theme="prince"] .editorial-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 80;
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  min-height: 62px;
+  padding: max(10px, env(safe-area-inset-top)) 60px 10px 14px;
+  border-bottom: 1px solid var(--editorial-hairline);
+  background: color-mix(in srgb, var(--editorial-paper) 88%, transparent);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+[data-theme="prince"] .editorial-menu-button {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  width: 38px;
+  height: 38px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+[data-theme="prince"] .editorial-menu-button span {
+  display: block;
+  width: 100%;
+  height: 1px;
+  background: var(--editorial-ink);
+}
+
+[data-theme="prince"] .editorial-menu-button span:last-child {
+  width: 62%;
+}
+
+[data-theme="prince"] .editorial-topbar-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-left: 9px;
+}
+
+[data-theme="prince"] .editorial-topbar-title > span:last-child {
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme="prince"] .editorial-topbar-kicker,
+[data-theme="prince"] .editorial-online,
+[data-theme="prince"] .prince-panel-kicker {
+  color: var(--text-muted);
+  font-size: 8px;
+  letter-spacing: 0.22em;
+}
+
+[data-theme="prince"] .editorial-online {
+  display: none;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+[data-theme="prince"] .editorial-online i,
+[data-theme="prince"] .prince-hero-status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--editorial-rose);
+  box-shadow: 0 0 0 4px rgba(152, 73, 76, 0.09);
+}
+
+[data-theme="prince"] .app-lock-button {
+  top: max(12px, env(safe-area-inset-top));
+  z-index: 90;
+  width: 38px;
+  min-height: 38px;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 253, 248, 0.68);
+  box-shadow: none;
+}
+
+[data-theme="prince"] .app-lock-button span:last-child {
+  display: none;
+}
+
+/* 首页首屏 */
+[data-theme="prince"] .prince-home {
+  padding-top: 16px;
+}
+
+[data-theme="prince"] .prince-hero {
+  position: relative;
+  min-height: 510px;
+  overflow: hidden;
+  padding: 24px 22px 22px;
+  border: 1px solid var(--editorial-line);
+  border-radius: 2px 2px 34px 34px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 248, 0.92), rgba(248, 244, 236, 0.78)),
+    repeating-linear-gradient(90deg, transparent 0 58px, rgba(36, 35, 34, 0.026) 58px 59px);
+}
+
+[data-theme="prince"] .prince-hero::before {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+  border: 1px solid var(--editorial-hairline);
+  border-radius: 1px 1px 25px 25px;
+}
+
+[data-theme="prince"] .prince-hero-head,
+[data-theme="prince"] .prince-hero-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+[data-theme="prince"] .prince-hero-head {
+  position: relative;
+  z-index: 3;
+  color: var(--text-muted);
+  font-size: 8px;
+  letter-spacing: 0.22em;
+}
+
+[data-theme="prince"] .prince-hero-status {
+  gap: 8px;
+}
+
+[data-theme="prince"] .prince-hero-copy {
+  position: relative;
+  z-index: 2;
+  max-width: 310px;
+  margin-top: 72px;
+}
+
+[data-theme="prince"] .prince-hero-copy > p {
+  max-width: 150px;
+  color: var(--text-secondary);
+  font-family: Georgia, serif;
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.16em;
+}
+
+[data-theme="prince"] .prince-day-lockup {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 6px 0 0 -5px;
+}
+
+[data-theme="prince"] .prince-day-lockup strong {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(88px, 28vw, 122px);
+  font-weight: 400;
+  line-height: 0.88;
+  letter-spacing: -0.08em;
+}
+
+[data-theme="prince"] .prince-day-lockup span {
+  padding-bottom: 12px;
+  font-family: Georgia, serif;
+  font-size: 15px;
+  letter-spacing: 0.12em;
+}
+
+[data-theme="prince"] .prince-hero-copy time {
+  display: block;
+  margin-top: 12px;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+}
+
+[data-theme="prince"] .prince-orbit {
+  position: absolute;
+  z-index: 1;
+  right: -63px;
+  bottom: 58px;
+  width: 254px;
+  height: 254px;
+  border: 1px solid rgba(36, 35, 34, 0.19);
+  border-radius: 50%;
+  transform: rotate(-18deg);
+}
+
+[data-theme="prince"] .prince-orbit::before,
+[data-theme="prince"] .prince-orbit::after {
+  content: '';
+  position: absolute;
+  border: 1px solid rgba(36, 35, 34, 0.12);
+  border-radius: 50%;
+}
+
+[data-theme="prince"] .prince-orbit::before {
+  inset: 31px -20px;
+}
+
+[data-theme="prince"] .prince-orbit::after {
+  inset: 72px -40px;
+}
+
+[data-theme="prince"] .prince-planet {
+  position: absolute;
+  top: 74px;
+  left: 68px;
+  width: 118px;
+  height: 118px;
+  border: 1px solid rgba(36, 35, 34, 0.27);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 33% 28%, rgba(170, 135, 72, 0.22), transparent 16%),
+    repeating-radial-gradient(ellipse at 70% 54%, transparent 0 14px, rgba(36, 35, 34, 0.045) 15px 16px),
+    rgba(255, 253, 248, 0.73);
+  box-shadow: inset -18px -15px 28px rgba(170, 135, 72, 0.09);
+}
+
+[data-theme="prince"] .prince-rose {
+  position: absolute;
+  z-index: 2;
+  top: 62px;
+  left: 113px;
+  width: 22px;
+  height: 72px;
+  border-left: 1px solid var(--editorial-rose);
+  transform: rotate(16deg);
+}
+
+[data-theme="prince"] .prince-rose::before,
+[data-theme="prince"] .prince-rose::after,
+[data-theme="prince"] .prince-rose i {
+  content: '';
+  position: absolute;
+  border: 1px solid var(--editorial-rose);
+}
+
+[data-theme="prince"] .prince-rose::before {
+  top: -9px;
+  left: -10px;
+  width: 19px;
+  height: 19px;
+  border-radius: 55% 45% 60% 40%;
+  transform: rotate(45deg);
+  background: rgba(152, 73, 76, 0.08);
+}
+
+[data-theme="prince"] .prince-rose::after {
+  top: 31px;
+  left: 0;
+  width: 17px;
+  height: 8px;
+  border-width: 1px 1px 0 0;
+  border-radius: 100% 0;
+  transform: rotate(-28deg);
+}
+
+[data-theme="prince"] .prince-rose i {
+  top: 47px;
+  left: -15px;
+  width: 16px;
+  height: 8px;
+  border-width: 1px 0 0 1px;
+  border-radius: 0 100%;
+  transform: rotate(20deg);
+}
+
+[data-theme="prince"] .prince-orbit b {
+  position: absolute;
+  top: 14px;
+  left: 42px;
+  color: var(--editorial-gold);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+[data-theme="prince"] .prince-hero-note {
+  position: absolute;
+  z-index: 3;
+  right: 22px;
+  bottom: 22px;
+  left: 22px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--editorial-line);
+}
+
+[data-theme="prince"] .prince-hero-note span {
+  max-width: 66%;
+  font-family: var(--font-display);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+[data-theme="prince"] .prince-hero-note small {
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+/* 首页面板 */
+[data-theme="prince"] .prince-dashboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+[data-theme="prince"] .prince-panel,
+[data-theme="prince"] .prince-weather-panel,
+[data-theme="prince"] .prince-quote-panel {
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid var(--editorial-line);
+  background: rgba(255, 253, 248, 0.76);
+  box-shadow: 0 12px 34px rgba(51, 42, 34, 0.05);
+}
+
+[data-theme="prince"] .prince-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 174px;
+  padding: 18px;
+  border-radius: 22px;
+}
+
+[data-theme="prince"] .prince-calendar-panel {
+  grid-column: 1 / -1;
+  min-height: 228px;
+  border-radius: 30px 12px 30px 12px;
+}
+
+[data-theme="prince"] .prince-calendar-panel header,
+[data-theme="prince"] .prince-room-index header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+[data-theme="prince"] .prince-calendar-panel header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+[data-theme="prince"] .prince-calendar-panel header span,
+[data-theme="prince"] .prince-room-index header span {
+  color: var(--text-muted);
+  font-size: 8px;
+  letter-spacing: 0.2em;
+}
+
+[data-theme="prince"] .prince-calendar-panel header strong {
+  font-family: Georgia, serif;
+  font-size: 19px;
+  font-weight: 400;
+}
+
+[data-theme="prince"] .prince-calendar-panel header b {
+  font-size: 16px;
+  font-weight: 400;
+}
+
+[data-theme="prince"] .prince-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 5px;
+  margin: 20px 0 16px;
+}
+
+[data-theme="prince"] .prince-week > span {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 1px 9px;
+  border-radius: 18px;
+}
+
+[data-theme="prince"] .prince-week small {
+  color: var(--text-muted);
+  font-size: 8px;
+}
+
+[data-theme="prince"] .prince-week strong {
+  font-family: Georgia, serif;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+[data-theme="prince"] .prince-week > span.active {
+  color: #fffaf1;
+  background: var(--editorial-ink);
+}
+
+[data-theme="prince"] .prince-week > span.active small {
+  color: rgba(255, 250, 241, 0.62);
+}
+
+[data-theme="prince"] .prince-calendar-panel > p,
+[data-theme="prince"] .prince-panel > p {
+  margin-top: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+[data-theme="prince"] .prince-today-panel {
+  background:
+    radial-gradient(circle at 85% 12%, rgba(152, 73, 76, 0.11), transparent 46%),
+    rgba(255, 253, 248, 0.8);
+}
+
+[data-theme="prince"] .prince-today-panel > strong {
+  margin: 22px 0 8px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+[data-theme="prince"] .prince-today-panel > i {
+  margin-top: 16px;
+  color: var(--editorial-rose);
+  font-size: 10px;
+  font-style: normal;
+}
+
+[data-theme="prince"] .prince-weather-panel {
+  grid-column: 1 / -1;
+  padding: 17px 18px;
+  border-radius: 12px 28px 12px 28px;
+}
+
+[data-theme="prince"] .prince-weather-panel .weather-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-theme="prince"] .prince-weather-panel .info-label {
+  display: none;
+}
+
+[data-theme="prince"] .prince-weather-panel .info-content {
+  margin-top: 12px;
+}
+
+[data-theme="prince"] .prince-weather-panel .weather-row {
+  align-items: flex-end;
+}
+
+[data-theme="prince"] .prince-weather-panel .weather-row > div:first-child > div:first-child {
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+[data-theme="prince"] .prince-weather-panel .weather-icon {
+  filter: grayscale(1);
+}
+
+[data-theme="prince"] .prince-todo-panel > div {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 18px 0 11px;
+}
+
+[data-theme="prince"] .prince-todo-panel > div strong {
+  font-family: Georgia, serif;
+  font-size: 50px;
+  font-weight: 400;
+  line-height: 0.8;
+}
+
+[data-theme="prince"] .prince-todo-panel > div span {
+  padding-bottom: 2px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+[data-theme="prince"] .prince-quote-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 4px 12px;
+  padding: 22px 20px;
+  border-radius: 26px;
+}
+
+[data-theme="prince"] .prince-quote-panel > span {
+  color: var(--editorial-gold);
+  font-family: Georgia, serif;
+  font-size: 30px;
+  line-height: 1;
+}
+
+[data-theme="prince"] .prince-quote-panel blockquote {
+  font-family: var(--font-display);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+[data-theme="prince"] .prince-quote-panel small {
+  grid-column: 2;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+[data-theme="prince"] .prince-room-index {
+  margin-top: 34px;
+}
+
+[data-theme="prince"] .prince-room-index h2 {
+  margin-top: 4px;
+  font-family: var(--font-display);
+  font-size: 27px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+}
+
+[data-theme="prince"] .prince-room-index header > a {
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-decoration: none;
+}
+
+[data-theme="prince"] .prince-room-index > div {
+  margin-top: 16px;
+  border-top: 1px solid var(--editorial-line);
+}
+
+[data-theme="prince"] .prince-room-index > div > a {
+  display: grid;
+  grid-template-columns: 30px 64px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 68px;
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid var(--editorial-line);
+}
+
+[data-theme="prince"] .prince-room-index > div > a > span {
+  color: var(--editorial-gold);
+  font-family: Georgia, serif;
+  font-size: 11px;
+}
+
+[data-theme="prince"] .prince-room-index > div > a > strong {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+[data-theme="prince"] .prince-room-index > div > a > small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme="prince"] .prince-room-index > div > a > i {
+  font-size: 11px;
+  font-style: normal;
+}
+
+[data-theme="prince"] .prince-clawd-dock {
+  position: relative;
+  min-height: 104px;
+  margin-top: 30px;
+  padding: 18px 110px 18px 18px;
+  overflow: hidden;
+  border: 1px solid var(--editorial-line);
+  border-radius: 2px 28px 2px 28px;
+}
+
+[data-theme="prince"] .prince-clawd-dock > span {
+  color: var(--editorial-gold);
+  font-size: 8px;
+  letter-spacing: 0.2em;
+}
+
+[data-theme="prince"] .prince-clawd-dock > p {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-family: var(--font-display);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+[data-theme="prince"] .prince-clawd-dock .clawd-wrap {
+  right: 34px;
+  left: auto !important;
+  transform: none;
+}
+
+/* 其它页面不再是旧的窄长列表：统一进入一张可阅读的“档案页” */
+[data-theme="prince"] .route-stage > div:not(.prince-home) {
+  min-height: calc(100vh - 178px);
+  margin-top: 16px;
+  padding: 22px 18px 32px;
+  border: 1px solid var(--editorial-line);
+  border-radius: 2px 28px 2px 28px;
+  background:
+    linear-gradient(rgba(255, 253, 248, 0.72), rgba(255, 253, 248, 0.72)),
+    repeating-linear-gradient(0deg, transparent 0 37px, rgba(36, 35, 34, 0.025) 37px 38px);
+}
+
+[data-theme="prince"] .route-stage .page-header {
+  position: relative;
+  min-height: 118px;
+  margin: -2px 0 24px;
+  padding: 44px 0 14px;
+  border-bottom: 1px solid var(--editorial-line);
+}
+
+[data-theme="prince"] .route-stage .page-header::before {
+  content: 'LOVEHOUSE ARCHIVE';
+  position: absolute;
+  top: 8px;
+  left: 0;
+  color: var(--editorial-gold);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 8px;
+  letter-spacing: 0.24em;
+}
+
+[data-theme="prince"] .route-stage .page-title {
+  max-width: 82%;
+  font-size: clamp(25px, 8vw, 38px);
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: 0.03em;
+}
+
+[data-theme="prince"] .route-stage .card,
+[data-theme="prince"] .route-stage .info-card,
+[data-theme="prince"] .route-stage .nav-card {
+  border-radius: 2px 22px 2px 22px;
+  box-shadow: 0 10px 32px rgba(51, 42, 34, 0.045);
+}
+
+[data-theme="prince"] .route-stage .card::after {
+  content: '✦';
+}
+
+/* 新的手机底栏与快捷房间 */
+[data-theme="prince"] .editorial-nav {
+  right: 14px;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  left: 14px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  min-height: 68px;
+  padding: 7px 7px;
+  overflow: visible;
+  border: 1px solid rgba(36, 35, 34, 0.13);
+  border-radius: 25px;
+  background: rgba(255, 253, 248, 0.9);
+  box-shadow: 0 18px 42px rgba(51, 42, 34, 0.14);
+}
+
+[data-theme="prince"] .editorial-nav .nav-item {
+  justify-content: center;
+  min-width: 0;
+  padding: 6px 2px;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+[data-theme="prince"] .editorial-nav .nav-item.active {
+  color: var(--editorial-rose);
+  border-radius: 18px;
+  background: rgba(152, 73, 76, 0.08);
+}
+
+[data-theme="prince"] .editorial-nav .nav-item .icon {
+  font-family: Georgia, serif;
+  font-size: 19px;
+}
+
+[data-theme="prince"] .editorial-nav-action {
+  align-self: center;
+  justify-self: center;
+  display: grid;
+  width: 54px;
+  height: 54px;
+  margin-top: -28px;
+  padding: 0;
+  place-items: center;
+  color: #fffaf1;
+  border: 5px solid var(--editorial-paper);
+  border-radius: 50%;
+  background: var(--editorial-ink);
+  box-shadow: 0 9px 22px rgba(36, 35, 34, 0.22);
+  cursor: pointer;
+  transition: transform 0.25s;
+}
+
+[data-theme="prince"] .editorial-nav-action.active {
+  transform: rotate(45deg);
+}
+
+[data-theme="prince"] .editorial-nav-action span {
+  font-size: 23px;
+  font-weight: 200;
+  line-height: 1;
+}
+
+[data-theme="prince"] .editorial-quick-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+[data-theme="prince"] .editorial-quick-layer.open {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+[data-theme="prince"] .editorial-quick-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: rgba(36, 35, 34, 0.34);
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+[data-theme="prince"] .editorial-quick-layer.open .editorial-quick-backdrop {
+  opacity: 1;
+}
+
+[data-theme="prince"] .editorial-quick-sheet {
+  position: absolute;
+  right: 14px;
+  bottom: 92px;
+  left: 14px;
+  padding: 22px;
+  border: 1px solid var(--editorial-line);
+  border-radius: 30px 30px 18px 18px;
+  background: var(--editorial-paper-strong);
+  box-shadow: var(--editorial-shadow);
+  transform: translateY(24px);
+  opacity: 0;
+  transition: transform 0.28s ease, opacity 0.28s;
+}
+
+[data-theme="prince"] .editorial-quick-layer.open .editorial-quick-sheet {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+[data-theme="prince"] .editorial-sheet-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+[data-theme="prince"] .editorial-sheet-heading span {
+  color: var(--editorial-gold);
+  font-size: 8px;
+  letter-spacing: 0.22em;
+}
+
+[data-theme="prince"] .editorial-sheet-heading h2 {
+  margin-top: 5px;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 400;
+}
+
+[data-theme="prince"] .editorial-sheet-heading button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--text-primary);
+  border: 1px solid var(--editorial-line);
+  border-radius: 50%;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+[data-theme="prince"] .editorial-quick-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+[data-theme="prince"] .editorial-quick-grid > a {
+  display: grid;
+  min-height: 108px;
+  padding: 14px;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid var(--editorial-line);
+  border-radius: 2px 18px 2px 18px;
+}
+
+[data-theme="prince"] .editorial-quick-grid > a > span {
+  color: var(--editorial-gold);
+  font-family: Georgia, serif;
+  font-size: 9px;
+}
+
+[data-theme="prince"] .editorial-quick-grid > a > strong {
+  align-self: end;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+[data-theme="prince"] .editorial-quick-grid > a > small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+@media (min-width: 768px) {
+  [data-theme="prince"] .editorial-nav,
+  [data-theme="prince"] .editorial-quick-layer {
+    display: none;
+  }
+
+  [data-theme="prince"] .editorial-shell .sidebar {
+    width: 248px;
+    padding: 28px 18px;
+  }
+
+  [data-theme="prince"] .editorial-shell .app-content {
+    min-width: 0;
+    padding: 0 34px 64px;
+  }
+
+  [data-theme="prince"] .editorial-topbar {
+    grid-template-columns: 1fr auto;
+    min-height: 70px;
+    padding: 14px 62px 14px 0;
+  }
+
+  [data-theme="prince"] .editorial-menu-button {
+    display: none;
+  }
+
+  [data-theme="prince"] .editorial-topbar-title {
+    padding-left: 0;
+  }
+
+  [data-theme="prince"] .editorial-online {
+    display: flex;
+  }
+
+  [data-theme="prince"] .route-stage {
+    padding: 0;
+  }
+
+  [data-theme="prince"] .prince-home {
+    padding-top: 28px;
+  }
+
+  [data-theme="prince"] .prince-hero {
+    min-height: 570px;
+    padding: 34px 42px 30px;
+    border-radius: 2px 2px 54px 54px;
+  }
+
+  [data-theme="prince"] .prince-hero-copy {
+    margin-top: 96px;
+  }
+
+  [data-theme="prince"] .prince-day-lockup strong {
+    font-size: clamp(124px, 15vw, 208px);
+  }
+
+  [data-theme="prince"] .prince-day-lockup span {
+    padding-bottom: 24px;
+    font-size: 21px;
+  }
+
+  [data-theme="prince"] .prince-orbit {
+    right: 7%;
+    bottom: -36px;
+    width: 440px;
+    height: 440px;
+  }
+
+  [data-theme="prince"] .prince-planet {
+    top: 120px;
+    left: 118px;
+    width: 205px;
+    height: 205px;
+  }
+
+  [data-theme="prince"] .prince-rose {
+    top: 105px;
+    left: 194px;
+    transform: scale(1.45) rotate(16deg);
+  }
+
+  [data-theme="prince"] .prince-hero-note {
+    right: 42px;
+    bottom: 30px;
+    left: 42px;
+  }
+
+  [data-theme="prince"] .prince-dashboard {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  [data-theme="prince"] .prince-calendar-panel {
+    grid-column: span 7;
+    grid-row: span 2;
+    min-height: 362px;
+    padding: 28px;
+  }
+
+  [data-theme="prince"] .prince-today-panel {
+    grid-column: span 5;
+    min-height: 174px;
+  }
+
+  [data-theme="prince"] .prince-todo-panel {
+    grid-column: span 5;
+    min-height: 174px;
+  }
+
+  [data-theme="prince"] .prince-weather-panel {
+    grid-column: span 5;
+    min-height: 132px;
+    padding: 20px 22px;
+  }
+
+  [data-theme="prince"] .prince-quote-panel {
+    grid-column: span 7;
+    min-height: 132px;
+    align-content: center;
+  }
+
+  [data-theme="prince"] .prince-week {
+    gap: 10px;
+    margin-top: 52px;
+  }
+
+  [data-theme="prince"] .prince-week > span {
+    min-height: 74px;
+    justify-content: center;
+  }
+
+  [data-theme="prince"] .prince-room-index > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-left: 1px solid var(--editorial-line);
+  }
+
+  [data-theme="prince"] .prince-room-index > div > a {
+    grid-template-columns: 32px 74px 1fr auto;
+    min-height: 86px;
+    padding: 0 18px;
+    border-right: 1px solid var(--editorial-line);
+  }
+
+  [data-theme="prince"] .route-stage > div:not(.prince-home) {
+    min-height: calc(100vh - 112px);
+    margin-top: 28px;
+    padding: 36px 42px 48px;
+    border-radius: 2px 42px 2px 42px;
+  }
+
+  [data-theme="prince"] .route-stage .page-header {
+    min-height: 142px;
+    padding-top: 58px;
+  }
+
+  [data-theme="prince"] .route-stage .page-title {
+    max-width: 720px;
+    font-size: 42px;
+  }
+}
+
+@media (min-width: 1180px) {
+  [data-theme="prince"] .editorial-shell .app-content {
+    padding-right: 56px;
+    padding-left: 56px;
+  }
+}
+
+@media (max-width: 374px) {
+  [data-theme="prince"] .prince-hero {
+    min-height: 480px;
+    padding-right: 17px;
+    padding-left: 17px;
+  }
+
+  [data-theme="prince"] .prince-orbit {
+    right: -91px;
+  }
+
+  [data-theme="prince"] .prince-panel {
+    padding: 15px;
+  }
+
+  [data-theme="prince"] .prince-room-index > div > a {
+    grid-template-columns: 26px 54px 1fr auto;
+  }
+}
