@@ -1334,3 +1334,158 @@
     grid-template-columns: 26px 54px 1fr auto;
   }
 }
+/* 2.1 视觉统一：全局字体、线性图标与半透明卡片 */
+[data-theme="prince"] {
+  --font-editorial: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  --font-display: var(--font-editorial);
+  font-family: var(--font-editorial);
+}
+
+[data-theme="prince"] .app-shell,
+[data-theme="prince"] .app-shell *,
+[data-theme="prince"] .auth-screen,
+[data-theme="prince"] .auth-screen * {
+  font-family: var(--font-editorial);
+}
+
+[data-theme="prince"] .line-icon {
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+[data-theme="prince"] .sidebar-group-header .icon,
+[data-theme="prince"] .sidebar-link .icon,
+[data-theme="prince"] .nav-item .icon,
+[data-theme="prince"] .info-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  filter: none;
+  opacity: 0.82;
+}
+
+[data-theme="prince"] .sidebar-group-header .icon,
+[data-theme="prince"] .sidebar-link .icon {
+  width: 20px;
+  color: var(--text-secondary);
+}
+
+[data-theme="prince"] .sidebar-link.active .icon,
+[data-theme="prince"] .nav-item.active .icon {
+  color: var(--editorial-rose);
+  opacity: 1;
+}
+
+[data-theme="prince"] .editorial-nav-action .line-icon {
+  width: 22px;
+  height: 22px;
+}
+
+[data-theme="prince"] .info-label {
+  gap: 6px;
+}
+
+[data-theme="prince"] .weather-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+[data-theme="prince"] .card,
+[data-theme="prince"] .info-card,
+[data-theme="prince"] .nav-card,
+[data-theme="prince"] .theme-option,
+[data-theme="prince"] .prince-panel,
+[data-theme="prince"] .prince-weather-panel,
+[data-theme="prince"] .prince-quote-panel,
+[data-theme="prince"] .prince-clawd-dock,
+[data-theme="prince"] .editorial-quick-grid > a {
+  background: rgba(255, 253, 248, 0.58);
+  border-color: rgba(74, 63, 53, 0.15);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.58),
+    0 16px 42px rgba(63, 51, 40, 0.065);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+}
+
+[data-theme="prince"] .route-stage > div:not(.prince-home) {
+  background:
+    linear-gradient(rgba(255, 253, 248, 0.48), rgba(255, 253, 248, 0.48)),
+    repeating-linear-gradient(0deg, transparent 0 37px, rgba(36, 35, 34, 0.025) 37px 38px);
+  backdrop-filter: blur(20px) saturate(1.06);
+  -webkit-backdrop-filter: blur(20px) saturate(1.06);
+}
+
+[data-theme="prince"] .sidebar,
+[data-theme="prince"] .editorial-topbar,
+[data-theme="prince"] .editorial-nav,
+[data-theme="prince"] .editorial-quick-sheet {
+  background: rgba(248, 243, 234, 0.72);
+  backdrop-filter: blur(24px) saturate(1.08);
+  -webkit-backdrop-filter: blur(24px) saturate(1.08);
+}
+
+[data-theme="prince"] .input,
+[data-theme="prince"] .textarea,
+[data-theme="prince"] .auth-form input {
+  background: rgba(255, 253, 248, 0.52);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+[data-theme="prince"] .page-title-with-icon,
+[data-theme="prince"] .tag,
+[data-theme="prince"] .private-hint,
+[data-theme="prince"] .theme-line-mark,
+[data-theme="prince"] .nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+[data-theme="prince"] .page-title-with-icon {
+  justify-content: flex-start;
+  gap: 11px;
+}
+
+[data-theme="prince"] .page-title-with-icon .line-icon {
+  width: 0.78em;
+  height: 0.78em;
+  color: var(--editorial-gold);
+  stroke-width: 1.35;
+}
+
+[data-theme="prince"] .tag,
+[data-theme="prince"] .private-hint {
+  gap: 5px;
+}
+
+[data-theme="prince"] .theme-line-mark {
+  min-height: 28px;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+}
+
+[data-theme="prince"] .nav-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--text-secondary);
+}
+/* 2.1 hero glass */
+[data-theme="prince"] .prince-hero {
+  background:
+    linear-gradient(180deg, rgba(255, 253, 248, 0.68), rgba(248, 244, 236, 0.5)),
+    repeating-linear-gradient(90deg, transparent 0 58px, rgba(36, 35, 34, 0.026) 58px 59px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    0 22px 55px rgba(63, 51, 40, 0.07);
+  backdrop-filter: blur(18px) saturate(1.06);
+  -webkit-backdrop-filter: blur(18px) saturate(1.06);
+}
+
+[data-theme="prince"] .auth-card {
+  background: rgba(255, 253, 248, 0.64);
+  backdrop-filter: blur(22px) saturate(1.06);
+  -webkit-backdrop-filter: blur(22px) saturate(1.06);
+}

@@ -1,4 +1,5 @@
 import { Link } from 'react-router'
+import LineIcon from '../../shared/LineIcon'
 
 const LOGS = [
   {
@@ -65,7 +66,7 @@ export default function ChangelogPage() {
   return (
     <div>
       <div className="page-header">
-        <h2 className="page-title">📋 搭建日志</h2>
+        <h2 className="page-title page-title-with-icon"><LineIcon name="history" />搭建日志</h2>
         <Link to="/" style={{ textDecoration: 'none', fontSize: 14, color: 'var(--accent)' }}>返回首页</Link>
       </div>
 

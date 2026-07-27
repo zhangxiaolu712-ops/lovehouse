@@ -1,4 +1,7 @@
 import { useTheme } from '../../core/theme'
+import LineIcon from '../../shared/LineIcon'
+
+const THEME_LINE_ICONS = { prince: 'star', classic: 'heart', cozy: 'drop', vintage: 'history', desktop: 'moon' }
 
 export default function ThemePage() {
   const { themes, themeId, switchTheme } = useTheme()
@@ -6,8 +9,8 @@ export default function ThemePage() {
   return (
     <div>
       <div className="page-header">
-        <div className="page-title">🎨 主题系统</div>
-        <span className="tag">🏠 空间中心</span>
+        <div className="page-title page-title-with-icon"><LineIcon name="theme" />主题系统</div>
+        <span className="tag"><LineIcon name="home" size={14} />空间中心</span>
       </div>
 
       <div className="card">
@@ -19,7 +22,7 @@ export default function ThemePage() {
               className={`theme-option ${themeId === t.id ? 'active' : ''}`}
               onClick={() => switchTheme(t.id)}
             >
-              <div style={{ fontSize: 24, marginBottom: 6 }}>{t.icon}</div>
+              <div className="theme-line-mark"><LineIcon name={THEME_LINE_ICONS[t.id]} size={22} /></div>
               <div>{t.name}</div>
             </button>
           ))}

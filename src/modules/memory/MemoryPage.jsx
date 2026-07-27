@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import LineIcon from '../../shared/LineIcon'
 import { Link, useSearchParams, useNavigate } from 'react-router'
 import { getMemories, addMemory, deleteMemory } from './memoryService'
 
@@ -54,7 +55,7 @@ export default function MemoryPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">💭 碎碎念 · 记忆碎片</h1>
+        <h1 className="page-title page-title-with-icon"><LineIcon name="memory" />碎碎念 · 记忆碎片</h1>
         <Link to="/memory/search" className="tag" style={{ textDecoration: 'none' }}>🔍 搜索</Link>
       </div>
 

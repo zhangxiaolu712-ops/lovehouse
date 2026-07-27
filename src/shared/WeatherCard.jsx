@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import LineIcon from './LineIcon'
 
 // 广州坐标兜底（定位被拒绝或超时时使用）
 const FALLBACK = { lat: 23.13, lon: 113.26, label: '广州' }
@@ -74,7 +75,7 @@ export default function WeatherCard() {
 
   return (
     <div className="info-card weather-card">
-      <div className="info-label">📅 今日 {place && weather && <span className="weather-place">📍{place}</span>}</div>
+      <div className="info-label"><LineIcon name="calendar" size={15} /> 今日 {place && weather && <span className="weather-place"><LineIcon name="pin" size={13} />{place}</span>}</div>
       <div className="info-content">
         <div className="weather-row">
           <div>
