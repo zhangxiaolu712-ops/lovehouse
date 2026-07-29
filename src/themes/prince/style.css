@@ -1,4 +1,5 @@
 @import './auth.css';
+@import './backgrounds.css';
 
 [data-theme="prince"] {
   --bg-primary:
@@ -280,10 +281,10 @@
 }
 
 [data-theme="prince"] .editorial-shell {
-  background:
-    radial-gradient(circle at 92% 10%, rgba(170, 135, 72, 0.11), transparent 24rem),
-    radial-gradient(circle at 6% 46%, rgba(152, 73, 76, 0.07), transparent 26rem),
-    var(--editorial-paper);
+  background: var(--prince-app-background);
+  background-position: var(--prince-background-position);
+  background-repeat: no-repeat;
+  background-size: var(--prince-background-size);
 }
 
 [data-theme="prince"] .editorial-shell .app-content {
@@ -1401,38 +1402,38 @@
 [data-theme="prince"] .prince-quote-panel,
 [data-theme="prince"] .prince-clawd-dock,
 [data-theme="prince"] .editorial-quick-grid > a {
-  background: rgba(255, 253, 248, 0.58);
+  background: rgba(255, 250, 247, 0.48);
   border-color: rgba(74, 63, 53, 0.15);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.58),
     0 16px 42px rgba(63, 51, 40, 0.065);
-  backdrop-filter: blur(18px) saturate(1.08);
-  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(10px) saturate(1.06);
+  -webkit-backdrop-filter: blur(10px) saturate(1.06);
 }
 
 [data-theme="prince"] .route-stage > div:not(.prince-home) {
   background:
-    linear-gradient(rgba(255, 253, 248, 0.48), rgba(255, 253, 248, 0.48)),
+    linear-gradient(rgba(255, 250, 247, 0.42), rgba(255, 250, 247, 0.42)),
     repeating-linear-gradient(0deg, transparent 0 37px, rgba(36, 35, 34, 0.025) 37px 38px);
-  backdrop-filter: blur(20px) saturate(1.06);
-  -webkit-backdrop-filter: blur(20px) saturate(1.06);
+  backdrop-filter: blur(12px) saturate(1.05);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
 }
 
 [data-theme="prince"] .sidebar,
 [data-theme="prince"] .editorial-topbar,
 [data-theme="prince"] .editorial-nav,
 [data-theme="prince"] .editorial-quick-sheet {
-  background: rgba(248, 243, 234, 0.72);
-  backdrop-filter: blur(24px) saturate(1.08);
-  -webkit-backdrop-filter: blur(24px) saturate(1.08);
+  background: rgba(249, 240, 237, 0.62);
+  backdrop-filter: blur(16px) saturate(1.06);
+  -webkit-backdrop-filter: blur(16px) saturate(1.06);
 }
 
 [data-theme="prince"] .input,
 [data-theme="prince"] .textarea,
 [data-theme="prince"] .auth-form input {
-  background: rgba(255, 253, 248, 0.52);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 250, 247, 0.46);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 [data-theme="prince"] .page-title-with-icon,
 [data-theme="prince"] .tag,
@@ -1475,17 +1476,30 @@
 /* 2.1 hero glass */
 [data-theme="prince"] .prince-hero {
   background:
-    linear-gradient(180deg, rgba(255, 253, 248, 0.68), rgba(248, 244, 236, 0.5)),
+    linear-gradient(180deg, rgba(255, 250, 247, 0.5), rgba(249, 239, 236, 0.34)),
     repeating-linear-gradient(90deg, transparent 0 58px, rgba(36, 35, 34, 0.026) 58px 59px);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.62),
     0 22px 55px rgba(63, 51, 40, 0.07);
-  backdrop-filter: blur(18px) saturate(1.06);
-  -webkit-backdrop-filter: blur(18px) saturate(1.06);
+  backdrop-filter: blur(10px) saturate(1.05);
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
 }
 
 [data-theme="prince"] .auth-card {
-  background: rgba(255, 253, 248, 0.64);
-  backdrop-filter: blur(22px) saturate(1.06);
-  -webkit-backdrop-filter: blur(22px) saturate(1.06);
+  background: rgba(255, 250, 247, 0.54);
+  backdrop-filter: blur(12px) saturate(1.05);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
+}
+
+/* 2.2 轻斜标题：正文保持端正，避免长文本阅读疲劳。 */
+[data-theme="prince"] .sidebar-title,
+[data-theme="prince"] .editorial-topbar-title > span:last-child,
+[data-theme="prince"] .prince-hero-copy > p,
+[data-theme="prince"] .prince-day-lockup strong,
+[data-theme="prince"] .prince-day-lockup span,
+[data-theme="prince"] .prince-quote-panel blockquote,
+[data-theme="prince"] .prince-room-index h2,
+[data-theme="prince"] .route-stage .page-title,
+[data-theme="prince"] .auth-card h1 {
+  font-style: oblique 5deg;
 }
