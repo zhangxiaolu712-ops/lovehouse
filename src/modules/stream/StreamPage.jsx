@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import LineIcon from '../../shared/LineIcon'
 import { getStreams, addStream, deleteStream } from './streamService'
 
 export default function StreamPage() {
@@ -42,7 +43,7 @@ export default function StreamPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">🔒 私密记录</h1>
+        <h1 className="page-title page-title-with-icon"><LineIcon name="lock" />私密记录</h1>
         <span className="tag">点开才能看清</span>
       </div>
 
@@ -76,7 +77,7 @@ export default function StreamPage() {
                   <button className="delete-btn" onClick={e => { e.stopPropagation(); handleDelete(s.id) }}>×</button>
                 )}
               </div>
-              {!isOpen && <div className="private-hint">🔒 点击查看</div>}
+              {!isOpen && <div className="private-hint"><LineIcon name="lock" size={14} />点击查看</div>}
             </div>
           )
         })

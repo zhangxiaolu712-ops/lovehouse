@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../core/supabase'
+import LineIcon from '../../shared/LineIcon'
 import {
   hasDevicePin,
   removeDevicePin,
@@ -409,7 +410,7 @@ export default function AuthGate({ children }) {
     <>
       {children}
       <button className="app-lock-button" type="button" onClick={lockNow} title="锁定小屋">
-        <span aria-hidden="true">🔒</span>
+        <LineIcon name="lock" size={17} />
         <span>锁定</span>
       </button>
     </>

@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router'
 import { useTheme } from '../core/theme'
+import LineIcon from './LineIcon'
+
+const THEME_LINE_ICONS = { prince: 'star', classic: 'heart', cozy: 'drop', vintage: 'history', desktop: 'moon' }
 import WeatherCard from './WeatherCard'
 import Clawd from './Clawd'
 import { getQuotes } from '../modules/quotes/quotesService'
@@ -26,16 +29,16 @@ function getGreeting() {
 }
 
 const NAV_CARDS = [
-  { path: '/diary', icon: '📖', label: '日记本', desc: '记录每一天' },
-  { path: '/memory', icon: '💎', label: '记忆碎片', desc: '珍贵的回忆' },
-  { path: '/quotes', icon: '💬', label: '语录墙', desc: '那些话语' },
-  { path: '/todo', icon: '✅', label: '待办事项', desc: '要做的事' },
-  { path: '/mood', icon: '🌈', label: '心情日志', desc: '此刻的感受' },
-  { path: '/stream', icon: '🌊', label: '动态流', desc: '生活点滴' },
+  { path: '/diary', icon: 'book', label: '日记本', desc: '记录每一天' },
+  { path: '/memory', icon: 'memory', label: '记忆碎片', desc: '珍贵的回忆' },
+  { path: '/quotes', icon: 'quote', label: '语录墙', desc: '那些话语' },
+  { path: '/todo', icon: 'check', label: '待办事项', desc: '要做的事' },
+  { path: '/mood', icon: 'mood', label: '心情日志', desc: '此刻的感受' },
+  { path: '/stream', icon: 'stream', label: '动态流', desc: '生活点滴' },
 ]
 
 export default function Home() {
-  const { theme, themes, switchTheme, themeId } = useTheme()
+  const { themes, switchTheme, themeId } = useTheme()
   const [quote, setQuote] = useState(null)
   const [todoPending, setTodoPending] = useState(0)
   const [latestMood, setLatestMood] = useState(null)
@@ -43,6 +46,7 @@ export default function Home() {
   const [moodSaved, setMoodSaved] = useState(false)
   const days = getDaysTogether()
   const isClassic = themeId === 'classic'
+  const isPrince = themeId === 'prince'
 
   useEffect(() => {
     getQuotes({ limit: 100 }).then(data => {
@@ -72,9 +76,21 @@ export default function Home() {
     return <ClassicHome
       days={days} quote={quote} latestMood={latestMood} todoPending={todoPending}
       moodInput={moodInput} setMoodInput={setMoodInput} handleQuickMood={handleQuickMood}
-      moodSaved={moodSaved} dateStr={dateStr}
+      moodSaved={moodSaved}
       themes={themes} themeId={themeId} switchTheme={switchTheme}
     />
+  }
+
+  if (isPrince) {
+    return (
+      <PrinceHome
+        days={days}
+        quote={quote}
+        latestMood={latestMood}
+        todoPending={todoPending}
+        dateStr={dateStr}
+      />
+    )
   }
 
   return (
@@ -99,7 +115,7 @@ export default function Home() {
       <div className="info-grid">
         <WeatherCard />
         <div className="info-card">
-          <div className="info-label">💗 今日心情</div>
+          <div className="info-label"><LineIcon name="mood" size={15} />今日心情</div>
           <div className="info-content">
             {latestMood ? (
               <>
@@ -126,7 +142,7 @@ export default function Home() {
       {todoPending > 0 && (
         <Link to="/todo" style={{ textDecoration: 'none', color: 'inherit' }}>
           <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px' }}>
-            <span style={{ fontSize: 22 }}>📋</span>
+            <LineIcon name="project" size={22} />
             <div>
               <div style={{ fontWeight: 500 }}>待办提醒</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>还有 {todoPending} 项未完成</div>
@@ -139,7 +155,7 @@ export default function Home() {
       <div className="nav-grid">
         {NAV_CARDS.map(item => (
           <Link key={item.path} to={item.path} className="nav-card">
-            <span className="nav-icon">{item.icon}</span>
+            <span className="nav-icon"><LineIcon name={item.icon} /></span>
             <div>
               <div className="nav-label">{item.label}</div>
               <div className="nav-desc">{item.desc}</div>
@@ -153,7 +169,7 @@ export default function Home() {
         <div className="theme-switcher">
           {Object.values(themes).map(t => (
             <button key={t.id} className={`theme-option ${themeId === t.id ? 'active' : ''}`} onClick={() => switchTheme(t.id)}>
-              <div style={{ fontSize: 20, marginBottom: 4 }}>{t.icon}</div>
+              <div className="theme-line-mark"><LineIcon name={THEME_LINE_ICONS[t.id]} size={20} /></div>
               <div>{t.name}</div>
             </button>
           ))}
@@ -162,7 +178,7 @@ export default function Home() {
 
       <Link to="/changelog" style={{ textDecoration: 'none', color: 'inherit' }}>
         <div className="card" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px' }}>
-          <span style={{ fontSize: 20 }}>📋</span>
+          <LineIcon name="history" size={20} />
           <div>
             <div style={{ fontWeight: 500, fontSize: 14 }}>搭建日志</div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>记录小屋的每一步成长</div>
@@ -173,7 +189,139 @@ export default function Home() {
   )
 }
 
-function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodInput, handleQuickMood, moodSaved, dateStr, themes, themeId, switchTheme }) {
+function PrinceHome({ days, quote, latestMood, todoPending, dateStr }) {
+  const today = new Date()
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today)
+    date.setDate(today.getDate() - 3 + index)
+    return {
+      key: date.toISOString(),
+      label: ['日', '一', '二', '三', '四', '五', '六'][date.getDay()],
+      day: date.getDate(),
+      active: index === 3,
+    }
+  })
+
+  const moodLine = latestMood?.mood
+    ? `今天的心情是「${latestMood.mood}」`
+    : '今天还没有记录心情'
+
+  return (
+    <div className="prince-home">
+      <section className="prince-hero">
+        <div className="prince-hero-head">
+          <span>LOVEHOUSE / 2026</span>
+          <span className="prince-hero-status"><i /> STILL COUNTING</span>
+        </div>
+
+        <div className="prince-hero-copy">
+          <p>WE HAVE BEEN TOGETHER FOR</p>
+          <div className="prince-day-lockup">
+            <strong>{days}</strong>
+            <span>DAYS</span>
+          </div>
+          <time>since 2026.06.02</time>
+        </div>
+
+        <div className="prince-orbit" aria-hidden="true">
+          <span className="prince-planet" />
+          <span className="prince-rose">
+            <i />
+          </span>
+          <b>✦</b>
+        </div>
+
+        <div className="prince-hero-note">
+          <span>{getGreeting()}，今天也靠近你一点。</span>
+          <small>{dateStr}</small>
+        </div>
+      </section>
+
+      <section className="prince-dashboard" aria-label="今日概览">
+        <Link className="prince-panel prince-calendar-panel" to="/diary">
+          <header>
+            <div>
+              <span>CALENDAR</span>
+              <strong>{today.getFullYear()} · {today.getMonth() + 1}</strong>
+            </div>
+            <b>↗</b>
+          </header>
+          <div className="prince-week">
+            {weekDays.map(day => (
+              <span key={day.key} className={day.active ? 'active' : ''}>
+                <small>{day.label}</small>
+                <strong>{day.day}</strong>
+              </span>
+            ))}
+          </div>
+          <p>把普通的一天，也认真收藏起来。</p>
+        </Link>
+
+        <Link className="prince-panel prince-today-panel" to="/mood">
+          <span className="prince-panel-kicker">TODAY / MOOD</span>
+          <strong>{moodLine}</strong>
+          <p>{latestMood?.note || '给今天留下一小行字吧。'}</p>
+          <i>记录心情 ↗</i>
+        </Link>
+
+        <div className="prince-weather-panel">
+          <span className="prince-panel-kicker">OUTSIDE / WEATHER</span>
+          <WeatherCard />
+        </div>
+
+        <Link className="prince-panel prince-todo-panel" to="/todo">
+          <span className="prince-panel-kicker">LITTLE PLAN</span>
+          <div>
+            <strong>{todoPending}</strong>
+            <span>件还在等我们</span>
+          </div>
+          <p>{todoPending > 0 ? '不用一次做完，一件一件来。' : '今天的清单已经轻轻合上。'}</p>
+        </Link>
+
+        <Link className="prince-quote-panel" to="/quotes">
+          <span>“</span>
+          <blockquote>
+            {quote?.content || '你为你的玫瑰花费的时间，使你的玫瑰变得如此重要。'}
+          </blockquote>
+          <small>— {quote?.speaker || '小王子'}</small>
+        </Link>
+      </section>
+
+      <section className="prince-room-index">
+        <header>
+          <div>
+            <span>OUR LITTLE ROOMS</span>
+            <h2>小屋索引</h2>
+          </div>
+          <Link to="/space/layout">全部房间 ↗</Link>
+        </header>
+        <div>
+          {[
+            { path: '/diary', mark: '01', label: '日记', desc: '把今天装订成一页' },
+            { path: '/memory', mark: '02', label: '记忆', desc: '捡起闪光的碎片' },
+            { path: '/space/notes', mark: '03', label: '小纸条', desc: '悄悄放在桌面上' },
+            { path: '/stream', mark: '04', label: '私密记录', desc: '只属于我们的档案' },
+          ].map(item => (
+            <Link key={item.path} to={item.path}>
+              <span>{item.mark}</span>
+              <strong>{item.label}</strong>
+              <small>{item.desc}</small>
+              <i>↗</i>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <div className="prince-clawd-dock" aria-label="小克休息角">
+        <span>CLAUD'S CORNER</span>
+        <p>小克在星球边缘替我们看着灯。</p>
+        <Clawd />
+      </div>
+    </div>
+  )
+}
+
+function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodInput, handleQuickMood, moodSaved, themes, themeId, switchTheme }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '8px 0 0' }}>
@@ -259,7 +407,7 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
       {todoPending > 0 && (
         <Link to="/todo" style={{ textDecoration: 'none', color: 'inherit' }}>
           <div className="card" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 22 }}>📋</span>
+            <LineIcon name="project" size={22} />
             <div>
               <div style={{ fontWeight: 500 }}>待办提醒</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>还有 {todoPending} 项未完成</div>
@@ -272,7 +420,7 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
       <div className="nav-grid">
         {NAV_CARDS.map(item => (
           <Link key={item.path} to={item.path} className="nav-card">
-            <span className="nav-icon">{item.icon}</span>
+            <span className="nav-icon"><LineIcon name={item.icon} /></span>
             <div>
               <div className="nav-label">{item.label}</div>
               <div className="nav-desc">{item.desc}</div>
@@ -287,7 +435,7 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
       <div className="theme-switcher">
         {Object.values(themes).map(t => (
           <button key={t.id} className={`theme-option ${themeId === t.id ? 'active' : ''}`} onClick={() => switchTheme(t.id)}>
-            <div style={{ fontSize: 20, marginBottom: 4 }}>{t.icon}</div>
+            <div className="theme-line-mark"><LineIcon name={THEME_LINE_ICONS[t.id]} size={20} /></div>
             <div>{t.name}</div>
           </button>
         ))}
@@ -297,7 +445,7 @@ function ClassicHome({ days, quote, latestMood, todoPending, moodInput, setMoodI
 
       <Link to="/changelog" style={{ textDecoration: 'none', color: 'inherit' }}>
         <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px' }}>
-          <span style={{ fontSize: 20 }}>📋</span>
+          <LineIcon name="history" size={20} />
           <div>
             <div style={{ fontWeight: 500, fontSize: 14 }}>搭建日志</div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>记录小屋的每一步成长</div>

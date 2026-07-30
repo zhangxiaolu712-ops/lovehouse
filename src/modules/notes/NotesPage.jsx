@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import LineIcon from '../../shared/LineIcon'
 import { getNotes, addNote, deleteNote } from './notesService'
 
 const COLORS = [
@@ -42,7 +43,7 @@ export default function NotesPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">💌 小纸条留言板</h1>
+        <h1 className="page-title page-title-with-icon"><LineIcon name="mail" />小纸条留言板</h1>
         <span className="tag">{notes.length} 张</span>
       </div>
 

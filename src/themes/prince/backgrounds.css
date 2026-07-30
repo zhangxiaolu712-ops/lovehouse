@@ -1,0 +1,16 @@
+/* 星球玫瑰背景系统：以后换图只需要替换这里的资源变量。 */
+[data-theme="prince"] {
+  --prince-background-image: url('./assets/rose-paper.jpg');
+  --prince-background-tint:
+    linear-gradient(
+      180deg,
+      rgba(255, 247, 244, 0.14) 0%,
+      rgba(250, 239, 236, 0.2) 52%,
+      rgba(246, 233, 229, 0.28) 100%
+    );
+  --prince-app-background:
+    var(--prince-background-tint),
+    var(--prince-background-image);
+  --prince-background-position: center top;
+  --prince-background-size: cover;
+}

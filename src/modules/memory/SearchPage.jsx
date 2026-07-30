@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import LineIcon from '../../shared/LineIcon'
 import { useSearchParams } from 'react-router'
 import { supabase } from '../../core/supabase'
 
@@ -78,7 +79,7 @@ export default function SearchPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">🔍 搜索浏览器</h1>
+        <h1 className="page-title page-title-with-icon"><LineIcon name="search" />搜索浏览器</h1>
         <span className="tag">全屋检索</span>
       </div>
 

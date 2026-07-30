@@ -7,11 +7,10 @@
   flex-direction: column;
   overflow: hidden;
   padding: max(28px, env(safe-area-inset-top)) 24px max(28px, env(safe-area-inset-bottom));
-  background:
-    radial-gradient(circle at 18% 14%, rgba(183, 146, 75, 0.11) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 85% 22%, rgba(48, 43, 39, 0.11) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 72% 82%, rgba(157, 63, 67, 0.09) 0 1px, transparent 1.8px),
-    linear-gradient(165deg, #fbf8f1 0%, #f6efe4 64%, #f1e7d9 100%);
+  background: var(--prince-app-background);
+  background-position: var(--prince-background-position);
+  background-repeat: no-repeat;
+  background-size: var(--prince-background-size);
   color: #302b27;
   text-align: center;
 }
@@ -141,10 +140,10 @@
 [data-theme="prince"] .launch-star-three { right: 22%; bottom: 18%; color: #9d3f43; font-size: 13px; }
 
 [data-theme="prince"] .auth-screen {
-  background:
-    radial-gradient(circle at 15% 14%, rgba(183, 146, 75, 0.12) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 88% 24%, rgba(48, 43, 39, 0.1) 0 1px, transparent 1.8px),
-    linear-gradient(165deg, #fbf8f1 0%, #f7f1e7 62%, #f1e7d9 100%);
+  background: var(--prince-app-background);
+  background-position: var(--prince-background-position);
+  background-repeat: no-repeat;
+  background-size: var(--prince-background-size);
 }
 
 [data-theme="prince"] .auth-orbit {
