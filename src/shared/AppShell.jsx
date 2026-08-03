@@ -22,6 +22,7 @@ const CENTERS = [
   {
     id: 'memory', icon: 'memory', label: '记忆中心',
     items: [
+      { path: '/brain', icon: 'memory', label: '大脑' },
       { path: '/stream', icon: 'lock', label: '私密记录' },
       { path: '/diary', icon: 'book', label: '日记' },
       { path: '/memory', icon: 'memory', label: '碎碎念' },
@@ -67,7 +68,7 @@ const CENTERS = [
 const NAV_ITEMS = [
   { path: '/', icon: 'home', label: '首页' },
   { path: '/diary', icon: 'book', label: '日记' },
-  { path: '/memory', icon: 'memory', label: '记忆' },
+  { path: '/brain', icon: 'memory', label: '记忆' },
   { path: '/quotes', icon: 'quote', label: '语录' },
   { path: '/todo', icon: 'check', label: '待办' },
   { path: '/mood', icon: 'mood', label: '心情' },
@@ -76,7 +77,7 @@ const NAV_ITEMS = [
 const PRINCE_NAV_ITEMS = [
   { path: '/', icon: 'home', label: '首页' },
   { path: '/diary', icon: 'book', label: '日记' },
-  { path: '/memory', icon: 'memory', label: '记忆' },
+  { path: '/brain', icon: 'memory', label: '记忆' },
 ]
 
 const QUICK_ITEMS = [
