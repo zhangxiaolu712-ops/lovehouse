@@ -103,3 +103,42 @@ export async function getDatesWithEntries(yearMonth) {
 export async function toggleSpecial(id, isSpecial, label) {
   return updateBrainEntry(id, { is_special: isSpecial, special_label: label || null })
 }
+
+export async function getRandomFeeling() {
+  const { count } = await supabase.from(TABLE).select('*', { count: 'exact', head: true })
+    .eq('kind', '记感受').is('ref_id', null).neq('status', 'archived')
+  if (!count) return null
+  const offset = Math.floor(Math.random() * count)
+  const { data } = await supabase.from(TABLE).select('*')
+    .eq('kind', '记感受').is('ref_id', null).neq('status', 'archived')
+    .range(offset, offset).limit(1)
+  return data?.[0] || null
+}
+
+export async function getFeelingReplies(refId) {
+  const { data, error } = await supabase.from(TABLE).select('*')
+    .eq('ref_id', refId).order('created_at', { ascending: true })
+  if (error) throw error
+  if (!data || data.length === 0) return { earliest: null, latest: null, count: 0 }
+  return {
+    earliest: data[0],
+    latest: data.length > 1 ? data[data.length - 1] : null,
+    count: data.length,
+  }
+}
+
+export async function getFeelingCount() {
+  const { count } = await supabase.from(TABLE).select('*', { count: 'exact', head: true })
+    .eq('kind', '记感受').is('ref_id', null).neq('status', 'archived')
+  return count || 0
+}
+
+export async function addFeelingReply(refId, { content, tag, feeling }) {
+  return addBrainEntry({
+    content,
+    kind: '记感受',
+    tag,
+    feeling,
+    refId: refId,
+  })
+}
