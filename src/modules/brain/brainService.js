@@ -100,6 +100,51 @@ export async function getDatesWithEntries(yearMonth) {
   return [...new Set(data?.map(d => d.memory_date) || [])]
 }
 
+export async function getMemoryTides() {
+  const { data, error } = await supabase.from(TABLE)
+    .select('*')
+    .neq('status', 'archived')
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  const entries = data || []
+  const now = new Date()
+
+  const monthCounts = []
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    const count = entries.filter(e => e.memory_date?.startsWith(ym)).length
+    monthCounts.push({ label: `${d.getMonth() + 1}月`, count })
+  }
+
+  const sevenDaysAgo = new Date(now - 7 * 86400000).toISOString()
+
+  return {
+    monthCounts,
+    total: entries.length,
+    categories: [
+      {
+        id: 'new', label: '新录入', desc: '近7天', color: '#b8d8b8',
+        items: entries.filter(e => e.created_at >= sevenDaysAgo),
+      },
+      {
+        id: 'referenced', label: '被提及最多', desc: '唤醒次数', color: '#b8c8e8',
+        items: entries.filter(e => (e.awaken_count || 0) > 0)
+          .sort((a, b) => (b.awaken_count || 0) - (a.awaken_count || 0)),
+      },
+      {
+        id: 'awakened', label: '被唤醒', desc: '曾被唤起', color: '#f0d68a',
+        items: entries.filter(e => e.status === 'awakened')
+          .sort((a, b) => new Date(b.last_awakened_at) - new Date(a.last_awakened_at)),
+      },
+      {
+        id: 'fading', label: '即将遗忘', desc: '已淡忘', color: '#e8b8c8',
+        items: entries.filter(e => e.status === 'faded'),
+      },
+    ],
+  }
+}
+
 export async function toggleSpecial(id, isSpecial, label) {
   return updateBrainEntry(id, { is_special: isSpecial, special_label: label || null })
 }

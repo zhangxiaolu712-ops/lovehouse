@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router'
 import {
   getBrainEntries, getBrainStats, addBrainEntry, deleteBrainEntry,
   awakenEntry, fadeEntry, getRandomEntry, searchBrain,
-  getDatesWithEntries, toggleSpecial,
+  getDatesWithEntries, toggleSpecial, getMemoryTides,
 } from './brainService'
 
 const MONTH_POEMS = {
@@ -59,6 +59,8 @@ export default function BrainPage() {
   const [calendarDates, setCalendarDates] = useState([])
   const [selectedDate, setSelectedDate] = useState(null)
   const [moodFilter, setMoodFilter] = useState(null)
+  const [tidesData, setTidesData] = useState(null)
+  const [tidesCategory, setTidesCategory] = useState(null)
   const searchRef = useRef(null)
 
   const currentMonth = new Date().getMonth() + 1
@@ -147,6 +149,8 @@ export default function BrainPage() {
       setMoodFilter(null)
     } else if (mode === 'blindbox') {
       openBlindBox()
+    } else if (mode === 'tides') {
+      loadTides()
     }
   }
 
@@ -196,6 +200,22 @@ export default function BrainPage() {
     setFilterMode(null)
   }
 
+  async function loadTides() {
+    setLoading(true)
+    setTidesCategory(null)
+    try {
+      const data = await getMemoryTides()
+      setTidesData(data)
+      setEntries([])
+    } catch {}
+    setLoading(false)
+  }
+
+  function selectTidesCategory(cat) {
+    setTidesCategory(cat.id)
+    setEntries(cat.items)
+  }
+
   async function handleDelete(id) {
     if (!confirm('确定要删除这条记忆吗？')) return
     try {
@@ -233,6 +253,8 @@ export default function BrainPage() {
     setSearching(false)
     setSearchQuery('')
     setSelectedDate(null)
+    setTidesData(null)
+    setTidesCategory(null)
   }
 
   const tags = tab === '记事' ? JI_SHI_TAGS : JI_GANSHOU_TAGS
@@ -370,6 +392,25 @@ export default function BrainPage() {
             </div>
           )}
 
+          {filterMode === 'tides' && tidesData && (
+            <div>
+              <div style={styles.filterLabel}>
+                记忆潮汐
+                <button onClick={() => handleFilterMode('tides')} style={styles.filterClose}>×</button>
+              </div>
+              <TidesPanel
+                data={tidesData}
+                selectedCategory={tidesCategory}
+                onSelectCategory={selectTidesCategory}
+              />
+              {tidesCategory && (
+                <div style={{ ...styles.filterLabel, fontSize: 12, marginTop: 4 }}>
+                  {tidesData.categories.find(c => c.id === tidesCategory)?.label} · {entries.length}条
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Add button */}
           <button onClick={() => setShowAdd(!showAdd)} style={styles.addToggle}>
             {showAdd ? '收起' : '+ 记一笔'}
@@ -383,7 +424,9 @@ export default function BrainPage() {
             <div className="empty">加载中...</div>
           ) : entries.length === 0 ? (
             <div className="empty">
-              {filterMode === 'special' ? '还没有特别标记的日子~' :
+              {filterMode === 'tides' && !tidesCategory ? '选一个分类，看看潮汐里的记忆' :
+               filterMode === 'tides' ? '这个分类还没有记忆~' :
+               filterMode === 'special' ? '还没有特别标记的日子~' :
                filterMode === 'mood' ? '这种心情还没有记录~' :
                selectedDate ? `${selectedDate} 这天还没有记录~` :
                searching ? '没有找到相关记忆~' :
@@ -410,7 +453,7 @@ export default function BrainPage() {
           { id: 'special', label: '特殊日', color: '#e8dbb0', activeColor: '#d4c78c' },
           { id: 'calendar', label: '月历', color: '#b8c8e8', activeColor: '#96b0d8' },
           { id: 'mood', label: '心情', color: '#e8b8c8', activeColor: '#d89aaf' },
-          { id: 'blindbox', label: '盲盒', color: '#b8d8b8', activeColor: '#96c896' },
+          { id: 'tides', label: '潮汐', color: '#b8d8b8', activeColor: '#96c896' },
         ].map(btn => (
           <button
             key={btn.id}
@@ -633,6 +676,104 @@ function AddEntryForm({ tab, onSaved }) {
         </button>
       </div>
     </form>
+  )
+}
+
+function TidesPanel({ data, selectedCategory, onSelectCategory }) {
+  const maxCount = Math.max(...data.monthCounts.map(m => m.count), 1)
+  const maxCatCount = Math.max(...data.categories.map(c => c.items.length), 1)
+  const currentIdx = data.monthCounts.length - 1
+
+  return (
+    <div className="card" style={{ padding: '20px 16px', marginBottom: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 16, letterSpacing: 0.5 }}>
+        每月记忆
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', height: 100, marginBottom: 20, padding: '0 4px' }}>
+        {data.monthCounts.map((m, i) => {
+          const barH = maxCount > 0 ? Math.max((m.count / maxCount) * 72, m.count > 0 ? 8 : 0) : 0
+          const isCurrent = i === currentIdx
+          return (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, gap: 4 }}>
+              <span style={{ fontSize: 11, color: isCurrent ? '#5a8a5a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
+                {m.count > 0 ? m.count : ''}
+              </span>
+              <div style={{
+                width: 24,
+                height: barH,
+                background: isCurrent ? '#96c896' : '#d8e8d4',
+                borderRadius: 4,
+                transition: 'height 0.4s ease',
+              }} />
+              <span style={{ fontSize: 11, color: isCurrent ? '#5a8a5a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
+                {m.label}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ height: 1, background: 'var(--border)', margin: '0 0 16px' }} />
+
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, letterSpacing: 0.5 }}>
+        记忆构成
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {data.categories.map(cat => {
+          const isSelected = selectedCategory === cat.id
+          return (
+            <button
+              key={cat.id}
+              onClick={() => onSelectCategory(cat)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                background: isSelected ? 'var(--bg-secondary)' : 'transparent',
+                border: 'none',
+                padding: '10px 8px',
+                borderRadius: 10,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                width: '100%',
+                textAlign: 'left',
+                transition: 'background 0.2s',
+              }}
+            >
+              <span style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: cat.color,
+                flexShrink: 0,
+              }} />
+              <span style={{ fontSize: 13, color: 'var(--text-primary)', width: 72, flexShrink: 0 }}>
+                {cat.label}
+              </span>
+              <div style={{
+                flex: 1,
+                height: 6,
+                background: 'var(--bg-secondary)',
+                borderRadius: 3,
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${maxCatCount > 0 ? Math.max((cat.items.length / maxCatCount) * 100, cat.items.length > 0 ? 4 : 0) : 0}%`,
+                  background: cat.color,
+                  borderRadius: 3,
+                  transition: 'width 0.4s ease',
+                }} />
+              </div>
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, minWidth: 36, textAlign: 'right' }}>
+                {cat.items.length}条
+              </span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>›</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
