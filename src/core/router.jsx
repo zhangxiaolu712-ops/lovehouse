@@ -18,6 +18,9 @@ import BrainPage from '../modules/brain/BrainPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
+  'chat',
+  'interact',
+  'all',
   'space/layout',
   'space/games',
   'memory/inbox',

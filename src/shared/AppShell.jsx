@@ -66,18 +66,17 @@ const CENTERS = [
 ]
 
 const NAV_ITEMS = [
-  { path: '/', icon: 'home', label: '首页' },
-  { path: '/diary', icon: 'book', label: '日记' },
+  { path: '/', icon: 'workbench', label: '工作台' },
   { path: '/brain', icon: 'memory', label: '记忆' },
-  { path: '/quotes', icon: 'quote', label: '语录' },
-  { path: '/todo', icon: 'check', label: '待办' },
-  { path: '/mood', icon: 'mood', label: '心情' },
+  { path: '/chat', icon: 'chat', label: '聊天' },
+  { path: '/interact', icon: 'interact', label: '互动' },
+  { path: '/all', icon: 'grid', label: '全部' },
 ]
 
 const PRINCE_NAV_ITEMS = [
-  { path: '/', icon: 'home', label: '首页' },
-  { path: '/diary', icon: 'book', label: '日记' },
+  { path: '/', icon: 'workbench', label: '工作台' },
   { path: '/brain', icon: 'memory', label: '记忆' },
+  { path: '/chat', icon: 'chat', label: '聊天' },
 ]
 
 const QUICK_ITEMS = [

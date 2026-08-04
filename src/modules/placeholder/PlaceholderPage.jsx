@@ -2,6 +2,9 @@ import { useLocation, Link } from 'react-router'
 
 // 规划中的抽屉：路由 → 介绍
 const DRAWERS = {
+  '/chat': { icon: '💬', title: '聊天', center: '', desc: '和小克聊天的地方，可以看 Codex 和 Claude Code 的对话记录。' },
+  '/interact': { icon: '🤝', title: '互动', center: '', desc: '小纸条留言板、养小克、小游戏区——一起玩的空间。' },
+  '/all': { icon: '📂', title: '全部', center: '', desc: '所有房间和功能的总览，快速跳转到任意位置。' },
   '/space/layout': { icon: '🧩', title: '布局', center: '🏠 空间中心', desc: '侧边栏式/底部导航式切换，手机和网页布局保持一致。' },
   '/space/games': { icon: '🎮', title: '游戏区', center: '🏠 空间中心', desc: '收藏聊天记录里一起搓出来的小游戏文件，随时回来玩。' },
   '/memory/inbox': { icon: '📥', title: '总结待整理区', center: '🧠 记忆中心', desc: '还没归类好的聊天记录总结先放这里，整理好再入库。' },
