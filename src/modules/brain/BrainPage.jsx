@@ -394,20 +394,50 @@ export default function BrainPage() {
 
           {filterMode === 'tides' && tidesData && (
             <div>
+              <button
+                onClick={() => handleFilterMode('tides')}
+                style={styles.tidesBackBtn}
+              >
+                ← 返回
+              </button>
               <div style={styles.filterLabel}>
                 记忆潮汐
-                <button onClick={() => handleFilterMode('tides')} style={styles.filterClose}>×</button>
               </div>
               <TidesPanel
                 data={tidesData}
                 selectedCategory={tidesCategory}
                 onSelectCategory={selectTidesCategory}
+                entries={entries}
+                onDelete={handleDelete}
+                onAwaken={handleAwaken}
+                onFade={handleFade}
+                onToggleSpecial={handleToggleSpecial}
               />
-              {tidesCategory && (
-                <div style={{ ...styles.filterLabel, fontSize: 12, marginTop: 4 }}>
-                  {tidesData.categories.find(c => c.id === tidesCategory)?.label} · {entries.length}条
-                </div>
-              )}
+            </div>
+          )}
+
+          {/* Four function buttons (above entries) */}
+          {!searching && filterMode !== 'tides' && (
+            <div style={styles.funcGrid}>
+              {[
+                { id: 'special', label: '特殊日', desc: '标记的日子', color: '#f5edce', activeColor: '#ebe0b0', dot: '#d4c078' },
+                { id: 'calendar', label: '月历', desc: '按日期找', color: '#dde8f5', activeColor: '#c4d8ee', dot: '#8ab0d8' },
+                { id: 'mood', label: '心情', desc: '按心情筛选', color: '#f5dde4', activeColor: '#eec4d0', dot: '#d88aa8' },
+                { id: 'tides', label: '潮汐', desc: '记忆潮汐', color: '#d8f0d8', activeColor: '#b8e0b8', dot: '#7ec896' },
+              ].map(btn => (
+                <button
+                  key={btn.id}
+                  onClick={() => handleFilterMode(btn.id)}
+                  style={{
+                    ...styles.funcCard,
+                    background: filterMode === btn.id ? btn.activeColor : btn.color,
+                  }}
+                >
+                  <span style={{ ...styles.funcDot, background: btn.dot }} />
+                  <span style={styles.funcLabel}>{btn.label}</span>
+                  <span style={styles.funcDesc}>{btn.desc}</span>
+                </button>
+              ))}
             </div>
           )}
 
@@ -433,40 +463,14 @@ export default function BrainPage() {
                '这一格还空着~'}
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-              {entries.map(entry => (
-                <EntryCard
-                  key={entry.id}
-                  entry={entry}
-                  onDelete={handleDelete}
-                  onAwaken={handleAwaken}
-                  onFade={handleFade}
-                  onToggleSpecial={handleToggleSpecial}
-                />
-              ))}
-            </div>
+            <DateGroupedEntries
+              entries={entries}
+              onDelete={handleDelete}
+              onAwaken={handleAwaken}
+              onFade={handleFade}
+              onToggleSpecial={handleToggleSpecial}
+            />
           )}
-
-      {/* Bottom four buttons */}
-      <div style={styles.bottomBar}>
-        {[
-          { id: 'special', label: '特殊日', color: '#e8dbb0', activeColor: '#d4c78c' },
-          { id: 'calendar', label: '月历', color: '#b8c8e8', activeColor: '#96b0d8' },
-          { id: 'mood', label: '心情', color: '#e8b8c8', activeColor: '#d89aaf' },
-          { id: 'tides', label: '潮汐', color: '#b8d8b8', activeColor: '#96c896' },
-        ].map(btn => (
-          <button
-            key={btn.id}
-            onClick={() => handleFilterMode(btn.id)}
-            style={{
-              ...styles.bottomBtn,
-              background: filterMode === btn.id ? btn.activeColor : btn.color,
-            }}
-          >
-            {btn.label}
-          </button>
-        ))}
-      </div>
 
       {/* Blind box overlay */}
       {blindBoxOpen && (
@@ -499,77 +503,6 @@ export default function BrainPage() {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-function EntryCard({ entry, onDelete, onAwaken, onFade, onToggleSpecial }) {
-  const [expanded, setExpanded] = useState(false)
-  const isFaded = entry.status === 'faded'
-  const isLong = entry.content.length > 120
-
-  return (
-    <div
-      className="card"
-      style={{
-        opacity: isFaded ? 0.5 : 1,
-        position: 'relative',
-        transition: 'opacity 0.3s',
-      }}
-    >
-      {entry.is_special && <span style={styles.specialMark}>⭐</span>}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {entry.title && (
-            <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 15 }}>{entry.title}</div>
-          )}
-          <p style={{
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            lineHeight: 1.75,
-            fontSize: 14,
-            ...(isLong && !expanded ? { maxHeight: 100, overflow: 'hidden', maskImage: 'linear-gradient(#000 60%, transparent)' } : {}),
-          }}>
-            {entry.content}
-          </p>
-          {isLong && (
-            <button onClick={() => setExpanded(!expanded)} style={styles.expandBtn}>
-              {expanded ? '收起' : '展开全文'}
-            </button>
-          )}
-          {entry.feeling && (
-            <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-              {entry.feeling}
-            </div>
-          )}
-          <div style={styles.entryMeta}>
-            <span style={{
-              ...styles.miniTag,
-              background: entry.kind === '记事' ? '#ffe4ec' : '#fff3c4',
-              color: '#5a4a3a',
-            }}>
-              #{entry.tag}
-            </span>
-            {entry.speaker && <span style={styles.metaText}>—{entry.speaker}</span>}
-            {entry.mood && <span style={{ fontSize: 14 }}>{MOODS.find(m => m.id === entry.mood)?.emoji || entry.mood}</span>}
-            {entry.status && entry.status !== 'active' && (
-              <span style={styles.statusBadge}>{STATUS_LABEL[entry.status]}</span>
-            )}
-            <span style={styles.metaDate}>{entry.memory_date}</span>
-          </div>
-        </div>
-        <div style={styles.entryActions}>
-          <button onClick={() => onToggleSpecial(entry.id, entry.is_special)} style={styles.actionBtn} title="标记特殊日">
-            {entry.is_special ? '⭐' : '☆'}
-          </button>
-          {isFaded ? (
-            <button onClick={() => onAwaken(entry.id)} style={styles.actionBtn} title="唤醒">🔔</button>
-          ) : (
-            <button onClick={() => onFade(entry.id)} style={styles.actionBtn} title="淡忘">💤</button>
-          )}
-          <button onClick={() => onDelete(entry.id)} className="delete-btn" style={{ fontSize: 14, padding: '2px 6px' }}>×</button>
-        </div>
-      </div>
     </div>
   )
 }
@@ -679,7 +612,144 @@ function AddEntryForm({ tab, onSaved }) {
   )
 }
 
-function TidesPanel({ data, selectedCategory, onSelectCategory }) {
+function groupByDate(entries) {
+  const groups = {}
+  for (const entry of entries) {
+    const date = entry.memory_date || 'unknown'
+    if (!groups[date]) groups[date] = []
+    groups[date].push(entry)
+  }
+  return Object.entries(groups)
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([date, items]) => ({
+      date,
+      items: items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
+    }))
+}
+
+function formatDateDisplay(dateStr) {
+  if (!dateStr || dateStr === 'unknown') return { month: '', day: '?' }
+  const parts = dateStr.split('-')
+  const m = parseInt(parts[1], 10)
+  const d = parseInt(parts[2], 10)
+  return { month: `${m}月`, day: `${m}/${d}` }
+}
+
+function DateGroupedEntries({ entries, onDelete, onAwaken, onFade, onToggleSpecial }) {
+  const groups = groupByDate(entries)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 12 }}>
+      {groups.map(group => {
+        const { day } = formatDateDisplay(group.date)
+        const weekDay = (() => {
+          try {
+            const d = new Date(group.date)
+            return ['周日','周一','周二','周三','周四','周五','周六'][d.getDay()]
+          } catch { return '' }
+        })()
+
+        return (
+          <div key={group.date} style={styles.dateGroup}>
+            <div style={styles.dateLeft}>
+              <div style={styles.dateDay}>{day}</div>
+              <div style={styles.dateWeek}>{weekDay}</div>
+            </div>
+            <div style={styles.dateRight}>
+              {group.items.map(entry => (
+                <CompactEntryStrip
+                  key={entry.id}
+                  entry={entry}
+                  onDelete={onDelete}
+                  onAwaken={onAwaken}
+                  onFade={onFade}
+                  onToggleSpecial={onToggleSpecial}
+                />
+              ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial }) {
+  const [expanded, setExpanded] = useState(false)
+  const isFaded = entry.status === 'faded'
+  const time = (() => {
+    try {
+      const d = new Date(entry.created_at)
+      return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+    } catch { return '' }
+  })()
+
+  const tagColor = entry.kind === '记事'
+    ? { bg: '#ffe4ec', text: '#c4758a' }
+    : { bg: '#fff3c4', text: '#a89040' }
+
+  const moodEmoji = entry.mood ? (MOODS.find(m => m.id === entry.mood)?.emoji || '') : ''
+
+  const preview = entry.content.length > 60 ? entry.content.slice(0, 60) + '…' : entry.content
+
+  return (
+    <div
+      style={{
+        ...styles.stripWrap,
+        opacity: isFaded ? 0.5 : 1,
+        borderLeftColor: tagColor.text,
+      }}
+      onClick={() => setExpanded(!expanded)}
+    >
+      <div style={styles.stripHeader}>
+        <span style={{ ...styles.stripTag, background: tagColor.bg, color: tagColor.text }}>
+          {TAG_ICONS[entry.tag] || ''} {entry.tag}
+        </span>
+        {entry.is_special && <span style={{ fontSize: 12 }}>⭐</span>}
+        {moodEmoji && <span style={{ fontSize: 13 }}>{moodEmoji}</span>}
+        {entry.status && entry.status !== 'active' && (
+          <span style={styles.statusBadge}>{STATUS_LABEL[entry.status]}</span>
+        )}
+        <span style={styles.stripTime}>{time}</span>
+      </div>
+
+      {!expanded ? (
+        <div style={styles.stripPreview}>
+          {entry.title && <strong>{entry.title} · </strong>}
+          {preview}
+        </div>
+      ) : (
+        <div style={styles.stripExpanded}>
+          {entry.title && <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 14 }}>{entry.title}</div>}
+          <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.75, fontSize: 13, margin: 0 }}>
+            {entry.content}
+          </p>
+          {entry.feeling && (
+            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+              {entry.feeling}
+            </div>
+          )}
+          {entry.speaker && (
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-muted)' }}>—{entry.speaker}</div>
+          )}
+          <div style={styles.stripActions} onClick={e => e.stopPropagation()}>
+            <button onClick={() => onToggleSpecial(entry.id, entry.is_special)} style={styles.actionBtn} title="标记特殊日">
+              {entry.is_special ? '⭐' : '☆'}
+            </button>
+            {isFaded ? (
+              <button onClick={() => onAwaken(entry.id)} style={styles.actionBtn} title="唤醒">🔔</button>
+            ) : (
+              <button onClick={() => onFade(entry.id)} style={styles.actionBtn} title="淡忘">💤</button>
+            )}
+            <button onClick={() => onDelete(entry.id)} className="delete-btn" style={{ fontSize: 12, padding: '2px 6px' }}>×</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelete, onAwaken, onFade, onToggleSpecial }) {
   const maxCount = Math.max(...data.monthCounts.map(m => m.count), 1)
   const maxCatCount = Math.max(...data.categories.map(c => c.items.length), 1)
   const currentIdx = data.monthCounts.length - 1
@@ -722,8 +792,8 @@ function TidesPanel({ data, selectedCategory, onSelectCategory }) {
         {data.categories.map(cat => {
           const isSelected = selectedCategory === cat.id
           return (
+            <div key={cat.id}>
             <button
-              key={cat.id}
               onClick={() => onSelectCategory(cat)}
               style={{
                 display: 'flex',
@@ -768,9 +838,32 @@ function TidesPanel({ data, selectedCategory, onSelectCategory }) {
               <span style={{ fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, minWidth: 36, textAlign: 'right' }}>
                 {cat.items.length}条
               </span>
-              <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>›</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 14, transform: isSelected ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }}>›</span>
             </button>
-          )
+            {isSelected && entries && entries.length > 0 && (
+              <div style={{ padding: '4px 0 8px 20px' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                  {cat.label} · {entries.length}条
+                </div>
+                {entries.map(entry => (
+                  <CompactEntryStrip
+                    key={entry.id}
+                    entry={entry}
+                    onDelete={onDelete}
+                    onAwaken={onAwaken}
+                    onFade={onFade}
+                    onToggleSpecial={onToggleSpecial}
+                  />
+                ))}
+              </div>
+            )}
+            {isSelected && (!entries || entries.length === 0) && (
+              <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text-muted)' }}>
+                这个分类还没有记忆~
+              </div>
+            )}
+          </div>
+        )
         })}
       </div>
     </div>
@@ -998,24 +1091,128 @@ const styles = {
     fontFamily: 'inherit',
     transition: 'all 0.2s',
   },
-  bottomBar: {
+  funcGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, 1fr)',
     gap: 8,
-    marginTop: 24,
-    padding: '0 4px',
+    margin: '14px 0',
+    padding: '0 2px',
   },
-  bottomBtn: {
-    padding: '14px 0',
+  funcCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+    padding: '14px 4px 12px',
     border: 'none',
-    borderRadius: 10,
-    fontSize: 13,
-    fontWeight: 500,
-    color: '#5a4a3a',
+    borderRadius: 12,
     cursor: 'pointer',
     fontFamily: 'inherit',
     transition: 'all 0.2s',
+    position: 'relative',
+  },
+  funcDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    marginBottom: 2,
+  },
+  funcLabel: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#5a4a3a',
     letterSpacing: 0.5,
+  },
+  funcDesc: {
+    fontSize: 10,
+    color: '#8a7a6a',
+    letterSpacing: 0.3,
+  },
+  tidesBackBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-secondary)',
+    fontSize: 13,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    padding: '8px 0',
+    letterSpacing: 0.5,
+  },
+  dateGroup: {
+    display: 'flex',
+    gap: 14,
+    padding: '16px 0',
+    borderBottom: '1px solid var(--border)',
+  },
+  dateLeft: {
+    flexShrink: 0,
+    width: 56,
+    textAlign: 'center',
+    paddingTop: 2,
+  },
+  dateDay: {
+    fontFamily: 'var(--font-display)',
+    fontSize: 22,
+    fontWeight: 500,
+    color: 'var(--text-primary)',
+    lineHeight: 1.2,
+    letterSpacing: -0.5,
+  },
+  dateWeek: {
+    fontSize: 11,
+    color: 'var(--text-muted)',
+    marginTop: 2,
+  },
+  dateRight: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    minWidth: 0,
+  },
+  stripWrap: {
+    background: 'var(--bg-card, #fff)',
+    borderRadius: 10,
+    padding: '10px 12px',
+    borderLeft: '3px solid #ccc',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+  },
+  stripHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  stripTag: {
+    display: 'inline-block',
+    padding: '1px 8px',
+    borderRadius: 8,
+    fontSize: 11,
+    fontWeight: 500,
+  },
+  stripTime: {
+    marginLeft: 'auto',
+    fontSize: 11,
+    color: 'var(--text-muted)',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  stripPreview: {
+    fontSize: 13,
+    color: 'var(--text-secondary)',
+    lineHeight: 1.5,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  stripExpanded: {
+    paddingTop: 4,
+  },
+  stripActions: {
+    display: 'flex',
+    gap: 4,
+    marginTop: 8,
+    justifyContent: 'flex-end',
   },
   entryMeta: {
     display: 'flex',
