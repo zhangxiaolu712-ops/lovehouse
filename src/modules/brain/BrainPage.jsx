@@ -25,9 +25,9 @@ const JI_SHI_TAGS = ['语录', '总结', '日记', '长文']
 const JI_GANSHOU_TAGS = ['观点', '修订', '认', '不认', '悬置']
 
 const MOODS = [
-  { id: '晴', emoji: '🌤️', color: '#7ec8a0' },
-  { id: '阴', emoji: '🌥️', color: '#f0d68a' },
-  { id: '雨', emoji: '🌧️', color: '#e8a0b4' },
+  { id: '晴', emoji: '🌤️', color: '#b0c8a8' },
+  { id: '阴', emoji: '🌥️', color: '#d0c8a8' },
+  { id: '雨', emoji: '🌧️', color: '#c8a8b0' },
 ]
 
 const TAG_ICONS = {
@@ -36,7 +36,7 @@ const TAG_ICONS = {
 }
 
 const STATUS_LABEL = {
-  active: '', faded: '已淡忘', awakened: '已唤醒', archived: '已归档',
+  active: '', faded: 'faded', awakened: 'awakened', archived: 'archived',
 }
 
 export default function BrainPage() {
@@ -267,14 +267,12 @@ export default function BrainPage() {
         <p style={styles.poem}>{poem}</p>
         <div style={styles.statsBlock}>
           <div style={styles.statRow}>
-            <span style={styles.statLabel}>记录</span>
             <span style={styles.statNumber}>{stats.days}</span>
-            <span style={styles.statUnit}>天</span>
+            <span style={styles.statUnit}>days</span>
           </div>
           <div style={styles.statRow}>
-            <span style={styles.statLabel}>记忆</span>
             <span style={styles.statNumber}>{stats.total}</span>
-            <span style={styles.statUnit}>条</span>
+            <span style={styles.statUnit}>entries</span>
           </div>
         </div>
       </div>
@@ -287,13 +285,13 @@ export default function BrainPage() {
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleSearch()}
-          placeholder="查找记忆"
+          placeholder="Search memories"
           style={styles.searchInput}
         />
         {searchQuery && (
           <button onClick={clearSearch} style={styles.searchClear}>×</button>
         )}
-        <button onClick={() => handleSearch()} style={styles.searchBtn}>搜</button>
+        <button onClick={() => handleSearch()} style={styles.searchBtn}>Go</button>
       </div>
 
       {/* Tab: 记事 | 记感受 */}
@@ -303,14 +301,14 @@ export default function BrainPage() {
             style={{ ...styles.tabBtn, ...(tab === '记事' ? styles.tabActive : {}) }}
             onClick={() => switchTab('记事')}
           >
-            记事
+            Notes
           </button>
           <span style={styles.tabDivider}>|</span>
           <button
             style={{ ...styles.tabBtn, ...(tab === '记感受' ? styles.tabActive : {}) }}
             onClick={() => switchTab('记感受')}
           >
-            记感受
+            Feelings
           </button>
         </div>
       )}
@@ -325,9 +323,9 @@ export default function BrainPage() {
               style={{
                 ...styles.tagChip,
                 background: activeTag === t
-                  ? (isTagPink ? '#ffb6c8' : '#f0d068')
-                  : (isTagPink ? '#ffe4ec' : '#fff3c4'),
-                color: '#5a4a3a',
+                  ? (isTagPink ? '#e8d4d8' : '#ddd8c0')
+                  : (isTagPink ? '#f0e8ea' : '#eeeadc'),
+                color: 'var(--text-secondary)',
                 fontWeight: activeTag === t ? 600 : 400,
               }}
             >
@@ -340,20 +338,20 @@ export default function BrainPage() {
       {/* Filter mode labels */}
           {searching && (
             <div style={styles.filterLabel}>
-              搜索「{searchQuery}」的结果 · {entries.length} 条
+              "{searchQuery}" · {entries.length} results
               <button onClick={clearSearch} style={styles.filterClose}>×</button>
             </div>
           )}
           {filterMode === 'special' && (
             <div style={styles.filterLabel}>
-              被特别标记的日子
+              Special Days
               <button onClick={() => handleFilterMode('special')} style={styles.filterClose}>×</button>
             </div>
           )}
           {filterMode === 'calendar' && (
             <div>
               <div style={styles.filterLabel}>
-                选一天，看看那天发生了什么
+                Calendar
                 <button onClick={() => handleFilterMode('calendar')} style={styles.filterClose}>×</button>
               </div>
               <MiniCalendar
@@ -369,7 +367,7 @@ export default function BrainPage() {
           {filterMode === 'mood' && (
             <div>
               <div style={styles.filterLabel}>
-                按心情筛选
+                Mood
                 <button onClick={() => handleFilterMode('mood')} style={styles.filterClose}>×</button>
               </div>
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', margin: '12px 0 16px' }}>
@@ -398,10 +396,10 @@ export default function BrainPage() {
                 onClick={() => handleFilterMode('tides')}
                 style={styles.tidesBackBtn}
               >
-                ← 返回
+                ← Back
               </button>
               <div style={styles.filterLabel}>
-                记忆潮汐
+                Memory Tides
               </div>
               <TidesPanel
                 data={tidesData}
@@ -420,10 +418,10 @@ export default function BrainPage() {
           {!searching && filterMode !== 'tides' && (
             <div style={styles.funcGrid}>
               {[
-                { id: 'special', label: '特殊日', desc: '标记的日子', color: '#f5edce', activeColor: '#ebe0b0', dot: '#d4c078' },
-                { id: 'calendar', label: '月历', desc: '按日期找', color: '#dde8f5', activeColor: '#c4d8ee', dot: '#8ab0d8' },
-                { id: 'mood', label: '心情', desc: '按心情筛选', color: '#f5dde4', activeColor: '#eec4d0', dot: '#d88aa8' },
-                { id: 'tides', label: '潮汐', desc: '记忆潮汐', color: '#d8f0d8', activeColor: '#b8e0b8', dot: '#7ec896' },
+                { id: 'special', label: 'Special', desc: 'marked days', color: '#f0ece4', activeColor: '#e6e0d4', dot: '#c4b898' },
+                { id: 'calendar', label: 'Calendar', desc: 'by date', color: '#e8eaee', activeColor: '#dcdee4', dot: '#a0a8b8' },
+                { id: 'mood', label: 'Mood', desc: 'by feeling', color: '#eee8ea', activeColor: '#e4dce0', dot: '#b8a0a8' },
+                { id: 'tides', label: 'Tides', desc: 'overview', color: '#e8eee8', activeColor: '#dce4dc', dot: '#98b898' },
               ].map(btn => (
                 <button
                   key={btn.id}
@@ -443,7 +441,7 @@ export default function BrainPage() {
 
           {/* Add button */}
           <button onClick={() => setShowAdd(!showAdd)} style={styles.addToggle}>
-            {showAdd ? '收起' : '+ 记一笔'}
+            {showAdd ? 'Close' : '+ New entry'}
           </button>
 
           {/* Add form */}
@@ -451,16 +449,16 @@ export default function BrainPage() {
 
           {/* Entry list */}
           {loading ? (
-            <div className="empty">加载中...</div>
+            <div className="empty">Loading...</div>
           ) : entries.length === 0 ? (
             <div className="empty">
-              {filterMode === 'tides' && !tidesCategory ? '选一个分类，看看潮汐里的记忆' :
-               filterMode === 'tides' ? '这个分类还没有记忆~' :
-               filterMode === 'special' ? '还没有特别标记的日子~' :
-               filterMode === 'mood' ? '这种心情还没有记录~' :
-               selectedDate ? `${selectedDate} 这天还没有记录~` :
-               searching ? '没有找到相关记忆~' :
-               '这一格还空着~'}
+              {filterMode === 'tides' && !tidesCategory ? 'Pick a category to explore' :
+               filterMode === 'tides' ? 'Nothing here yet' :
+               filterMode === 'special' ? 'No special days yet' :
+               filterMode === 'mood' ? 'No entries for this mood' :
+               selectedDate ? `No entries on ${selectedDate}` :
+               searching ? 'No results found' :
+               'Nothing here yet'}
             </div>
           ) : (
             <DateGroupedEntries
@@ -476,7 +474,7 @@ export default function BrainPage() {
       {blindBoxOpen && (
         <div style={styles.blindBoxOverlay} onClick={closeBlindBox}>
           <div style={styles.blindBoxCard} onClick={e => e.stopPropagation()}>
-            <div style={styles.blindBoxTitle}>🎁 记忆盲盒</div>
+            <div style={styles.blindBoxTitle}>Memory Box</div>
             {blindBox ? (
               <>
                 <div style={styles.blindBoxTag}>
@@ -493,12 +491,12 @@ export default function BrainPage() {
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
-                  <button onClick={openBlindBox} style={styles.blindBoxBtn}>再抽一个</button>
-                  <button onClick={closeBlindBox} style={{ ...styles.blindBoxBtn, background: '#e8e0d4' }}>好了</button>
+                  <button onClick={openBlindBox} style={styles.blindBoxBtn}>Another</button>
+                  <button onClick={closeBlindBox} style={{ ...styles.blindBoxBtn, background: '#e8e0d4' }}>Done</button>
                 </div>
               </>
             ) : (
-              <div style={{ padding: 20, textAlign: 'center', color: '#999' }}>还没有记忆可以抽~</div>
+              <div style={{ padding: 20, textAlign: 'center', color: '#999' }}>No memories yet</div>
             )}
           </div>
         </div>
@@ -553,7 +551,7 @@ function AddEntryForm({ tab, onSaved }) {
           className="input"
           value={title}
           onChange={e => setTitle(e.target.value)}
-          placeholder="标题（可选）"
+          placeholder="Title (optional)"
           style={{ marginBottom: 8 }}
         />
       )}
@@ -561,7 +559,7 @@ function AddEntryForm({ tab, onSaved }) {
         className="textarea"
         value={content}
         onChange={e => setContent(e.target.value)}
-        placeholder={tab === '记感受' ? '写下你的感受...' : '记一笔~'}
+        placeholder={tab === '记感受' ? 'How do you feel...' : 'Write something...'}
         style={{ minHeight: 70 }}
       />
       <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -573,7 +571,7 @@ function AddEntryForm({ tab, onSaved }) {
             className="input"
             value={speaker}
             onChange={e => setSpeaker(e.target.value)}
-            placeholder="谁说的"
+            placeholder="Who said"
             style={{ width: 80, padding: '6px 10px', fontSize: 13 }}
           />
         )}
@@ -582,7 +580,7 @@ function AddEntryForm({ tab, onSaved }) {
             className="input"
             value={feeling}
             onChange={e => setFeeling(e.target.value)}
-            placeholder="感受..."
+            placeholder="Feeling..."
             style={{ flex: 1, minWidth: 100, padding: '6px 10px', fontSize: 13 }}
           />
         )}
@@ -605,7 +603,7 @@ function AddEntryForm({ tab, onSaved }) {
           ))}
         </div>
         <button className="btn" type="submit" disabled={saving} style={{ marginLeft: 'auto' }}>
-          {saving ? '...' : '保存'}
+          {saving ? '...' : 'Save'}
         </button>
       </div>
     </form>
@@ -645,7 +643,7 @@ function DateGroupedEntries({ entries, onDelete, onAwaken, onFade, onToggleSpeci
         const weekDay = (() => {
           try {
             const d = new Date(group.date)
-            return ['周日','周一','周二','周三','周四','周五','周六'][d.getDay()]
+            return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]
           } catch { return '' }
         })()
 
@@ -685,8 +683,8 @@ function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial 
   })()
 
   const tagColor = entry.kind === '记事'
-    ? { bg: '#ffe4ec', text: '#c4758a' }
-    : { bg: '#fff3c4', text: '#a89040' }
+    ? { bg: '#f0e8ea', text: '#a89098' }
+    : { bg: '#eeeadc', text: '#a8a080' }
 
   const moodEmoji = entry.mood ? (MOODS.find(m => m.id === entry.mood)?.emoji || '') : ''
 
@@ -756,8 +754,8 @@ function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelet
 
   return (
     <div className="card" style={{ padding: '20px 16px', marginBottom: 12 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 16, letterSpacing: 0.5 }}>
-        每月记忆
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 16, letterSpacing: 1 }}>
+        Monthly
       </div>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', height: 100, marginBottom: 20, padding: '0 4px' }}>
         {data.monthCounts.map((m, i) => {
@@ -765,17 +763,17 @@ function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelet
           const isCurrent = i === currentIdx
           return (
             <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, gap: 4 }}>
-              <span style={{ fontSize: 11, color: isCurrent ? '#5a8a5a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
+              <span style={{ fontSize: 11, color: isCurrent ? '#7a9a7a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
                 {m.count > 0 ? m.count : ''}
               </span>
               <div style={{
                 width: 24,
                 height: barH,
-                background: isCurrent ? '#96c896' : '#d8e8d4',
+                background: isCurrent ? '#b0c8a8' : '#dce4d8',
                 borderRadius: 4,
                 transition: 'height 0.4s ease',
               }} />
-              <span style={{ fontSize: 11, color: isCurrent ? '#5a8a5a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
+              <span style={{ fontSize: 11, color: isCurrent ? '#7a9a7a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
                 {m.label}
               </span>
             </div>
@@ -785,8 +783,8 @@ function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelet
 
       <div style={{ height: 1, background: 'var(--border)', margin: '0 0 16px' }} />
 
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, letterSpacing: 0.5 }}>
-        记忆构成
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, letterSpacing: 1 }}>
+        Composition
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {data.categories.map(cat => {
@@ -836,14 +834,14 @@ function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelet
                 }} />
               </div>
               <span style={{ fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, minWidth: 36, textAlign: 'right' }}>
-                {cat.items.length}条
+                {cat.items.length}
               </span>
               <span style={{ color: 'var(--text-muted)', fontSize: 14, transform: isSelected ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }}>›</span>
             </button>
             {isSelected && entries && entries.length > 0 && (
               <div style={{ padding: '4px 0 8px 20px' }}>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                  {cat.label} · {entries.length}条
+                  {cat.label} · {entries.length}
                 </div>
                 {entries.map(entry => (
                   <CompactEntryStrip
@@ -859,7 +857,7 @@ function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelet
             )}
             {isSelected && (!entries || entries.length === 0) && (
               <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text-muted)' }}>
-                这个分类还没有记忆~
+                Nothing here yet
               </div>
             )}
           </div>
@@ -897,8 +895,8 @@ function MiniCalendar({ year, month, activeDates, selectedDate, onSelect, onMont
         <button onClick={next} style={styles.calNav}>›</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, textAlign: 'center', fontSize: 12 }}>
-        {['日', '一', '二', '三', '四', '五', '六'].map(d => (
-          <div key={d} style={{ padding: 4, color: 'var(--text-muted)', fontWeight: 500 }}>{d}</div>
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+          <div key={`${d}${i}`} style={{ padding: 4, color: 'var(--text-muted)', fontWeight: 500 }}>{d}</div>
         ))}
         {cells.map((day, i) => {
           if (!day) return <div key={`e${i}`} />
@@ -1002,8 +1000,8 @@ const styles = {
   },
   searchBtn: {
     border: 'none',
-    background: '#c8c464',
-    color: 'white',
+    background: '#c8c4b0',
+    color: '#fff',
     padding: '0 18px',
     fontSize: 13,
     fontWeight: 600,
@@ -1118,14 +1116,14 @@ const styles = {
     marginBottom: 2,
   },
   funcLabel: {
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: 600,
-    color: '#5a4a3a',
+    color: 'var(--text-secondary)',
     letterSpacing: 0.5,
   },
   funcDesc: {
     fontSize: 10,
-    color: '#8a7a6a',
+    color: 'var(--text-muted)',
     letterSpacing: 0.3,
   },
   tidesBackBtn: {
@@ -1362,8 +1360,8 @@ const styles = {
     padding: '8px 20px',
     border: 'none',
     borderRadius: 16,
-    background: '#b8d8b8',
-    color: '#3a4a3a',
+    background: '#d4d8d0',
+    color: 'var(--text-secondary)',
     fontSize: 13,
     fontWeight: 500,
     cursor: 'pointer',

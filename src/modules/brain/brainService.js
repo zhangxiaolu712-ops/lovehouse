@@ -124,21 +124,21 @@ export async function getMemoryTides() {
     total: entries.length,
     categories: [
       {
-        id: 'new', label: '新录入', desc: '近7天', color: '#b8d8b8',
+        id: 'new', label: 'Recent', desc: '7 days', color: '#c4d0c0',
         items: entries.filter(e => e.created_at >= sevenDaysAgo),
       },
       {
-        id: 'referenced', label: '被提及最多', desc: '唤醒次数', color: '#b8c8e8',
+        id: 'referenced', label: 'Referenced', desc: 'most cited', color: '#c0c8d4',
         items: entries.filter(e => (e.awaken_count || 0) > 0)
           .sort((a, b) => (b.awaken_count || 0) - (a.awaken_count || 0)),
       },
       {
-        id: 'awakened', label: '被唤醒', desc: '曾被唤起', color: '#f0d68a',
+        id: 'awakened', label: 'Awakened', desc: 'recalled', color: '#d8d0b8',
         items: entries.filter(e => e.status === 'awakened')
           .sort((a, b) => new Date(b.last_awakened_at) - new Date(a.last_awakened_at)),
       },
       {
-        id: 'fading', label: '即将遗忘', desc: '已淡忘', color: '#e8b8c8',
+        id: 'fading', label: 'Fading', desc: 'forgotten', color: '#d4c0c8',
         items: entries.filter(e => e.status === 'faded'),
       },
     ],
