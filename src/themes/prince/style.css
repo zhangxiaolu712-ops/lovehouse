@@ -24,7 +24,7 @@
   --radius: 16px;
   --radius-sm: 10px;
   --nav-bg: rgba(248, 243, 234, 0.96);
-  --font-display: 'Songti SC', 'STSong', 'Noto Serif SC', Georgia, serif;
+  --font-display: 'Cormorant Garamond', 'LXGW WenKai', Georgia, serif;
   --rose: #9d3f43;
   --star: #b7924b;
 }
@@ -1337,7 +1337,7 @@
 }
 /* 2.1 视觉统一：全局字体、线性图标与半透明卡片 */
 [data-theme="prince"] {
-  --font-editorial: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  --font-editorial: 'LXGW WenKai', 'Cormorant Garamond', Georgia, serif;
   --font-display: var(--font-editorial);
   font-family: var(--font-editorial);
 }

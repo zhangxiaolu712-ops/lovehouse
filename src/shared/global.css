@@ -10,8 +10,14 @@
   box-sizing: border-box;
 }
 
+:root {
+  --font-cn: 'LXGW WenKai', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-en: 'Cormorant Garamond', Georgia, serif;
+  --font-num: 'DM Mono', 'Menlo', monospace;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: 'LXGW WenKai', 'Cormorant Garamond', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   background: var(--bg-flat);
   color: var(--text-primary);
   min-height: 100vh;
@@ -181,7 +187,7 @@ body {
 }
 
 .sidebar-title {
-  font-family: var(--font-display);
+  font-family: var(--font-en);
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -202,7 +208,7 @@ body {
 }
 
 .sidebar-days-number {
-  font-family: var(--font-display);
+  font-family: var(--font-num);
   font-size: 26px;
   font-weight: 500;
   color: var(--accent);
@@ -455,7 +461,7 @@ body {
 }
 
 .days-counter .number {
-  font-family: var(--font-display);
+  font-family: var(--font-num);
   font-size: 72px;
   font-weight: 300;
   line-height: 1;

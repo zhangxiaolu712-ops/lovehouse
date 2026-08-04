@@ -961,9 +961,9 @@ const styles = {
     color: 'var(--text-secondary)',
   },
   statNumber: {
-    fontFamily: 'var(--font-display)',
+    fontFamily: 'var(--font-num, "DM Mono")',
     fontSize: 32,
-    fontWeight: 500,
+    fontWeight: 400,
     color: 'var(--text-primary)',
     lineHeight: 1.2,
   },
@@ -1149,9 +1149,9 @@ const styles = {
     paddingTop: 2,
   },
   dateDay: {
-    fontFamily: 'var(--font-display)',
+    fontFamily: 'var(--font-num, "DM Mono")',
     fontSize: 22,
-    fontWeight: 500,
+    fontWeight: 400,
     color: 'var(--text-primary)',
     lineHeight: 1.2,
     letterSpacing: -0.5,
@@ -1193,6 +1193,7 @@ const styles = {
     marginLeft: 'auto',
     fontSize: 11,
     color: 'var(--text-muted)',
+    fontFamily: 'var(--font-num, "DM Mono")',
     fontVariantNumeric: 'tabular-nums',
   },
   stripPreview: {
