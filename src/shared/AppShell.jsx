@@ -11,6 +11,7 @@ const TABS = [
 
 export default function AppShell() {
   const { pathname } = useLocation()
+  const hideNav = pathname === '/chat'
 
   useEffect(() => { window.scrollTo(0, 0) }, [pathname])
 
@@ -20,21 +21,23 @@ export default function AppShell() {
         <Outlet />
       </main>
 
-      <nav className="shell-nav">
-        {TABS.map(t => (
-          <NavLink
-            key={t.to}
-            to={t.to}
-            end={t.to === '/'}
-            className={({ isActive }) =>
-              `shell-tab${isActive ? ' on' : ''}`
-            }
-          >
-            <LineIcon name={t.icon} size={21} />
-            <span>{t.label}</span>
-          </NavLink>
-        ))}
-      </nav>
+      {!hideNav && (
+        <nav className="shell-nav">
+          {TABS.map(t => (
+            <NavLink
+              key={t.to}
+              to={t.to}
+              end={t.to === '/'}
+              className={({ isActive }) =>
+                `shell-tab${isActive ? ' on' : ''}`
+              }
+            >
+              <LineIcon name={t.icon} size={21} />
+              <span>{t.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      )}
     </div>
   )
 }

@@ -1977,7 +1977,7 @@ body {
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: var(--bg-flat);
   z-index: 200;
 }
 
@@ -1989,7 +1989,7 @@ body {
   height: 52px;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-flat);
   flex-shrink: 0;
 }
 
@@ -2273,7 +2273,7 @@ body {
   padding: 10px 16px;
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-flat);
   flex-shrink: 0;
 }
 
@@ -2395,7 +2395,7 @@ body {
   gap: 8px;
   padding: 8px 16px 0;
   border-top: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-flat);
   overflow-x: auto;
   flex-shrink: 0;
 }
@@ -2480,10 +2480,11 @@ body {
   max-width: 480px;
   max-height: 85vh;
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--bg-flat);
   border-radius: 20px 20px 0 0;
   padding: 24px 20px;
   padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
 }
 
 /* ─── Profile Panel ─── */
