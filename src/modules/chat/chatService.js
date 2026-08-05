@@ -2,7 +2,7 @@ const CONFIG_KEY = 'lovehouse_chat_config'
 const HISTORY_KEY = 'lovehouse_chat_history'
 const SESSION_KEY = 'lovehouse_chat_session'
 
-const DEFAULT_BRIDGE = 'http://139.180.146.26:3000'
+const DEFAULT_BRIDGE = '/api'
 const DEFAULT_SYSTEM = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
 
 function readJson(key, fallback = {}) {
