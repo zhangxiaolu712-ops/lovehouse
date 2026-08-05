@@ -21,6 +21,21 @@ export function clearChat() {
   localStorage.removeItem(SESSION_KEY)
 }
 
+function buildContent(msg) {
+  if (!msg.attachments?.length) return msg.content
+  const parts = []
+  for (const att of msg.attachments) {
+    if (att.type === 'image') {
+      parts.push({
+        type: 'image',
+        source: { type: 'base64', media_type: att.mediaType, data: att.data },
+      })
+    }
+  }
+  if (msg.content) parts.push({ type: 'text', text: msg.content })
+  return parts
+}
+
 export async function streamMessage(messages, config, cb) {
   const { onThinking, onText, onDone, onError } = cb
 
@@ -36,7 +51,7 @@ export async function streamMessage(messages, config, cb) {
         model: config.model || 'claude-opus-4-6',
         max_tokens: config.maxTokens || 8192,
         stream: true,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        messages: messages.map(m => ({ role: m.role, content: buildContent(m) })),
       }),
     })
 

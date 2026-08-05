@@ -2262,6 +2262,149 @@ body {
   cursor: default;
 }
 
+/* ─── Plus Button + Menu ─── */
+
+.ct-plus-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ct-plus {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ct-plus:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.ct-menu-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 209;
+}
+
+.ct-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 210;
+  box-shadow: 0 4px 20px rgba(0,0,0,.08);
+  min-width: 120px;
+}
+
+.ct-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-cn);
+  font-size: 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ct-menu-item:active {
+  background: var(--bg-secondary);
+}
+
+/* ─── Attachment Preview Bar ─── */
+
+.ct-att-bar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.ct-att-item {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ct-att-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+.ct-att-file {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.ct-att-del {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* ─── Bubble Images / Files ─── */
+
+.ct-bubble-img {
+  max-width: 100%;
+  border-radius: 10px;
+  margin-bottom: 6px;
+  display: block;
+}
+
+.ct-bubble-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
 /* ─── Overlay / Panels ─── */
 
 .ct-overlay {

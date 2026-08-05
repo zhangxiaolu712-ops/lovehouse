@@ -13,6 +13,22 @@ function fmtTime(ts) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1]
+      resolve({ data: base64, mediaType: file.type, name: file.name })
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function fileToPreviewUrl(file) {
+  return URL.createObjectURL(file)
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState(() => getChatHistory())
   const [input, setInput] = useState('')
@@ -21,7 +37,12 @@ export default function ChatPage() {
   const [thinkStream, setThinkStream] = useState('')
   const [expanded, setExpanded] = useState({})
   const [panel, setPanel] = useState(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [attachments, setAttachments] = useState([])
+  const [previews, setPreviews] = useState([])
   const listRef = useRef(null)
+  const imgRef = useRef(null)
+  const fileRef = useRef(null)
 
   const config = getChatConfig()
   const connected = !!(config.apiUrl && config.apiKey)
@@ -33,15 +54,53 @@ export default function ChatPage() {
 
   useEffect(() => { saveChatHistory(messages) }, [messages])
 
+  useEffect(() => {
+    return () => previews.forEach(p => URL.revokeObjectURL(p.url))
+  }, [])
+
+  const addFiles = async (files, type) => {
+    const newAtts = []
+    const newPreviews = []
+    for (const file of files) {
+      const b64 = await readFileAsBase64(file)
+      newAtts.push({ type, ...b64 })
+      if (type === 'image') {
+        newPreviews.push({ url: fileToPreviewUrl(file), name: file.name })
+      } else {
+        newPreviews.push({ url: null, name: file.name })
+      }
+    }
+    setAttachments(prev => [...prev, ...newAtts])
+    setPreviews(prev => [...prev, ...newPreviews])
+    setMenuOpen(false)
+  }
+
+  const removeAttachment = idx => {
+    setAttachments(prev => prev.filter((_, i) => i !== idx))
+    setPreviews(prev => {
+      const p = prev[idx]
+      if (p?.url) URL.revokeObjectURL(p.url)
+      return prev.filter((_, i) => i !== idx)
+    })
+  }
+
   const send = async () => {
     const text = input.trim()
-    if (!text || loading) return
+    if ((!text && !attachments.length) || loading) return
     if (!connected) { setPanel('setup'); return }
 
-    const userMsg = { role: 'user', content: text, time: Date.now() }
+    const userMsg = {
+      role: 'user',
+      content: text,
+      attachments: attachments.length ? attachments : undefined,
+      time: Date.now(),
+    }
     const updated = [...messages, userMsg]
     setMessages(updated)
     setInput('')
+    setAttachments([])
+    previews.forEach(p => { if (p?.url) URL.revokeObjectURL(p.url) })
+    setPreviews([])
     setLoading(true)
     setStream('')
     setThinkStream('')
@@ -114,7 +173,21 @@ export default function ChatPage() {
             <div className={`ct-row ${msg.role}`}>
               {msg.role === 'assistant' && <i className="ct-msg-av">K</i>}
               <div className={`ct-bubble ${msg.role}${msg.error ? ' err' : ''}`}>
-                {msg.content}
+                {msg.attachments?.map((att, j) => (
+                  att.type === 'image' ? (
+                    <img key={j}
+                      className="ct-bubble-img"
+                      src={`data:${att.mediaType};base64,${att.data}`}
+                      alt={att.name || '图片'}
+                    />
+                  ) : (
+                    <div key={j} className="ct-bubble-file">
+                      <LineIcon name="file" size={16} />
+                      <span>{att.name}</span>
+                    </div>
+                  )
+                ))}
+                {msg.content && <span>{msg.content}</span>}
               </div>
               {msg.role === 'user' && <i className="ct-msg-av">T</i>}
             </div>
@@ -140,8 +213,49 @@ export default function ChatPage() {
         )}
       </div>
 
+      {/* Attachment Preview */}
+      {previews.length > 0 && (
+        <div className="ct-att-bar">
+          {previews.map((p, i) => (
+            <div key={i} className="ct-att-item">
+              {p.url ? (
+                <img className="ct-att-thumb" src={p.url} alt={p.name} />
+              ) : (
+                <div className="ct-att-file">
+                  <LineIcon name="file" size={20} />
+                </div>
+              )}
+              <button className="ct-att-del" onClick={() => removeAttachment(i)}>
+                <LineIcon name="close" size={10} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Input */}
       <div className="ct-bar">
+        <div className="ct-plus-wrap">
+          <button className="ct-plus" onClick={() => setMenuOpen(v => !v)} disabled={loading}>
+            <LineIcon name="plus" size={18} />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="ct-menu-bg" onClick={() => setMenuOpen(false)} />
+              <div className="ct-menu">
+                <button className="ct-menu-item" onClick={() => imgRef.current?.click()}>
+                  <LineIcon name="image" size={20} />
+                  <span>图片</span>
+                </button>
+                <button className="ct-menu-item" onClick={() => fileRef.current?.click()}>
+                  <LineIcon name="file" size={20} />
+                  <span>文件</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
         <input
           className="ct-input"
           placeholder="说点什么..."
@@ -150,10 +264,17 @@ export default function ChatPage() {
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
           disabled={loading}
         />
-        <button className="ct-send" onClick={send} disabled={loading || !input.trim()}>
+        <button className="ct-send" onClick={send}
+          disabled={loading || (!input.trim() && !attachments.length)}>
           <LineIcon name="send" size={18} />
         </button>
       </div>
+
+      {/* Hidden file inputs */}
+      <input ref={imgRef} type="file" accept="image/*" multiple hidden
+        onChange={e => { if (e.target.files.length) addFiles([...e.target.files], 'image'); e.target.value = '' }} />
+      <input ref={fileRef} type="file" multiple hidden
+        onChange={e => { if (e.target.files.length) addFiles([...e.target.files], 'file'); e.target.value = '' }} />
 
       {panel === 'profile' && (
         <ProfilePanel
