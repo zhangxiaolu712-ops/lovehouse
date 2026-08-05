@@ -5,7 +5,6 @@ import LineIcon from './LineIcon'
 const TABS = [
   { to: '/chat',     icon: 'chat',     label: '聊天' },
   { to: '/brain',    icon: 'memory',   label: '记忆' },
-  { to: '/',         icon: 'home',     home: true },
   { to: '/moments',  icon: 'interact', label: '朋友圈' },
   { to: '/settings', icon: 'settings', label: '设置' },
 ]
@@ -28,11 +27,11 @@ export default function AppShell() {
             to={t.to}
             end={t.to === '/'}
             className={({ isActive }) =>
-              `shell-tab${isActive ? ' on' : ''}${t.home ? ' shell-home' : ''}`
+              `shell-tab${isActive ? ' on' : ''}`
             }
           >
-            <LineIcon name={t.icon} size={t.home ? 18 : 21} />
-            {t.label && <span>{t.label}</span>}
+            <LineIcon name={t.icon} size={21} />
+            <span>{t.label}</span>
           </NavLink>
         ))}
       </nav>

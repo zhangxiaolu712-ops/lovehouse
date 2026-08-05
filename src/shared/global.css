@@ -1671,31 +1671,36 @@ body {
   max-width: 480px;
   width: 100%;
   margin: 0 auto;
-  padding: 12px 16px 76px;
+  padding: 12px 16px 100px;
 }
 
 @media (min-width: 768px) {
   .shell-main {
-    padding: 24px 24px 76px;
+    padding: 24px 24px 100px;
   }
 }
 
-/* ─── Bottom Nav ─── */
+/* ─── Floating Pill Nav ─── */
 
 .shell-nav {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   justify-content: space-around;
   align-items: center;
-  height: 56px;
+  height: 52px;
+  width: calc(100% - 64px);
+  max-width: 340px;
+  padding: 0 8px;
   padding-bottom: env(safe-area-inset-bottom);
   background: var(--nav-bg, var(--bg-flat, rgba(250, 248, 243, 0.94)));
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border-top: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
   z-index: 100;
 }
 
@@ -1720,28 +1725,23 @@ body {
   color: var(--text-primary);
 }
 
-.shell-home .line-icon {
-  padding: 5px;
-  border: 1.5px solid var(--border);
-  border-radius: 50%;
-  transition: border-color 0.2s;
-}
-
-.shell-home.on .line-icon {
-  border-color: var(--text-primary);
-}
-
 /* ═══════════════════════════════════════════════
-   Phone Desktop (Home)
+   Phone Desktop (Home) — Swipeable Pages
    ═══════════════════════════════════════════════ */
 
 .pd {
-  padding: 16px 4px 0;
+  padding: 20px 0 0;
 }
 
-.pd-head {
+/* ─── Hero Card ─── */
+
+.pd-hero {
   text-align: center;
-  margin-bottom: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px 20px 18px;
+  margin: 0 20px 20px;
 }
 
 .pd-pair {
@@ -1749,12 +1749,12 @@ body {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .pd-av {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   border: 1.5px solid var(--border);
   display: flex;
@@ -1762,78 +1762,76 @@ body {
   justify-content: center;
   font-family: var(--font-en);
   font-style: normal;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 300;
   color: var(--text-secondary);
   background: var(--bg-secondary, var(--bg-card));
 }
 
 .pd-pulse {
-  width: 64px;
-  height: 20px;
+  width: 56px;
+  height: 18px;
   color: var(--text-muted);
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
-.pd-days {
+.pd-hero-days {
   display: block;
   font-family: var(--font-num);
-  font-size: 36px;
+  font-size: 32px;
   font-weight: 300;
   letter-spacing: 3px;
   color: var(--text-primary);
   line-height: 1.2;
 }
 
-.pd-since {
+.pd-hero-since {
   display: block;
   font-family: var(--font-en);
   font-size: 10px;
   letter-spacing: 4px;
   color: var(--text-muted);
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
-.pd-widget {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 18px 22px;
-  margin-bottom: 24px;
+/* ─── Swipeable Pages ─── */
+
+.pd-pages {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-.pd-time {
-  display: block;
-  font-family: var(--font-num);
-  font-size: 48px;
-  font-weight: 300;
-  letter-spacing: 4px;
-  color: var(--text-primary);
-  line-height: 1;
+.pd-pages::-webkit-scrollbar {
+  display: none;
 }
 
-.pd-date {
-  display: block;
-  font-family: var(--font-en);
-  font-size: 13px;
-  color: var(--text-secondary);
-  letter-spacing: 0.5px;
-  margin-top: 8px;
+.pd-page {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  padding: 0 20px;
 }
 
-.pd-grid {
+/* ─── Mixed Grid (Icons + Widgets) ─── */
+
+.pd-mixed {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 20px 8px;
+  grid-auto-rows: 76px;
+  gap: 14px 10px;
+  grid-auto-flow: dense;
 }
 
 .pd-app {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
+  align-self: start;
 }
 
 .pd-icon {
@@ -1858,4 +1856,114 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   letter-spacing: 0.3px;
+}
+
+/* ─── Widget Cards (2×2) ─── */
+
+.pd-wcard {
+  grid-column: span 2;
+  grid-row: span 2;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.pd-wtime {
+  font-family: var(--font-num);
+  font-size: 38px;
+  font-weight: 300;
+  letter-spacing: 3px;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.pd-wsub {
+  font-family: var(--font-en);
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+/* Quote widget */
+.pd-wquote {
+  position: relative;
+  justify-content: flex-start;
+  padding-top: 28px;
+  overflow: hidden;
+}
+
+.pd-wqm {
+  position: absolute;
+  top: 6px;
+  left: 14px;
+  font-family: var(--font-en);
+  font-size: 40px;
+  font-weight: 300;
+  color: var(--text-muted);
+  opacity: 0.3;
+  line-height: 1;
+}
+
+.pd-wqt {
+  font-family: var(--font-cn);
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.6;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pd-wqf {
+  font-family: var(--font-en);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+/* Days widget */
+.pd-wdays {
+  align-items: center;
+  text-align: center;
+}
+
+.pd-wdays-num {
+  font-family: var(--font-num);
+  font-size: 36px;
+  font-weight: 300;
+  letter-spacing: 2px;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+/* ─── Page Indicator Dots ─── */
+
+.pd-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px 0 8px;
+}
+
+.pd-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.25;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.pd-dot.on {
+  opacity: 0.7;
+  transform: scale(1.2);
 }
