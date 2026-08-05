@@ -27,6 +27,11 @@ export const saveChatSession = s => localStorage.setItem(SESSION_KEY, JSON.strin
 export function clearChat() {
   localStorage.removeItem(HISTORY_KEY)
   localStorage.removeItem(SESSION_KEY)
+  localStorage.setItem('lovehouse_chat_new', '1')
+  const config = getChatConfig()
+  if (config.mode === 'bridge' && config.bridgeUrl) {
+    fetch(`${config.bridgeUrl}/reset`, { method: 'POST' }).catch(() => {})
+  }
 }
 
 function buildContent(msg) {
@@ -49,6 +54,9 @@ async function streamBridge(messages, config, cb) {
   const lastUser = [...messages].reverse().find(m => m.role === 'user')
   if (!lastUser) { onError?.('没有消息'); return }
 
+  const isNew = localStorage.getItem('lovehouse_chat_new') === '1'
+  if (isNew) localStorage.removeItem('lovehouse_chat_new')
+
   try {
     const res = await fetch(`${config.bridgeUrl}/chat`, {
       method: 'POST',
@@ -56,6 +64,7 @@ async function streamBridge(messages, config, cb) {
       body: JSON.stringify({
         message: lastUser.content || '',
         system: config.system || DEFAULT_SYSTEM,
+        newSession: isNew || messages.filter(m => m.role === 'user').length <= 1,
       }),
     })
 
