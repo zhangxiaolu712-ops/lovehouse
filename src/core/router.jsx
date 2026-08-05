@@ -19,6 +19,7 @@ import BrainPage from '../modules/brain/BrainPage'
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
   'chat',
+  'moments',
   'interact',
   'all',
   'space/layout',
@@ -52,6 +53,7 @@ export const router = createHashRouter([
       { path: 'brain', element: <BrainPage /> },
       { path: 'space/clawd', element: <ClawdPage /> },
       { path: 'device/toy', element: <ToyPage /> },
+      { path: 'settings', element: <ThemePage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },
