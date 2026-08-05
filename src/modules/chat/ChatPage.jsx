@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
+import Markdown from '../../shared/Markdown'
 import {
   getChatConfig, saveChatConfig,
   getChatHistory, saveChatHistory,
@@ -187,7 +188,11 @@ export default function ChatPage() {
                     </div>
                   )
                 ))}
-                {msg.content && <span>{msg.content}</span>}
+                {msg.content && (
+                  msg.role === 'assistant'
+                    ? <Markdown text={msg.content} />
+                    : <span>{msg.content}</span>
+                )}
               </div>
               {msg.role === 'user' && <i className="ct-msg-av">T</i>}
             </div>
@@ -206,7 +211,7 @@ export default function ChatPage() {
             <div className="ct-row assistant">
               <i className="ct-msg-av">K</i>
               <div className="ct-bubble assistant">
-                {stream || <span className="ct-typing" />}
+                {stream ? <Markdown text={stream} /> : <span className="ct-typing" />}
               </div>
             </div>
           </>
