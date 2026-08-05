@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "tight-heart-93aa",
+  "main": "src/proxy.js",
   "compatibility_date": "2026-07-26",
   "workers_dev": true,
   "preview_urls": true,

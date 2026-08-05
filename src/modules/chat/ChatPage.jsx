@@ -362,7 +362,7 @@ function ProfilePanel({ config, messages, onSetup, onClear, onClose }) {
 
 function SetupPanel({ config, onSave, onClose }) {
   const [mode, setMode] = useState(config.mode || 'bridge')
-  const [bridgeUrl, setBridgeUrl] = useState(config.bridgeUrl || 'http://139.180.146.26:3000')
+  const [bridgeUrl, setBridgeUrl] = useState(config.bridgeUrl || '/api')
   const [url, setUrl] = useState(config.apiUrl || '')
   const [key, setKey] = useState(config.apiKey || '')
   const [model, setModel] = useState(config.model || 'claude-opus-4-6')
@@ -385,7 +385,7 @@ function SetupPanel({ config, onSave, onClose }) {
           <label className="ct-field">
             <span>Bridge 地址</span>
             <input value={bridgeUrl} onChange={e => setBridgeUrl(e.target.value)}
-              placeholder="http://139.180.146.26:3000" />
+              placeholder="/api" />
           </label>
         ) : (
           <>
