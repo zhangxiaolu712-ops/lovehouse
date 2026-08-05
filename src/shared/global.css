@@ -2083,7 +2083,7 @@ body {
 }
 
 .ct-row.user {
-  flex-direction: row-reverse;
+  justify-content: flex-end;
 }
 
 .ct-msg-av {
