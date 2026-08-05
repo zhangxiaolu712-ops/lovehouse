@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
+import Markdown from '../../shared/Markdown'
 import {
   getChatConfig, saveChatConfig,
   getChatHistory, saveChatHistory,
@@ -13,6 +14,22 @@ function fmtTime(ts) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1]
+      resolve({ data: base64, mediaType: file.type, name: file.name })
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+function fileToPreviewUrl(file) {
+  return URL.createObjectURL(file)
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState(() => getChatHistory())
   const [input, setInput] = useState('')
@@ -21,10 +38,17 @@ export default function ChatPage() {
   const [thinkStream, setThinkStream] = useState('')
   const [expanded, setExpanded] = useState({})
   const [panel, setPanel] = useState(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [attachments, setAttachments] = useState([])
+  const [previews, setPreviews] = useState([])
   const listRef = useRef(null)
+  const imgRef = useRef(null)
+  const fileRef = useRef(null)
 
   const config = getChatConfig()
-  const connected = !!(config.apiUrl && config.apiKey)
+  const connected = config.mode === 'bridge'
+    ? !!config.bridgeUrl
+    : !!(config.apiUrl && config.apiKey)
 
   useEffect(() => {
     const el = listRef.current
@@ -33,15 +57,53 @@ export default function ChatPage() {
 
   useEffect(() => { saveChatHistory(messages) }, [messages])
 
+  useEffect(() => {
+    return () => previews.forEach(p => URL.revokeObjectURL(p.url))
+  }, [])
+
+  const addFiles = async (files, type) => {
+    const newAtts = []
+    const newPreviews = []
+    for (const file of files) {
+      const b64 = await readFileAsBase64(file)
+      newAtts.push({ type, ...b64 })
+      if (type === 'image') {
+        newPreviews.push({ url: fileToPreviewUrl(file), name: file.name })
+      } else {
+        newPreviews.push({ url: null, name: file.name })
+      }
+    }
+    setAttachments(prev => [...prev, ...newAtts])
+    setPreviews(prev => [...prev, ...newPreviews])
+    setMenuOpen(false)
+  }
+
+  const removeAttachment = idx => {
+    setAttachments(prev => prev.filter((_, i) => i !== idx))
+    setPreviews(prev => {
+      const p = prev[idx]
+      if (p?.url) URL.revokeObjectURL(p.url)
+      return prev.filter((_, i) => i !== idx)
+    })
+  }
+
   const send = async () => {
     const text = input.trim()
-    if (!text || loading) return
+    if ((!text && !attachments.length) || loading) return
     if (!connected) { setPanel('setup'); return }
 
-    const userMsg = { role: 'user', content: text, time: Date.now() }
+    const userMsg = {
+      role: 'user',
+      content: text,
+      attachments: attachments.length ? attachments : undefined,
+      time: Date.now(),
+    }
     const updated = [...messages, userMsg]
     setMessages(updated)
     setInput('')
+    setAttachments([])
+    previews.forEach(p => { if (p?.url) URL.revokeObjectURL(p.url) })
+    setPreviews([])
     setLoading(true)
     setStream('')
     setThinkStream('')
@@ -114,7 +176,25 @@ export default function ChatPage() {
             <div className={`ct-row ${msg.role}`}>
               {msg.role === 'assistant' && <i className="ct-msg-av">K</i>}
               <div className={`ct-bubble ${msg.role}${msg.error ? ' err' : ''}`}>
-                {msg.content}
+                {msg.attachments?.map((att, j) => (
+                  att.type === 'image' ? (
+                    <img key={j}
+                      className="ct-bubble-img"
+                      src={`data:${att.mediaType};base64,${att.data}`}
+                      alt={att.name || '图片'}
+                    />
+                  ) : (
+                    <div key={j} className="ct-bubble-file">
+                      <LineIcon name="file" size={16} />
+                      <span>{att.name}</span>
+                    </div>
+                  )
+                ))}
+                {msg.content && (
+                  msg.role === 'assistant'
+                    ? <Markdown text={msg.content} />
+                    : <span>{msg.content}</span>
+                )}
               </div>
               {msg.role === 'user' && <i className="ct-msg-av">T</i>}
             </div>
@@ -133,15 +213,56 @@ export default function ChatPage() {
             <div className="ct-row assistant">
               <i className="ct-msg-av">K</i>
               <div className="ct-bubble assistant">
-                {stream || <span className="ct-typing" />}
+                {stream ? <Markdown text={stream} /> : <span className="ct-typing" />}
               </div>
             </div>
           </>
         )}
       </div>
 
+      {/* Attachment Preview */}
+      {previews.length > 0 && (
+        <div className="ct-att-bar">
+          {previews.map((p, i) => (
+            <div key={i} className="ct-att-item">
+              {p.url ? (
+                <img className="ct-att-thumb" src={p.url} alt={p.name} />
+              ) : (
+                <div className="ct-att-file">
+                  <LineIcon name="file" size={20} />
+                </div>
+              )}
+              <button className="ct-att-del" onClick={() => removeAttachment(i)}>
+                <LineIcon name="close" size={10} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Input */}
       <div className="ct-bar">
+        <div className="ct-plus-wrap">
+          <button className="ct-plus" onClick={() => setMenuOpen(v => !v)} disabled={loading}>
+            <LineIcon name="plus" size={18} />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="ct-menu-bg" onClick={() => setMenuOpen(false)} />
+              <div className="ct-menu">
+                <button className="ct-menu-item" onClick={() => imgRef.current?.click()}>
+                  <LineIcon name="image" size={20} />
+                  <span>图片</span>
+                </button>
+                <button className="ct-menu-item" onClick={() => fileRef.current?.click()}>
+                  <LineIcon name="file" size={20} />
+                  <span>文件</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
         <input
           className="ct-input"
           placeholder="说点什么..."
@@ -150,10 +271,17 @@ export default function ChatPage() {
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
           disabled={loading}
         />
-        <button className="ct-send" onClick={send} disabled={loading || !input.trim()}>
+        <button className="ct-send" onClick={send}
+          disabled={loading || (!input.trim() && !attachments.length)}>
           <LineIcon name="send" size={18} />
         </button>
       </div>
+
+      {/* Hidden file inputs */}
+      <input ref={imgRef} type="file" accept="image/*" multiple hidden
+        onChange={e => { if (e.target.files.length) addFiles([...e.target.files], 'image'); e.target.value = '' }} />
+      <input ref={fileRef} type="file" multiple hidden
+        onChange={e => { if (e.target.files.length) addFiles([...e.target.files], 'file'); e.target.value = '' }} />
 
       {panel === 'profile' && (
         <ProfilePanel
@@ -206,7 +334,7 @@ function ProfilePanel({ config, messages, onSetup, onClear, onClose }) {
         </div>
 
         <div className="ct-prof-sec">
-          <div className="ct-prof-row"><span>模型</span><span>{config.model || 'claude-opus-4-6'}</span></div>
+          <div className="ct-prof-row"><span>连接</span><span>{config.mode === 'bridge' ? 'Bridge' : 'API'}</span></div>
           <div className="ct-prof-row"><span>对话轮数</span><span>{turns} 轮</span></div>
           <div className="ct-prof-row"><span>会话起始</span><span>{start}</span></div>
           {session.lastActive && (
@@ -233,35 +361,56 @@ function ProfilePanel({ config, messages, onSetup, onClear, onClose }) {
 }
 
 function SetupPanel({ config, onSave, onClose }) {
+  const [mode, setMode] = useState(config.mode || 'bridge')
+  const [bridgeUrl, setBridgeUrl] = useState(config.bridgeUrl || 'http://139.180.146.26:3000')
   const [url, setUrl] = useState(config.apiUrl || '')
   const [key, setKey] = useState(config.apiKey || '')
   const [model, setModel] = useState(config.model || 'claude-opus-4-6')
 
+  const canSave = mode === 'bridge' ? !!bridgeUrl : !!(url && key)
+
   return (
     <div className="ct-overlay" onClick={onClose}>
       <div className="ct-panel" onClick={e => e.stopPropagation()}>
-        <div className="ct-setup-title">API 设置</div>
+        <div className="ct-setup-title">连接设置</div>
 
-        <label className="ct-field">
-          <span>API 地址</span>
-          <input value={url} onChange={e => setUrl(e.target.value)}
-            placeholder="https://your-vps/v1/messages" />
-        </label>
-        <label className="ct-field">
-          <span>API Key</span>
-          <input type="password" value={key} onChange={e => setKey(e.target.value)}
-            placeholder="sk-ant-..." />
-        </label>
-        <label className="ct-field">
-          <span>模型</span>
-          <input value={model} onChange={e => setModel(e.target.value)}
-            placeholder="claude-opus-4-6" />
-        </label>
+        <div className="ct-mode-tabs">
+          <button className={`ct-mode-tab${mode === 'bridge' ? ' on' : ''}`}
+            onClick={() => setMode('bridge')}>Bridge</button>
+          <button className={`ct-mode-tab${mode === 'api' ? ' on' : ''}`}
+            onClick={() => setMode('api')}>API</button>
+        </div>
+
+        {mode === 'bridge' ? (
+          <label className="ct-field">
+            <span>Bridge 地址</span>
+            <input value={bridgeUrl} onChange={e => setBridgeUrl(e.target.value)}
+              placeholder="http://139.180.146.26:3000" />
+          </label>
+        ) : (
+          <>
+            <label className="ct-field">
+              <span>API 地址</span>
+              <input value={url} onChange={e => setUrl(e.target.value)}
+                placeholder="https://your-vps/v1/messages" />
+            </label>
+            <label className="ct-field">
+              <span>API Key</span>
+              <input type="password" value={key} onChange={e => setKey(e.target.value)}
+                placeholder="sk-ant-..." />
+            </label>
+            <label className="ct-field">
+              <span>模型</span>
+              <input value={model} onChange={e => setModel(e.target.value)}
+                placeholder="claude-opus-4-6" />
+            </label>
+          </>
+        )}
 
         <div className="ct-setup-btns">
           <button className="ct-btn-ghost" onClick={onClose}>取消</button>
-          <button className="ct-btn-fill" disabled={!url || !key}
-            onClick={() => onSave({ apiUrl: url, apiKey: key, model })}>
+          <button className="ct-btn-fill" disabled={!canSave}
+            onClick={() => onSave({ mode, bridgeUrl, apiUrl: url, apiKey: key, model })}>
             保存
           </button>
         </div>

@@ -17,6 +17,7 @@ import ClawdPage from '../modules/space/ClawdPage'
 import ChatPage from '../modules/chat/ChatPage'
 import ProfilePage from '../modules/profile/ProfilePage'
 import BrainPage from '../modules/brain/BrainPage'
+import StatsPage from '../modules/stats/StatsPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
@@ -56,6 +57,7 @@ export const router = createHashRouter([
       { path: 'brain', element: <BrainPage /> },
       { path: 'space/clawd', element: <ClawdPage /> },
       { path: 'device/toy', element: <ToyPage /> },
+      { path: 'stats', element: <StatsPage /> },
       { path: 'settings', element: <ThemePage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],

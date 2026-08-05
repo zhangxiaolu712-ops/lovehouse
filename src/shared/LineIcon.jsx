@@ -43,6 +43,8 @@ const ICON_PATHS = {
   back: 'M15 19l-7-7 7-7',
   send: 'M12 19V5 M5 12l7-7 7 7',
   close: 'M18 6L6 18 M6 6l12 12',
+  image: 'M4 4h16v16H4z M4 16l4-4 3 3 4-4 5 5 M14.5 9.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z',
+  file: 'M14 3H6v18h12V7z M14 3v4h4 M8 13h8 M8 17h5',
 }
 
 export default function LineIcon({ name, size = 20, className = '' }) {
