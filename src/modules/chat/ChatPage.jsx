@@ -46,7 +46,9 @@ export default function ChatPage() {
   const fileRef = useRef(null)
 
   const config = getChatConfig()
-  const connected = !!(config.apiUrl && config.apiKey)
+  const connected = config.mode === 'bridge'
+    ? !!config.bridgeUrl
+    : !!(config.apiUrl && config.apiKey)
 
   useEffect(() => {
     const el = listRef.current
@@ -332,7 +334,7 @@ function ProfilePanel({ config, messages, onSetup, onClear, onClose }) {
         </div>
 
         <div className="ct-prof-sec">
-          <div className="ct-prof-row"><span>模型</span><span>{config.model || 'claude-opus-4-6'}</span></div>
+          <div className="ct-prof-row"><span>连接</span><span>{config.mode === 'bridge' ? 'Bridge' : 'API'}</span></div>
           <div className="ct-prof-row"><span>对话轮数</span><span>{turns} 轮</span></div>
           <div className="ct-prof-row"><span>会话起始</span><span>{start}</span></div>
           {session.lastActive && (
@@ -359,35 +361,56 @@ function ProfilePanel({ config, messages, onSetup, onClear, onClose }) {
 }
 
 function SetupPanel({ config, onSave, onClose }) {
+  const [mode, setMode] = useState(config.mode || 'bridge')
+  const [bridgeUrl, setBridgeUrl] = useState(config.bridgeUrl || 'http://139.180.146.26:3000')
   const [url, setUrl] = useState(config.apiUrl || '')
   const [key, setKey] = useState(config.apiKey || '')
   const [model, setModel] = useState(config.model || 'claude-opus-4-6')
 
+  const canSave = mode === 'bridge' ? !!bridgeUrl : !!(url && key)
+
   return (
     <div className="ct-overlay" onClick={onClose}>
       <div className="ct-panel" onClick={e => e.stopPropagation()}>
-        <div className="ct-setup-title">API 设置</div>
+        <div className="ct-setup-title">连接设置</div>
 
-        <label className="ct-field">
-          <span>API 地址</span>
-          <input value={url} onChange={e => setUrl(e.target.value)}
-            placeholder="https://your-vps/v1/messages" />
-        </label>
-        <label className="ct-field">
-          <span>API Key</span>
-          <input type="password" value={key} onChange={e => setKey(e.target.value)}
-            placeholder="sk-ant-..." />
-        </label>
-        <label className="ct-field">
-          <span>模型</span>
-          <input value={model} onChange={e => setModel(e.target.value)}
-            placeholder="claude-opus-4-6" />
-        </label>
+        <div className="ct-mode-tabs">
+          <button className={`ct-mode-tab${mode === 'bridge' ? ' on' : ''}`}
+            onClick={() => setMode('bridge')}>Bridge</button>
+          <button className={`ct-mode-tab${mode === 'api' ? ' on' : ''}`}
+            onClick={() => setMode('api')}>API</button>
+        </div>
+
+        {mode === 'bridge' ? (
+          <label className="ct-field">
+            <span>Bridge 地址</span>
+            <input value={bridgeUrl} onChange={e => setBridgeUrl(e.target.value)}
+              placeholder="http://139.180.146.26:3000" />
+          </label>
+        ) : (
+          <>
+            <label className="ct-field">
+              <span>API 地址</span>
+              <input value={url} onChange={e => setUrl(e.target.value)}
+                placeholder="https://your-vps/v1/messages" />
+            </label>
+            <label className="ct-field">
+              <span>API Key</span>
+              <input type="password" value={key} onChange={e => setKey(e.target.value)}
+                placeholder="sk-ant-..." />
+            </label>
+            <label className="ct-field">
+              <span>模型</span>
+              <input value={model} onChange={e => setModel(e.target.value)}
+                placeholder="claude-opus-4-6" />
+            </label>
+          </>
+        )}
 
         <div className="ct-setup-btns">
           <button className="ct-btn-ghost" onClick={onClose}>取消</button>
-          <button className="ct-btn-fill" disabled={!url || !key}
-            onClick={() => onSave({ apiUrl: url, apiKey: key, model })}>
+          <button className="ct-btn-fill" disabled={!canSave}
+            onClick={() => onSave({ mode, bridgeUrl, apiUrl: url, apiKey: key, model })}>
             保存
           </button>
         </div>
