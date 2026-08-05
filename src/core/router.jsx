@@ -14,11 +14,11 @@ import SearchPage from '../modules/memory/SearchPage'
 import PlaceholderPage from '../modules/placeholder/PlaceholderPage'
 import ToyPage from '../modules/device/ToyPage'
 import ClawdPage from '../modules/space/ClawdPage'
+import ChatPage from '../modules/chat/ChatPage'
 import BrainPage from '../modules/brain/BrainPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
-  'chat',
   'moments',
   'interact',
   'all',
@@ -40,6 +40,7 @@ export const router = createHashRouter([
     element: <AppShell />,
     children: [
       { index: true, element: <Home /> },
+      { path: 'chat', element: <ChatPage /> },
       { path: 'diary', element: <DiaryPage /> },
       { path: 'memory', element: <MemoryPage /> },
       { path: 'quotes', element: <QuotesPage /> },
