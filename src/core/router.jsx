@@ -15,6 +15,7 @@ import PlaceholderPage from '../modules/placeholder/PlaceholderPage'
 import ToyPage from '../modules/device/ToyPage'
 import ClawdPage from '../modules/space/ClawdPage'
 import ChatPage from '../modules/chat/ChatPage'
+import ProfilePage from '../modules/profile/ProfilePage'
 import BrainPage from '../modules/brain/BrainPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
@@ -41,6 +42,7 @@ export const router = createHashRouter([
     children: [
       { index: true, element: <Home /> },
       { path: 'chat', element: <ChatPage /> },
+      { path: 'profile', element: <ProfilePage /> },
       { path: 'diary', element: <DiaryPage /> },
       { path: 'memory', element: <MemoryPage /> },
       { path: 'quotes', element: <QuotesPage /> },
