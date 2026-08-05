@@ -36,6 +36,13 @@ const ICON_PATHS = {
   stream: 'M4 7h16 M4 12h12 M4 17h8',
   plus: 'M12 5v14 M5 12h14',
   more: 'M5 12h.01 M12 12h.01 M19 12h.01',
+  workbench: 'M4 5h16v14H4z M4 9h16 M8 9v10 M12 12h4 M12 15h4',
+  chat: 'M4 4h16v12H8l-4 4z M8 9h8 M8 12h5',
+  interact: 'M17 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M7 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M17 8c0 4-3 5-6.5 7.5 M7 16c0-4 3-5 6.5-7.5',
+  grid: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+  back: 'M15 19l-7-7 7-7',
+  send: 'M12 19V5 M5 12l7-7 7 7',
+  close: 'M18 6L6 18 M6 6l12 12',
 }
 
 export default function LineIcon({ name, size = 20, className = '' }) {

@@ -19,5 +19,5 @@
   --radius-sm: 12px;
   --nav-bg: rgba(228, 237, 248, 0.92);
   --glass: backdrop-filter: blur(16px);
-  --font-display: 'Georgia', serif;
+  --font-display: 'Cormorant Garamond', 'LXGW WenKai', Georgia, serif;
 }

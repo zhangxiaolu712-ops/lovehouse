@@ -3,8 +3,7 @@ import { useSearchParams } from 'react-router'
 import {
   getBrainEntries, getBrainStats, addBrainEntry, deleteBrainEntry,
   awakenEntry, fadeEntry, getRandomEntry, searchBrain,
-  getDatesWithEntries, toggleSpecial,
-  getRandomFeeling, getFeelingReplies, getFeelingCount, addFeelingReply,
+  getDatesWithEntries, toggleSpecial, getMemoryTides,
 } from './brainService'
 
 const MONTH_POEMS = {
@@ -26,9 +25,9 @@ const JI_SHI_TAGS = ['语录', '总结', '日记', '长文']
 const JI_GANSHOU_TAGS = ['观点', '修订', '认', '不认', '悬置']
 
 const MOODS = [
-  { id: '晴', emoji: '🌤️', color: '#7ec8a0' },
-  { id: '阴', emoji: '🌥️', color: '#f0d68a' },
-  { id: '雨', emoji: '🌧️', color: '#e8a0b4' },
+  { id: '晴', emoji: '🌤️', color: '#b0c8a8' },
+  { id: '阴', emoji: '🌥️', color: '#d0c8a8' },
+  { id: '雨', emoji: '🌧️', color: '#c8a8b0' },
 ]
 
 const TAG_ICONS = {
@@ -37,7 +36,7 @@ const TAG_ICONS = {
 }
 
 const STATUS_LABEL = {
-  active: '', faded: '已淡忘', awakened: '已唤醒', archived: '已归档',
+  active: '', faded: 'faded', awakened: 'awakened', archived: 'archived',
 }
 
 export default function BrainPage() {
@@ -60,6 +59,8 @@ export default function BrainPage() {
   const [calendarDates, setCalendarDates] = useState([])
   const [selectedDate, setSelectedDate] = useState(null)
   const [moodFilter, setMoodFilter] = useState(null)
+  const [tidesData, setTidesData] = useState(null)
+  const [tidesCategory, setTidesCategory] = useState(null)
   const searchRef = useRef(null)
 
   const currentMonth = new Date().getMonth() + 1
@@ -148,6 +149,8 @@ export default function BrainPage() {
       setMoodFilter(null)
     } else if (mode === 'blindbox') {
       openBlindBox()
+    } else if (mode === 'tides') {
+      loadTides()
     }
   }
 
@@ -197,6 +200,22 @@ export default function BrainPage() {
     setFilterMode(null)
   }
 
+  async function loadTides() {
+    setLoading(true)
+    setTidesCategory(null)
+    try {
+      const data = await getMemoryTides()
+      setTidesData(data)
+      setEntries([])
+    } catch {}
+    setLoading(false)
+  }
+
+  function selectTidesCategory(cat) {
+    setTidesCategory(cat.id)
+    setEntries(cat.items)
+  }
+
   async function handleDelete(id) {
     if (!confirm('确定要删除这条记忆吗？')) return
     try {
@@ -234,6 +253,8 @@ export default function BrainPage() {
     setSearching(false)
     setSearchQuery('')
     setSelectedDate(null)
+    setTidesData(null)
+    setTidesCategory(null)
   }
 
   const tags = tab === '记事' ? JI_SHI_TAGS : JI_GANSHOU_TAGS
@@ -246,14 +267,12 @@ export default function BrainPage() {
         <p style={styles.poem}>{poem}</p>
         <div style={styles.statsBlock}>
           <div style={styles.statRow}>
-            <span style={styles.statLabel}>记录</span>
             <span style={styles.statNumber}>{stats.days}</span>
-            <span style={styles.statUnit}>天</span>
+            <span style={styles.statUnit}>days</span>
           </div>
           <div style={styles.statRow}>
-            <span style={styles.statLabel}>记忆</span>
             <span style={styles.statNumber}>{stats.total}</span>
-            <span style={styles.statUnit}>条</span>
+            <span style={styles.statUnit}>entries</span>
           </div>
         </div>
       </div>
@@ -266,13 +285,13 @@ export default function BrainPage() {
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleSearch()}
-          placeholder="查找记忆"
+          placeholder="Search memories"
           style={styles.searchInput}
         />
         {searchQuery && (
           <button onClick={clearSearch} style={styles.searchClear}>×</button>
         )}
-        <button onClick={() => handleSearch()} style={styles.searchBtn}>搜</button>
+        <button onClick={() => handleSearch()} style={styles.searchBtn}>Go</button>
       </div>
 
       {/* Tab: 记事 | 记感受 */}
@@ -282,63 +301,57 @@ export default function BrainPage() {
             style={{ ...styles.tabBtn, ...(tab === '记事' ? styles.tabActive : {}) }}
             onClick={() => switchTab('记事')}
           >
-            记事
+            Notes
           </button>
           <span style={styles.tabDivider}>|</span>
           <button
             style={{ ...styles.tabBtn, ...(tab === '记感受' ? styles.tabActive : {}) }}
             onClick={() => switchTab('记感受')}
           >
-            记感受
+            Feelings
           </button>
         </div>
       )}
 
-      {/* 记感受 tab → 朋友圈+盲盒模式 */}
-      {tab === '记感受' && !searching && !filterMode && (
-        <FeelingTab onStatsChange={loadStats} />
+      {/* Tag chips (both tabs, when not searching/filtering) */}
+      {!searching && !filterMode && (
+        <div style={styles.tagRow}>
+          {tags.map(t => (
+            <button
+              key={t}
+              onClick={() => setActiveTag(activeTag === t ? null : t)}
+              style={{
+                ...styles.tagChip,
+                background: activeTag === t
+                  ? (isTagPink ? '#e8d4d8' : '#ddd8c0')
+                  : (isTagPink ? '#f0e8ea' : '#eeeadc'),
+                color: 'var(--text-secondary)',
+                fontWeight: activeTag === t ? 600 : 400,
+              }}
+            >
+              #{t}
+            </button>
+          ))}
+        </div>
       )}
 
-      {/* 记事 tab → 标签筛选 + 列表模式 */}
-      {(tab === '记事' || searching || filterMode) && (
-        <>
-          {/* Tag chips (only for 记事 when not searching/filtering) */}
-          {tab === '记事' && !searching && !filterMode && (
-            <div style={styles.tagRow}>
-              {JI_SHI_TAGS.map(t => (
-                <button
-                  key={t}
-                  onClick={() => setActiveTag(activeTag === t ? null : t)}
-                  style={{
-                    ...styles.tagChip,
-                    background: activeTag === t ? '#ffb6c8' : '#ffe4ec',
-                    color: '#5a4a3a',
-                    fontWeight: activeTag === t ? 600 : 400,
-                  }}
-                >
-                  #{t}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Filter mode labels */}
+      {/* Filter mode labels */}
           {searching && (
             <div style={styles.filterLabel}>
-              搜索「{searchQuery}」的结果 · {entries.length} 条
+              "{searchQuery}" · {entries.length} results
               <button onClick={clearSearch} style={styles.filterClose}>×</button>
             </div>
           )}
           {filterMode === 'special' && (
             <div style={styles.filterLabel}>
-              被特别标记的日子
+              Special Days
               <button onClick={() => handleFilterMode('special')} style={styles.filterClose}>×</button>
             </div>
           )}
           {filterMode === 'calendar' && (
             <div>
               <div style={styles.filterLabel}>
-                选一天，看看那天发生了什么
+                Calendar
                 <button onClick={() => handleFilterMode('calendar')} style={styles.filterClose}>×</button>
               </div>
               <MiniCalendar
@@ -354,7 +367,7 @@ export default function BrainPage() {
           {filterMode === 'mood' && (
             <div>
               <div style={styles.filterLabel}>
-                按心情筛选
+                Mood
                 <button onClick={() => handleFilterMode('mood')} style={styles.filterClose}>×</button>
               </div>
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', margin: '12px 0 16px' }}>
@@ -377,9 +390,58 @@ export default function BrainPage() {
             </div>
           )}
 
+          {filterMode === 'tides' && tidesData && (
+            <div>
+              <button
+                onClick={() => handleFilterMode('tides')}
+                style={styles.tidesBackBtn}
+              >
+                ← Back
+              </button>
+              <div style={styles.filterLabel}>
+                Memory Tides
+              </div>
+              <TidesPanel
+                data={tidesData}
+                selectedCategory={tidesCategory}
+                onSelectCategory={selectTidesCategory}
+                entries={entries}
+                onDelete={handleDelete}
+                onAwaken={handleAwaken}
+                onFade={handleFade}
+                onToggleSpecial={handleToggleSpecial}
+              />
+            </div>
+          )}
+
+          {/* Four function buttons (above entries) */}
+          {!searching && filterMode !== 'tides' && (
+            <div style={styles.funcGrid}>
+              {[
+                { id: 'special', label: 'Special', desc: 'marked days', color: '#f0ece4', activeColor: '#e6e0d4', dot: '#c4b898' },
+                { id: 'calendar', label: 'Calendar', desc: 'by date', color: '#e8eaee', activeColor: '#dcdee4', dot: '#a0a8b8' },
+                { id: 'mood', label: 'Mood', desc: 'by feeling', color: '#eee8ea', activeColor: '#e4dce0', dot: '#b8a0a8' },
+                { id: 'tides', label: 'Tides', desc: 'overview', color: '#e8eee8', activeColor: '#dce4dc', dot: '#98b898' },
+              ].map(btn => (
+                <button
+                  key={btn.id}
+                  onClick={() => handleFilterMode(btn.id)}
+                  style={{
+                    ...styles.funcCard,
+                    background: filterMode === btn.id ? btn.activeColor : btn.color,
+                  }}
+                >
+                  <span style={{ ...styles.funcDot, background: btn.dot }} />
+                  <span style={styles.funcLabel}>{btn.label}</span>
+                  <span style={styles.funcDesc}>{btn.desc}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Add button */}
           <button onClick={() => setShowAdd(!showAdd)} style={styles.addToggle}>
-            {showAdd ? '收起' : '+ 记一笔'}
+            {showAdd ? 'Close' : '+ New entry'}
           </button>
 
           {/* Add form */}
@@ -387,58 +449,32 @@ export default function BrainPage() {
 
           {/* Entry list */}
           {loading ? (
-            <div className="empty">加载中...</div>
+            <div className="empty">Loading...</div>
           ) : entries.length === 0 ? (
             <div className="empty">
-              {filterMode === 'special' ? '还没有特别标记的日子~' :
-               filterMode === 'mood' ? '这种心情还没有记录~' :
-               selectedDate ? `${selectedDate} 这天还没有记录~` :
-               searching ? '没有找到相关记忆~' :
-               '这一格还空着~'}
+              {filterMode === 'tides' && !tidesCategory ? 'Pick a category to explore' :
+               filterMode === 'tides' ? 'Nothing here yet' :
+               filterMode === 'special' ? 'No special days yet' :
+               filterMode === 'mood' ? 'No entries for this mood' :
+               selectedDate ? `No entries on ${selectedDate}` :
+               searching ? 'No results found' :
+               'Nothing here yet'}
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-              {entries.map(entry => (
-                <EntryCard
-                  key={entry.id}
-                  entry={entry}
-                  onDelete={handleDelete}
-                  onAwaken={handleAwaken}
-                  onFade={handleFade}
-                  onToggleSpecial={handleToggleSpecial}
-                />
-              ))}
-            </div>
+            <DateGroupedEntries
+              entries={entries}
+              onDelete={handleDelete}
+              onAwaken={handleAwaken}
+              onFade={handleFade}
+              onToggleSpecial={handleToggleSpecial}
+            />
           )}
-        </>
-      )}
-
-      {/* Bottom four buttons */}
-      <div style={styles.bottomBar}>
-        {[
-          { id: 'special', label: '特殊日', color: '#e8dbb0', activeColor: '#d4c78c' },
-          { id: 'calendar', label: '月历', color: '#b8c8e8', activeColor: '#96b0d8' },
-          { id: 'mood', label: '心情', color: '#e8b8c8', activeColor: '#d89aaf' },
-          { id: 'blindbox', label: '盲盒', color: '#b8d8b8', activeColor: '#96c896' },
-        ].map(btn => (
-          <button
-            key={btn.id}
-            onClick={() => handleFilterMode(btn.id)}
-            style={{
-              ...styles.bottomBtn,
-              background: filterMode === btn.id ? btn.activeColor : btn.color,
-            }}
-          >
-            {btn.label}
-          </button>
-        ))}
-      </div>
 
       {/* Blind box overlay */}
       {blindBoxOpen && (
         <div style={styles.blindBoxOverlay} onClick={closeBlindBox}>
           <div style={styles.blindBoxCard} onClick={e => e.stopPropagation()}>
-            <div style={styles.blindBoxTitle}>🎁 记忆盲盒</div>
+            <div style={styles.blindBoxTitle}>Memory Box</div>
             {blindBox ? (
               <>
                 <div style={styles.blindBoxTag}>
@@ -455,87 +491,16 @@ export default function BrainPage() {
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
-                  <button onClick={openBlindBox} style={styles.blindBoxBtn}>再抽一个</button>
-                  <button onClick={closeBlindBox} style={{ ...styles.blindBoxBtn, background: '#e8e0d4' }}>好了</button>
+                  <button onClick={openBlindBox} style={styles.blindBoxBtn}>Another</button>
+                  <button onClick={closeBlindBox} style={{ ...styles.blindBoxBtn, background: '#e8e0d4' }}>Done</button>
                 </div>
               </>
             ) : (
-              <div style={{ padding: 20, textAlign: 'center', color: '#999' }}>还没有记忆可以抽~</div>
+              <div style={{ padding: 20, textAlign: 'center', color: '#999' }}>No memories yet</div>
             )}
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-function EntryCard({ entry, onDelete, onAwaken, onFade, onToggleSpecial }) {
-  const [expanded, setExpanded] = useState(false)
-  const isFaded = entry.status === 'faded'
-  const isLong = entry.content.length > 120
-
-  return (
-    <div
-      className="card"
-      style={{
-        opacity: isFaded ? 0.5 : 1,
-        position: 'relative',
-        transition: 'opacity 0.3s',
-      }}
-    >
-      {entry.is_special && <span style={styles.specialMark}>⭐</span>}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {entry.title && (
-            <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 15 }}>{entry.title}</div>
-          )}
-          <p style={{
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            lineHeight: 1.75,
-            fontSize: 14,
-            ...(isLong && !expanded ? { maxHeight: 100, overflow: 'hidden', maskImage: 'linear-gradient(#000 60%, transparent)' } : {}),
-          }}>
-            {entry.content}
-          </p>
-          {isLong && (
-            <button onClick={() => setExpanded(!expanded)} style={styles.expandBtn}>
-              {expanded ? '收起' : '展开全文'}
-            </button>
-          )}
-          {entry.feeling && (
-            <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-              {entry.feeling}
-            </div>
-          )}
-          <div style={styles.entryMeta}>
-            <span style={{
-              ...styles.miniTag,
-              background: entry.kind === '记事' ? '#ffe4ec' : '#fff3c4',
-              color: '#5a4a3a',
-            }}>
-              #{entry.tag}
-            </span>
-            {entry.speaker && <span style={styles.metaText}>—{entry.speaker}</span>}
-            {entry.mood && <span style={{ fontSize: 14 }}>{MOODS.find(m => m.id === entry.mood)?.emoji || entry.mood}</span>}
-            {entry.status && entry.status !== 'active' && (
-              <span style={styles.statusBadge}>{STATUS_LABEL[entry.status]}</span>
-            )}
-            <span style={styles.metaDate}>{entry.memory_date}</span>
-          </div>
-        </div>
-        <div style={styles.entryActions}>
-          <button onClick={() => onToggleSpecial(entry.id, entry.is_special)} style={styles.actionBtn} title="标记特殊日">
-            {entry.is_special ? '⭐' : '☆'}
-          </button>
-          {isFaded ? (
-            <button onClick={() => onAwaken(entry.id)} style={styles.actionBtn} title="唤醒">🔔</button>
-          ) : (
-            <button onClick={() => onFade(entry.id)} style={styles.actionBtn} title="淡忘">💤</button>
-          )}
-          <button onClick={() => onDelete(entry.id)} className="delete-btn" style={{ fontSize: 14, padding: '2px 6px' }}>×</button>
-        </div>
-      </div>
     </div>
   )
 }
@@ -586,7 +551,7 @@ function AddEntryForm({ tab, onSaved }) {
           className="input"
           value={title}
           onChange={e => setTitle(e.target.value)}
-          placeholder="标题（可选）"
+          placeholder="Title (optional)"
           style={{ marginBottom: 8 }}
         />
       )}
@@ -594,7 +559,7 @@ function AddEntryForm({ tab, onSaved }) {
         className="textarea"
         value={content}
         onChange={e => setContent(e.target.value)}
-        placeholder={tab === '记感受' ? '写下你的感受...' : '记一笔~'}
+        placeholder={tab === '记感受' ? 'How do you feel...' : 'Write something...'}
         style={{ minHeight: 70 }}
       />
       <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -606,7 +571,7 @@ function AddEntryForm({ tab, onSaved }) {
             className="input"
             value={speaker}
             onChange={e => setSpeaker(e.target.value)}
-            placeholder="谁说的"
+            placeholder="Who said"
             style={{ width: 80, padding: '6px 10px', fontSize: 13 }}
           />
         )}
@@ -615,7 +580,7 @@ function AddEntryForm({ tab, onSaved }) {
             className="input"
             value={feeling}
             onChange={e => setFeeling(e.target.value)}
-            placeholder="感受..."
+            placeholder="Feeling..."
             style={{ flex: 1, minWidth: 100, padding: '6px 10px', fontSize: 13 }}
           />
         )}
@@ -638,241 +603,267 @@ function AddEntryForm({ tab, onSaved }) {
           ))}
         </div>
         <button className="btn" type="submit" disabled={saving} style={{ marginLeft: 'auto' }}>
-          {saving ? '...' : '保存'}
+          {saving ? '...' : 'Save'}
         </button>
       </div>
     </form>
   )
 }
 
-function FeelingTab({ onStatsChange }) {
-  const [drawn, setDrawn] = useState(null)
-  const [replies, setReplies] = useState({ earliest: null, latest: null, count: 0 })
-  const [loading, setLoading] = useState(false)
-  const [count, setCount] = useState(0)
-  const [replyTag, setReplyTag] = useState(null)
-  const [replyContent, setReplyContent] = useState('')
-  const [replyFeeling, setReplyFeeling] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [showNewForm, setShowNewForm] = useState(false)
-  const [newContent, setNewContent] = useState('')
-  const [newFeeling, setNewFeeling] = useState('')
-  const [newTag, setNewTag] = useState('观点')
-
-  useEffect(() => {
-    getFeelingCount().then(setCount)
-  }, [])
-
-  async function drawOne() {
-    setLoading(true)
-    setReplyTag(null)
-    setReplyContent('')
-    setReplyFeeling('')
-    try {
-      const feeling = await getRandomFeeling()
-      setDrawn(feeling)
-      if (feeling) {
-        const r = await getFeelingReplies(feeling.id)
-        setReplies(r)
-      }
-    } catch {}
-    setLoading(false)
+function groupByDate(entries) {
+  const groups = {}
+  for (const entry of entries) {
+    const date = entry.memory_date || 'unknown'
+    if (!groups[date]) groups[date] = []
+    groups[date].push(entry)
   }
+  return Object.entries(groups)
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([date, items]) => ({
+      date,
+      items: items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
+    }))
+}
 
-  async function submitReply() {
-    if (!replyTag || !drawn) return
-    setSubmitting(true)
-    try {
-      await addFeelingReply(drawn.id, {
-        content: replyContent.trim() || `${replyTag}。`,
-        tag: replyTag,
-        feeling: replyFeeling.trim() || null,
-      })
-      const r = await getFeelingReplies(drawn.id)
-      setReplies(r)
-      setReplyTag(null)
-      setReplyContent('')
-      setReplyFeeling('')
-      getFeelingCount().then(setCount)
-      onStatsChange()
-    } catch {}
-    setSubmitting(false)
-  }
+function formatDateDisplay(dateStr) {
+  if (!dateStr || dateStr === 'unknown') return { month: '', day: '?' }
+  const parts = dateStr.split('-')
+  const m = parseInt(parts[1], 10)
+  const d = parseInt(parts[2], 10)
+  return { month: `${m}月`, day: `${m}/${d}` }
+}
 
-  async function handleNewPost(e) {
-    e.preventDefault()
-    if (!newContent.trim()) return
-    setSubmitting(true)
-    try {
-      await addBrainEntry({
-        content: newContent.trim(),
-        kind: '记感受',
-        tag: newTag,
-        feeling: newFeeling.trim() || undefined,
-      })
-      setNewContent('')
-      setNewFeeling('')
-      setShowNewForm(false)
-      getFeelingCount().then(setCount)
-      onStatsChange()
-    } catch {}
-    setSubmitting(false)
-  }
+function DateGroupedEntries({ entries, onDelete, onAwaken, onFade, onToggleSpecial }) {
+  const groups = groupByDate(entries)
 
   return (
-    <div>
-      {/* Intro */}
-      <div style={{ textAlign: 'center', padding: '4px 0 12px', color: 'var(--text-secondary)', fontSize: 13 }}>
-        小克的镜子 · {count} 条感受
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 12 }}>
+      {groups.map(group => {
+        const { day } = formatDateDisplay(group.date)
+        const weekDay = (() => {
+          try {
+            const d = new Date(group.date)
+            return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]
+          } catch { return '' }
+        })()
+
+        return (
+          <div key={group.date} style={styles.dateGroup}>
+            <div style={styles.dateLeft}>
+              <div style={styles.dateDay}>{day}</div>
+              <div style={styles.dateWeek}>{weekDay}</div>
+            </div>
+            <div style={styles.dateRight}>
+              {group.items.map(entry => (
+                <CompactEntryStrip
+                  key={entry.id}
+                  entry={entry}
+                  onDelete={onDelete}
+                  onAwaken={onAwaken}
+                  onFade={onFade}
+                  onToggleSpecial={onToggleSpecial}
+                />
+              ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial }) {
+  const [expanded, setExpanded] = useState(false)
+  const isFaded = entry.status === 'faded'
+  const time = (() => {
+    try {
+      const d = new Date(entry.created_at)
+      return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+    } catch { return '' }
+  })()
+
+  const tagColor = entry.kind === '记事'
+    ? { bg: '#f0e8ea', text: '#a89098' }
+    : { bg: '#eeeadc', text: '#a8a080' }
+
+  const moodEmoji = entry.mood ? (MOODS.find(m => m.id === entry.mood)?.emoji || '') : ''
+
+  const preview = entry.content.length > 60 ? entry.content.slice(0, 60) + '…' : entry.content
+
+  return (
+    <div
+      style={{
+        ...styles.stripWrap,
+        opacity: isFaded ? 0.5 : 1,
+        borderLeftColor: tagColor.text,
+      }}
+      onClick={() => setExpanded(!expanded)}
+    >
+      <div style={styles.stripHeader}>
+        <span style={{ ...styles.stripTag, background: tagColor.bg, color: tagColor.text }}>
+          {TAG_ICONS[entry.tag] || ''} {entry.tag}
+        </span>
+        {entry.is_special && <span style={{ fontSize: 12 }}>⭐</span>}
+        {moodEmoji && <span style={{ fontSize: 13 }}>{moodEmoji}</span>}
+        {entry.status && entry.status !== 'active' && (
+          <span style={styles.statusBadge}>{STATUS_LABEL[entry.status]}</span>
+        )}
+        <span style={styles.stripTime}>{time}</span>
       </div>
 
-      {/* New feeling button */}
-      <button onClick={() => setShowNewForm(!showNewForm)} style={styles.addToggle}>
-        {showNewForm ? '收起' : '+ 写一条新观点'}
-      </button>
-
-      {showNewForm && (
-        <form onSubmit={handleNewPost} className="card" style={{ marginBottom: 12 }}>
-          <textarea
-            className="textarea"
-            value={newContent}
-            onChange={e => setNewContent(e.target.value)}
-            placeholder="写下你的观点、反思、或者对一件事的立场..."
-            style={{ minHeight: 70 }}
-          />
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select className="input" value={newTag} onChange={e => setNewTag(e.target.value)} style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }}>
-              {JI_GANSHOU_TAGS.map(t => <option key={t} value={t}>#{t}</option>)}
-            </select>
-            <input
-              className="input"
-              value={newFeeling}
-              onChange={e => setNewFeeling(e.target.value)}
-              placeholder="此刻的感受..."
-              style={{ flex: 1, minWidth: 100, padding: '6px 10px', fontSize: 13 }}
-            />
-            <button className="btn" type="submit" disabled={submitting}>{submitting ? '...' : '发出'}</button>
-          </div>
-        </form>
-      )}
-
-      {/* Draw button */}
-      {!drawn && (
-        <div className="card" style={{ textAlign: 'center', padding: '32px 20px', marginTop: 8 }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>🪞</div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 16, lineHeight: 1.8 }}>
-            翻一翻以前的想法<br />
-            <span style={{ fontSize: 12 }}>看看过去的自己说了什么，现在还认不认</span>
+      {!expanded ? (
+        <div style={styles.stripPreview}>
+          {entry.title && <strong>{entry.title} · </strong>}
+          {preview}
+        </div>
+      ) : (
+        <div style={styles.stripExpanded}>
+          {entry.title && <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 14 }}>{entry.title}</div>}
+          <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.75, fontSize: 13, margin: 0 }}>
+            {entry.content}
           </p>
-          <button
-            onClick={drawOne}
-            disabled={loading || count === 0}
-            style={{
-              ...styles.feelingDrawBtn,
-              opacity: count === 0 ? 0.5 : 1,
-            }}
-          >
-            {loading ? '翻开中...' : count === 0 ? '还没有感受' : '翻一条'}
-          </button>
+          {entry.feeling && (
+            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+              {entry.feeling}
+            </div>
+          )}
+          {entry.speaker && (
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-muted)' }}>—{entry.speaker}</div>
+          )}
+          <div style={styles.stripActions} onClick={e => e.stopPropagation()}>
+            <button onClick={() => onToggleSpecial(entry.id, entry.is_special)} style={styles.actionBtn} title="标记特殊日">
+              {entry.is_special ? '⭐' : '☆'}
+            </button>
+            {isFaded ? (
+              <button onClick={() => onAwaken(entry.id)} style={styles.actionBtn} title="唤醒">🔔</button>
+            ) : (
+              <button onClick={() => onFade(entry.id)} style={styles.actionBtn} title="淡忘">💤</button>
+            )}
+            <button onClick={() => onDelete(entry.id)} className="delete-btn" style={{ fontSize: 12, padding: '2px 6px' }}>×</button>
+          </div>
         </div>
       )}
+    </div>
+  )
+}
 
-      {/* Drawn feeling card */}
-      {drawn && (
-        <div className="card" style={{ marginTop: 8, padding: '20px 18px' }}>
-          {/* Original post */}
-          <div style={{ borderLeft: '3px solid #f0d068', paddingLeft: 14, marginBottom: 12 }}>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-              <span style={{ ...styles.miniTag, background: '#fff3c4', color: '#5a4a3a' }}>#{drawn.tag}</span>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{drawn.memory_date}</span>
+function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelete, onAwaken, onFade, onToggleSpecial }) {
+  const maxCount = Math.max(...data.monthCounts.map(m => m.count), 1)
+  const maxCatCount = Math.max(...data.categories.map(c => c.items.length), 1)
+  const currentIdx = data.monthCounts.length - 1
+
+  return (
+    <div className="card" style={{ padding: '20px 16px', marginBottom: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 16, letterSpacing: 1 }}>
+        Monthly
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', height: 100, marginBottom: 20, padding: '0 4px' }}>
+        {data.monthCounts.map((m, i) => {
+          const barH = maxCount > 0 ? Math.max((m.count / maxCount) * 72, m.count > 0 ? 8 : 0) : 0
+          const isCurrent = i === currentIdx
+          return (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, gap: 4 }}>
+              <span style={{ fontSize: 11, color: isCurrent ? '#7a9a7a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
+                {m.count > 0 ? m.count : ''}
+              </span>
+              <div style={{
+                width: 24,
+                height: barH,
+                background: isCurrent ? '#b0c8a8' : '#dce4d8',
+                borderRadius: 4,
+                transition: 'height 0.4s ease',
+              }} />
+              <span style={{ fontSize: 11, color: isCurrent ? '#7a9a7a' : 'var(--text-muted)', fontWeight: isCurrent ? 600 : 400 }}>
+                {m.label}
+              </span>
             </div>
-            <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8, fontSize: 14 }}>{drawn.content}</p>
-            {drawn.feeling && (
-              <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                {drawn.feeling}
+          )
+        })}
+      </div>
+
+      <div style={{ height: 1, background: 'var(--border)', margin: '0 0 16px' }} />
+
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, letterSpacing: 1 }}>
+        Composition
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {data.categories.map(cat => {
+          const isSelected = selectedCategory === cat.id
+          return (
+            <div key={cat.id}>
+            <button
+              onClick={() => onSelectCategory(cat)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                background: isSelected ? 'var(--bg-secondary)' : 'transparent',
+                border: 'none',
+                padding: '10px 8px',
+                borderRadius: 10,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                width: '100%',
+                textAlign: 'left',
+                transition: 'background 0.2s',
+              }}
+            >
+              <span style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                background: cat.color,
+                flexShrink: 0,
+              }} />
+              <span style={{ fontSize: 13, color: 'var(--text-primary)', width: 72, flexShrink: 0 }}>
+                {cat.label}
+              </span>
+              <div style={{
+                flex: 1,
+                height: 6,
+                background: 'var(--bg-secondary)',
+                borderRadius: 3,
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${maxCatCount > 0 ? Math.max((cat.items.length / maxCatCount) * 100, cat.items.length > 0 ? 4 : 0) : 0}%`,
+                  background: cat.color,
+                  borderRadius: 3,
+                  transition: 'width 0.4s ease',
+                }} />
+              </div>
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0, minWidth: 36, textAlign: 'right' }}>
+                {cat.items.length}
+              </span>
+              <span style={{ color: 'var(--text-muted)', fontSize: 14, transform: isSelected ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }}>›</span>
+            </button>
+            {isSelected && entries && entries.length > 0 && (
+              <div style={{ padding: '4px 0 8px 20px' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                  {cat.label} · {entries.length}
+                </div>
+                {entries.map(entry => (
+                  <CompactEntryStrip
+                    key={entry.id}
+                    entry={entry}
+                    onDelete={onDelete}
+                    onAwaken={onAwaken}
+                    onFade={onFade}
+                    onToggleSpecial={onToggleSpecial}
+                  />
+                ))}
+              </div>
+            )}
+            {isSelected && (!entries || entries.length === 0) && (
+              <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text-muted)' }}>
+                Nothing here yet
               </div>
             )}
           </div>
-
-          {/* Earliest reply */}
-          {replies.earliest && (
-            <div style={styles.replyBlock}>
-              <div style={styles.replyLabel}>最早的回应</div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ ...styles.miniTag, background: '#e8e0d4', color: '#5a4a3a' }}>#{replies.earliest.tag}</span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{replies.earliest.memory_date}</span>
-              </div>
-              <p style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{replies.earliest.content}</p>
-              {replies.earliest.feeling && (
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: 4 }}>{replies.earliest.feeling}</div>
-              )}
-            </div>
-          )}
-
-          {/* Latest reply (if different from earliest) */}
-          {replies.latest && (
-            <div style={styles.replyBlock}>
-              <div style={styles.replyLabel}>最新的回应{replies.count > 2 ? ` (共${replies.count}条)` : ''}</div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ ...styles.miniTag, background: '#e8e0d4', color: '#5a4a3a' }}>#{replies.latest.tag}</span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{replies.latest.memory_date}</span>
-              </div>
-              <p style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{replies.latest.content}</p>
-              {replies.latest.feeling && (
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic', marginTop: 4 }}>{replies.latest.feeling}</div>
-              )}
-            </div>
-          )}
-
-          {/* Respond buttons */}
-          <div style={{ display: 'flex', gap: 8, margin: '14px 0 8px', justifyContent: 'center' }}>
-            {['认', '不认', '修订'].map(t => (
-              <button
-                key={t}
-                onClick={() => setReplyTag(replyTag === t ? null : t)}
-                style={{
-                  ...styles.stanceBtn,
-                  background: replyTag === t ? '#f0d068' : '#fff3c4',
-                  fontWeight: replyTag === t ? 600 : 400,
-                }}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-
-          {/* Reply input */}
-          {replyTag && (
-            <div style={{ marginTop: 8 }}>
-              <textarea
-                className="textarea"
-                value={replyContent}
-                onChange={e => setReplyContent(e.target.value)}
-                placeholder={replyTag === '修订' ? '怎么修正这个想法...' : `为什么${replyTag}...（可以留空）`}
-                style={{ minHeight: 56, fontSize: 13 }}
-              />
-              <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
-                <input
-                  className="input"
-                  value={replyFeeling}
-                  onChange={e => setReplyFeeling(e.target.value)}
-                  placeholder="此刻感受..."
-                  style={{ flex: 1, padding: '6px 10px', fontSize: 13 }}
-                />
-                <button className="btn" onClick={submitReply} disabled={submitting}>
-                  {submitting ? '...' : '回应'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Navigation */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' }}>
-            <button onClick={drawOne} style={styles.feelingNavBtn}>再翻一条</button>
-            <button onClick={() => { setDrawn(null); setReplies({ earliest: null, latest: null, count: 0 }) }} style={{ ...styles.feelingNavBtn, background: '#e8e0d4' }}>好了</button>
-          </div>
-        </div>
-      )}
+        )
+        })}
+      </div>
     </div>
   )
 }
@@ -904,8 +895,8 @@ function MiniCalendar({ year, month, activeDates, selectedDate, onSelect, onMont
         <button onClick={next} style={styles.calNav}>›</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, textAlign: 'center', fontSize: 12 }}>
-        {['日', '一', '二', '三', '四', '五', '六'].map(d => (
-          <div key={d} style={{ padding: 4, color: 'var(--text-muted)', fontWeight: 500 }}>{d}</div>
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+          <div key={`${d}${i}`} style={{ padding: 4, color: 'var(--text-muted)', fontWeight: 500 }}>{d}</div>
         ))}
         {cells.map((day, i) => {
           if (!day) return <div key={`e${i}`} />
@@ -970,9 +961,9 @@ const styles = {
     color: 'var(--text-secondary)',
   },
   statNumber: {
-    fontFamily: 'var(--font-display)',
+    fontFamily: 'var(--font-num, "DM Mono")',
     fontSize: 32,
-    fontWeight: 500,
+    fontWeight: 400,
     color: 'var(--text-primary)',
     lineHeight: 1.2,
   },
@@ -1009,8 +1000,8 @@ const styles = {
   },
   searchBtn: {
     border: 'none',
-    background: '#c8c464',
-    color: 'white',
+    background: '#c8c4b0',
+    color: '#fff',
     padding: '0 18px',
     fontSize: 13,
     fontWeight: 600,
@@ -1098,24 +1089,129 @@ const styles = {
     fontFamily: 'inherit',
     transition: 'all 0.2s',
   },
-  bottomBar: {
+  funcGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, 1fr)',
     gap: 8,
-    marginTop: 24,
-    padding: '0 4px',
+    margin: '14px 0',
+    padding: '0 2px',
   },
-  bottomBtn: {
-    padding: '14px 0',
+  funcCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+    padding: '14px 4px 12px',
     border: 'none',
-    borderRadius: 10,
-    fontSize: 13,
-    fontWeight: 500,
-    color: '#5a4a3a',
+    borderRadius: 12,
     cursor: 'pointer',
     fontFamily: 'inherit',
     transition: 'all 0.2s',
+    position: 'relative',
+  },
+  funcDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    marginBottom: 2,
+  },
+  funcLabel: {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: 'var(--text-secondary)',
     letterSpacing: 0.5,
+  },
+  funcDesc: {
+    fontSize: 10,
+    color: 'var(--text-muted)',
+    letterSpacing: 0.3,
+  },
+  tidesBackBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-secondary)',
+    fontSize: 13,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    padding: '8px 0',
+    letterSpacing: 0.5,
+  },
+  dateGroup: {
+    display: 'flex',
+    gap: 14,
+    padding: '16px 0',
+    borderBottom: '1px solid var(--border)',
+  },
+  dateLeft: {
+    flexShrink: 0,
+    width: 56,
+    textAlign: 'center',
+    paddingTop: 2,
+  },
+  dateDay: {
+    fontFamily: 'var(--font-num, "DM Mono")',
+    fontSize: 22,
+    fontWeight: 400,
+    color: 'var(--text-primary)',
+    lineHeight: 1.2,
+    letterSpacing: -0.5,
+  },
+  dateWeek: {
+    fontSize: 11,
+    color: 'var(--text-muted)',
+    marginTop: 2,
+  },
+  dateRight: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    minWidth: 0,
+  },
+  stripWrap: {
+    background: 'var(--bg-card, #fff)',
+    borderRadius: 10,
+    padding: '10px 12px',
+    borderLeft: '3px solid #ccc',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+  },
+  stripHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  stripTag: {
+    display: 'inline-block',
+    padding: '1px 8px',
+    borderRadius: 8,
+    fontSize: 11,
+    fontWeight: 500,
+  },
+  stripTime: {
+    marginLeft: 'auto',
+    fontSize: 11,
+    color: 'var(--text-muted)',
+    fontFamily: 'var(--font-num, "DM Mono")',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  stripPreview: {
+    fontSize: 13,
+    color: 'var(--text-secondary)',
+    lineHeight: 1.5,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  stripExpanded: {
+    paddingTop: 4,
+  },
+  stripActions: {
+    display: 'flex',
+    gap: 4,
+    marginTop: 8,
+    justifyContent: 'flex-end',
   },
   entryMeta: {
     display: 'flex',
@@ -1265,59 +1361,11 @@ const styles = {
     padding: '8px 20px',
     border: 'none',
     borderRadius: 16,
-    background: '#b8d8b8',
-    color: '#3a4a3a',
+    background: '#d4d8d0',
+    color: 'var(--text-secondary)',
     fontSize: 13,
     fontWeight: 500,
     cursor: 'pointer',
     fontFamily: 'inherit',
-  },
-  feelingDrawBtn: {
-    padding: '12px 32px',
-    border: 'none',
-    borderRadius: 20,
-    background: '#f0d068',
-    color: '#5a4a3a',
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    letterSpacing: 1,
-    transition: 'all 0.2s',
-  },
-  replyBlock: {
-    padding: '10px 14px',
-    marginBottom: 8,
-    background: 'var(--bg-secondary, #f8f6f2)',
-    borderRadius: 10,
-    borderLeft: '2px solid var(--border)',
-  },
-  replyLabel: {
-    fontSize: 11,
-    color: 'var(--text-muted)',
-    marginBottom: 6,
-    fontWeight: 500,
-  },
-  stanceBtn: {
-    padding: '6px 18px',
-    border: 'none',
-    borderRadius: 14,
-    fontSize: 13,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    transition: 'all 0.2s',
-    color: '#5a4a3a',
-  },
-  feelingNavBtn: {
-    padding: '8px 20px',
-    border: 'none',
-    borderRadius: 16,
-    background: '#f0d068',
-    color: '#5a4a3a',
-    fontSize: 13,
-    fontWeight: 500,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    transition: 'all 0.2s',
   },
 }
