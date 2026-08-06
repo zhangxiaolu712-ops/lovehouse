@@ -108,6 +108,7 @@ export default function Home() {
             <AppIcon to="/space/games" icon="game"    label="Games" />
             <AppIcon to="/profile"     icon="heart"   label="Us" />
             <AppIcon to="/stats"       icon="calendar" label="Stats" />
+            <AppIcon to="/settings/status" icon="workbench" label="Config" />
           </div>
         </div>
       </div>
