@@ -104,8 +104,8 @@ export default function Home() {
               <span className="pd-wsub">since 2026.06.02</span>
             </div>
 
+            <AppIcon to="/livingroom"  icon="message" label="Room" />
             <AppIcon to="/space/clawd" icon="paw"     label="Clawd" />
-            <AppIcon to="/space/games" icon="game"    label="Games" />
             <AppIcon to="/profile"     icon="heart"   label="Us" />
             <AppIcon to="/stats"       icon="calendar" label="Stats" />
             <AppIcon to="/settings/status" icon="workbench" label="Config" />
