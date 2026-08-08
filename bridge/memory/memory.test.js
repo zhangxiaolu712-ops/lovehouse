@@ -85,6 +85,9 @@ test('GPT can write only to GPT Memory and cannot choose a space', async () => {
   assert.equal(saved.created_by_actor, MEMORY_ACTORS.GPT)
   assert.equal(saved.memory_type, 'feeling')
   assert.equal(saved.importance, 4)
+  assert.equal(saved.source_type, 'mcp')
+  assert.equal(saved.source_model, MEMORY_ACTORS.GPT)
+  assert.equal(saved.source, undefined)
   assert.equal(repository.lastInsert.space_key, MEMORY_SPACES.GPT)
 })
 
@@ -256,5 +259,7 @@ test('audit metadata records allowed and denied access without memory content', 
   assert.equal(auditSink.events[0].memory_id, 1)
   assert.equal(auditSink.events[1].allowed, false)
   assert.equal(auditSink.events[1].reason_code, 'MEMORY_ACCESS_DENIED')
+  assert.equal(auditSink.events[1].memory_id, 2)
+  assert.equal(auditSink.events[1].target_space, MEMORY_SPACES.CLAUDE)
   assert.equal(JSON.stringify(auditSink.events).includes('gpt private'), false)
 })

@@ -126,7 +126,10 @@ const supabaseRest = createSupabaseRest({
   url: SUPABASE_URL,
   serverKey: SUPABASE_SERVER_KEY,
 })
-const canonicalMemoryRepository = new SupabaseMemoryRepository({ rest: supabaseRest })
+const canonicalMemoryRepository = new SupabaseMemoryRepository({
+  rest: supabaseRest,
+  ownerId: OWNER_USER_ID,
+})
 // Fail closed until the future memory_entries migration has been reviewed and
 // applied. This prevents an accidental Bridge deploy from falling back to the
 // old brain/memories tables or silently treating legacy content as Shared.

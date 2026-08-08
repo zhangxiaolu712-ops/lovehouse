@@ -1,0 +1,66 @@
+name: Memory System schema (free ephemeral Supabase)
+
+on:
+  pull_request:
+    paths:
+      - "bridge/memory/**"
+      - "supabase/migrations/20260808191311_create_unified_memory_system_v2.sql"
+      - "supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql"
+      - "supabase/tests/memory_system_phase2.sql"
+      - ".github/workflows/memory-system-schema.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1
+        with:
+          version: 2.113.0
+
+      - name: Prepare an isolated local Supabase project
+        shell: bash
+        run: |
+          mkdir -p .memory-ci
+          supabase init --workdir .memory-ci --yes
+          mkdir -p .memory-ci/supabase/migrations
+          cp supabase/migrations/20260808191311_create_unified_memory_system_v2.sql \
+            .memory-ci/supabase/migrations/
+
+      - name: Fresh install and database tests
+        shell: bash
+        run: |
+          supabase start --workdir .memory-ci \
+            --exclude studio,imgproxy,storage-api,realtime,mailpit,edge-runtime,logflare,vector,supavisor
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/memory_system_phase2.sql
+          supabase db lint --workdir .memory-ci --local --schema public \
+            --level warning --fail-on error
+
+      - name: Roll back, prove removal, then re-apply
+        shell: bash
+        run: |
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql
+          test "$(psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -Atc \
+            "select count(*) from pg_class where relnamespace = 'public'::regnamespace and relname like 'memory_%';")" = "0"
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260808191311_create_unified_memory_system_v2.sql
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/memory_system_phase2.sql
+
+      - name: Stop and delete the temporary local stack
+        if: always()
+        run: supabase stop --workdir .memory-ci --no-backup

@@ -87,6 +87,12 @@ VPS (139.180.146.26)
 - **迁移尚未应用到生产库**。必须先部署并验证 Bridge 服务端密钥，再执行迁移，避免小客厅和记忆工具被一起锁住。
 - `toy_commands` 不在本次修复范围内，迁移明确不修改它。
 
+### 统一 Memory System V2（仅 Draft，未进入上述生产表）
+
+独立 migration `20260808191311_create_unified_memory_system_v2.sql` 设计了八张全新规范表、四空间、revision/provenance/audit、Shared 状态机和固定 GPT/Claude 数据库读 RPC。它不查询旧正文，也未应用生产；生产表数量仍以本节上方实测清单为准。
+
+Bridge 未来读取链为：`固定 MCP actor → AccessPolicy → MemoryService → owner-scoped Repository → 固定 actor RPC → memory_entries`。即使 service key 绕过 RLS，固定 RPC 与服务层二次过滤仍阻止跨空间正文返回。完整方案见 `MEMORY_SYSTEM_PHASE2_SCHEMA.md`。
+
 ---
 
 ## 4. Brain 表详细 Schema

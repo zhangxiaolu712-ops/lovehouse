@@ -10,8 +10,17 @@ function sanitizeSearchTerm(value) {
   return String(value || '').trim().replace(/[,*()]/g, ' ').slice(0, 500)
 }
 
-function scopeFilter(scope) {
-  return `or=(space_key.eq.${scope.privateSpace},and(space_key.eq.${scope.sharedSpace},shared_status.eq.${scope.requiredSharedState}))`
+function actorFromScope(scope) {
+  if (
+    !['gpt', 'claude'].includes(scope?.privateSpace)
+    || scope?.sharedSpace !== 'shared'
+    || scope?.requiredSharedState !== 'approved'
+  ) {
+    const error = new Error('A canonical server-created memory scope is required')
+    error.code = 'INVALID_MEMORY_SCOPE'
+    throw error
+  }
+  return scope.privateSpace
 }
 
 export function createSupabaseRest({ url, serverKey, fetchImpl = fetch }) {
@@ -62,37 +71,61 @@ export function createSupabaseRest({ url, serverKey, fetchImpl = fetch }) {
  * two independent memory engines.
  */
 export class SupabaseMemoryRepository {
-  constructor({ rest, table = DEFAULT_TABLE }) {
+  constructor({ rest, ownerId, table = DEFAULT_TABLE }) {
     if (typeof rest !== 'function') throw new Error('A Supabase REST function is required')
     this.rest = rest
+    this.ownerId = ownerId
     this.table = table
   }
 
+  requireOwnerId() {
+    if (!this.ownerId) {
+      const error = new Error('OWNER_USER_ID is required for canonical memory access')
+      error.code = 'MEMORY_OWNER_NOT_CONFIGURED'
+      throw error
+    }
+    return this.ownerId
+  }
+
   async insert(entry) {
-    const rows = await this.rest('POST', this.table, entry)
+    const ownerId = this.requireOwnerId()
+    const rows = await this.rest('POST', this.table, {
+      ...entry,
+      owner_id: ownerId,
+    })
     return Array.isArray(rows) ? rows[0] : rows
   }
 
-  async getById(id) {
-    const rows = await this.rest('GET', `${this.table}?id=eq.${encodeURIComponent(id)}&limit=1`)
+  async getById(id, { scope }) {
+    const actor = actorFromScope(scope)
+    const rows = await this.rest('POST', `rpc/memory_get_${actor}`, {
+      p_owner_id: this.requireOwnerId(),
+      p_memory_id: id,
+    })
     return rows?.[0] || null
   }
 
   async list({ scope, limit = 100, memoryType, tags = [], retention }) {
+    const actor = actorFromScope(scope)
     const safeLimit = clampLimit(limit, 100, 200)
-    let path = `${this.table}?${scopeFilter(scope)}&order=created_at.desc&limit=${safeLimit}`
-    if (memoryType) path += `&memory_type=eq.${encodeURIComponent(memoryType)}`
-    if (tags.length) path += `&tags=cs.${encodeURIComponent(JSON.stringify(tags))}`
-    if (retention) path += `&retention=eq.${encodeURIComponent(retention)}`
-    return await this.rest('GET', path) || []
+    return await this.rest('POST', `rpc/memory_list_${actor}`, {
+      p_owner_id: this.requireOwnerId(),
+      p_limit: safeLimit,
+      p_memory_type: memoryType || null,
+      p_tags: tags,
+      p_retention: retention || null,
+    }) || []
   }
 
   async search({ scope, query, limit = 20, tags = [] }) {
+    const actor = actorFromScope(scope)
     const safeLimit = clampLimit(limit, 20, 50)
     const term = sanitizeSearchTerm(query)
-    let path = `${this.table}?${scopeFilter(scope)}&order=importance.desc,created_at.desc&limit=${safeLimit}`
-    if (term) path += `&content=ilike.${encodeURIComponent(`%${term}%`)}`
-    if (tags.length) path += `&tags=cs.${encodeURIComponent(JSON.stringify(tags))}`
-    return await this.rest('GET', path) || []
+    return await this.rest('POST', `rpc/memory_recall_${actor}`, {
+      p_owner_id: this.requireOwnerId(),
+      p_query: term,
+      p_limit: safeLimit,
+      p_tags: tags,
+    }) || []
   }
 }

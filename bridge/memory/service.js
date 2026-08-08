@@ -39,7 +39,17 @@ function normalizeEmotion(input) {
 }
 
 function normalizeRetention(input) {
-  return stringOrNull(input.retention || input.level, 40)
+  const value = stringOrNull(input.retention || input.level, 40)
+  const legacyMap = {
+    '固定': 'fixed',
+    '长期': 'long',
+    '短期': 'short',
+    '临时': 'temporary',
+  }
+  const normalized = legacyMap[value] || value
+  return ['fixed', 'long', 'short', 'temporary'].includes(normalized)
+    ? normalized
+    : null
 }
 
 export class MemoryService {
@@ -80,6 +90,8 @@ export class MemoryService {
         actor,
         action,
         allowed: false,
+        memory_id: error?.audit?.memory_id || null,
+        target_space: error?.audit?.target_space || null,
         reason_code: error?.code || error?.name || 'MEMORY_OPERATION_FAILED',
         occurred_at: this.clock().toISOString(),
       })
@@ -114,13 +126,12 @@ export class MemoryService {
         retention: normalizeRetention(input),
         decay_score: 1,
         decay_updated_at: now,
-        source: {
-          source_type: 'mcp',
-          source_model: actor,
-          source_ref: stringOrNull(input.source_ref || input.sourceRef, 500),
-        },
+        author: stringOrNull(input.author, 200),
+        source_type: 'mcp',
+        source_model: actor,
+        source_ref: stringOrNull(input.source_ref || input.sourceRef, 500),
+        source_metadata: {},
         revision_number: 1,
-        revision_of: null,
         created_by_actor: actor,
         created_at: now,
         updated_at: now,
@@ -132,9 +143,19 @@ export class MemoryService {
   async get(actor, id) {
     return this.audited(actor, 'read', async () => {
       this.accessPolicy.assertActor(actor)
-      const memory = await this.repository.getById(id)
+      const memory = await this.repository.getById(id, {
+        scope: this.accessPolicy.readScopeFor(actor),
+      })
       if (!memory) return null
-      this.accessPolicy.assertCanRead(actor, memory)
+      try {
+        this.accessPolicy.assertCanRead(actor, memory)
+      } catch (error) {
+        error.audit = {
+          memory_id: id,
+          target_space: memory.space_key,
+        }
+        throw error
+      }
       return memory
     })
   }
