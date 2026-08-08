@@ -82,9 +82,9 @@ begin
     raise exception 'Remember provenance was not persisted';
   end if;
   if not exists (
-    select 1 from public.memory_audit_log
-    where memory_id = gpt_id and actor = 'gpt' and action = 'remember'
-      and request_id = gpt_request and result = 'allowed'
+    select 1 from public.memory_audit_log audit
+    where audit.memory_id = gpt_id and audit.actor = 'gpt' and audit.action = 'remember'
+      and audit.request_id = gpt_request and audit.result = 'allowed'
   ) then
     raise exception 'Remember audit was not persisted';
   end if;
@@ -155,8 +155,8 @@ begin
     where memory_id = gpt_id and event_type = 'revised'
       and reason = 'Clarify the durable wording'
   ) or not exists (
-    select 1 from public.memory_audit_log
-    where memory_id = gpt_id and action = 'revise' and result = 'allowed'
+    select 1 from public.memory_audit_log audit
+    where audit.memory_id = gpt_id and audit.action = 'revise' and audit.result = 'allowed'
   ) then
     raise exception 'Revision history, provenance or audit is incomplete';
   end if;
