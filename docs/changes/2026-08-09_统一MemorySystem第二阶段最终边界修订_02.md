@@ -2,7 +2,7 @@
 
 - 日期：2026-08-09
 - 执行者：Codex
-- 状态：本地验证完成，待免费临时数据库最终验证
+- 状态：已完成，等待最终工程审阅
 
 ## 做了什么
 
@@ -41,7 +41,7 @@
 ## 验证结果
 
 - 已执行：Bridge 50 项测试通过，0 失败；frontend lint 通过（只有仓库既有 warning）；frontend build 通过（只有既有 bundle size warning）；`git diff --check` 通过。
-- 待执行：免费 GitHub Actions 临时 Supabase 的 fresh migration、SQL 测试、lint、rollback、reinstall。
+- 免费临时 Supabase：[run 31279148915](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31279148915) 全绿，fresh migration、完整 SQL 权限测试、数据库 lint、rollback、对象清空断言、reinstall 与复测均成功；临时容器已停止并删除。
 
 ## 已知风险或未完成事项
 
