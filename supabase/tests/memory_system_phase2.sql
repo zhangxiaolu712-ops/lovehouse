@@ -15,53 +15,88 @@ declare
   legacy_id bigint;
   shared_id bigint;
   unapproved_shared_id bigint;
+  rejected_shared_id bigint;
+  revoked_shared_id bigint;
+  gpt_revision_1 bigint;
+  gpt_revision_2 bigint;
+  claude_revision_1 bigint;
+  gpt_revision_1_hash text;
   candidate_id bigint;
+  idempotency_first public.memory_mutation_idempotency%rowtype;
+  idempotency_replay public.memory_mutation_idempotency%rowtype;
+  database_hash text;
   rejected boolean;
 begin
   insert into public.memory_entries (
     owner_id, space_key, memory_type, tags, content, emotion, importance,
-    retention, author, source_type, source_model, source_ref, created_by_actor
+    retention, author, source_type, source_model, source_ref,
+    created_by_actor, created_at
   ) values (
     '10000000-0000-0000-0000-000000000001', 'gpt', 'feeling',
     array['relationship', 'rose'], 'GPT private test memory',
     '{"label":"calm","intensity":0.6}'::jsonb, 4, 'long', 'GPT',
-    'mcp', 'gpt', 'test:gpt:1', 'gpt'
+    'mcp', 'gpt', 'test:gpt:1', 'gpt', '2026-08-01T00:00:00Z'
   ) returning id into gpt_id;
 
   insert into public.memory_entries (
     owner_id, space_key, memory_type, tags, content, source_type,
-    source_model, source_ref, created_by_actor
+    source_model, source_ref, created_by_actor, created_at
   ) values (
     '10000000-0000-0000-0000-000000000001', 'claude', 'diary',
     array['daily'], 'Claude private test memory', 'mcp', 'claude',
-    'test:claude:1', 'claude'
+    'test:claude:1', 'claude', '2026-08-02T00:00:00Z'
   ) returning id into claude_id;
 
+  select id into strict gpt_revision_1
+  from public.memory_revisions
+  where memory_id = gpt_id and revision_number = 1;
+  select id into strict claude_revision_1
+  from public.memory_revisions
+  where memory_id = claude_id and revision_number = 1;
+  gpt_revision_1_hash := public.memory_compute_revision_hash(gpt_revision_1);
+
   insert into public.memory_entries (
-    owner_id, space_key, memory_type, tags, content, author, source_type,
-    source_model, source_ref, original_table, original_id,
+    owner_id, space_key, memory_type, tags, content, emotion, importance,
+    author, source_type, source_model, source_ref, original_table, original_id,
     original_created_at, legacy_source, created_by_actor
   ) values (
     '10000000-0000-0000-0000-000000000001', 'legacy_pending', 'memo',
-    array['legacy-test'], 'Frozen legacy test body', 'legacy-author',
-    'legacy_import', 'CC', 'test:legacy:1', 'brain', '123',
+    array['legacy-test'], 'Legacy test sentinel legacy-only-orchid', '{}'::jsonb,
+    5, 'legacy-author', 'legacy_import', 'CC', 'test:legacy:1', 'brain', '123',
     '2026-01-01T00:00:00Z', 'brain-v1', 'curator'
   ) returning id into legacy_id;
 
   rejected := false;
   begin
     insert into public.memory_entries (
-      owner_id, space_key, memory_type, content, source_type,
-      created_by_actor, shared_status, derived_from_memory_id
+      owner_id, space_key, source_type, source_ref, created_by_actor,
+      shared_status, source_memory_id, source_revision_id
     ) values (
-      '10000000-0000-0000-0000-000000000001', 'shared', 'fact',
-      'Direct approved must fail', 'curation', 'owner', 'approved', gpt_id
+      '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
+      'test:shared:direct-approved', 'curator', 'approved', gpt_id, gpt_revision_1
     );
   exception when check_violation then
     rejected := true;
   end;
   if not rejected then
     raise exception 'Direct approved Shared insert was not rejected';
+  end if;
+
+  rejected := false;
+  begin
+    insert into public.memory_entries (
+      owner_id, space_key, source_type, source_ref, created_by_actor,
+      shared_status, source_memory_id, source_revision_id
+    ) values (
+      '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
+      'test:shared:mismatched-revision', 'curator', 'candidate',
+      gpt_id, claude_revision_1
+    );
+  exception when check_violation then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Mismatched source memory/revision was not rejected';
   end if;
 
   rejected := false;
@@ -97,32 +132,264 @@ begin
     raise exception 'Legacy source constraint did not fail closed';
   end if;
 
+  -- Client-provided candidate body and source hash are deliberately wrong.
+  -- The database must replace them with the exact selected private revision.
   insert into public.memory_entries (
     owner_id, space_key, memory_type, tags, content, source_type,
-    source_model, source_ref, derived_from_memory_id, shared_status,
-    created_by_actor
+    source_model, source_ref, source_memory_id, source_revision_id,
+    source_revision_hash, shared_status, created_by_actor
   ) values (
-    '10000000-0000-0000-0000-000000000001', 'shared', 'feeling',
-    array['relationship', 'rose'], 'Shared candidate test memory',
-    'curation', 'curator', 'test:shared:1', gpt_id, 'candidate', 'curator'
+    '10000000-0000-0000-0000-000000000001', 'shared', 'article',
+    array['client-forged'], 'Client-forged candidate body',
+    'curation', 'curator', 'test:shared:approved', gpt_id, gpt_revision_1,
+    repeat('f', 64), 'candidate', 'curator'
   ) returning id into shared_id;
 
   insert into public.memory_entries (
-    owner_id, space_key, memory_type, tags, content, source_type,
-    source_model, source_ref, derived_from_memory_id, shared_status,
-    created_by_actor
+    owner_id, space_key, source_type, source_model, source_ref,
+    source_memory_id, source_revision_id, shared_status, created_by_actor
   ) values (
-    '10000000-0000-0000-0000-000000000001', 'shared', 'diary',
-    array['unapproved-test'], 'Unapproved Shared test memory',
-    'curation', 'curator', 'test:shared:unapproved', claude_id,
+    '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
+    'curator', 'test:shared:unapproved', claude_id, claude_revision_1,
     'candidate', 'curator'
   ) returning id into unapproved_shared_id;
+
+  insert into public.memory_entries (
+    owner_id, space_key, source_type, source_model, source_ref,
+    source_memory_id, source_revision_id, shared_status, created_by_actor
+  ) values (
+    '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
+    'curator', 'test:shared:rejected', claude_id, claude_revision_1,
+    'candidate', 'curator'
+  ) returning id into rejected_shared_id;
+
+  insert into public.memory_entries (
+    owner_id, space_key, source_type, source_model, source_ref,
+    source_memory_id, source_revision_id, shared_status, created_by_actor
+  ) values (
+    '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
+    'curator', 'test:shared:revoked', gpt_id, gpt_revision_1,
+    'candidate', 'curator'
+  ) returning id into revoked_shared_id;
+
+  if not exists (
+    select 1 from public.memory_entries
+    where id = shared_id
+      and content = 'GPT private test memory'
+      and memory_type = 'feeling'
+      and tags = array['relationship', 'rose']
+      and source_revision_hash = gpt_revision_1_hash
+      and source_revision_hash <> repeat('f', 64)
+  ) then
+    raise exception 'Shared candidate was not snapshotted from the selected revision';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set content = 'Candidate body must be immutable'
+      where id = unapproved_shared_id;
+  exception when object_not_in_prerequisite_state then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Shared candidate body was mutable';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'approved',
+          updated_by_actor = 'curator',
+          revision_reason = 'Curator cannot approve'
+      where id = unapproved_shared_id;
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Curator was able to approve Shared';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'rejected',
+          updated_by_actor = 'curator',
+          revision_reason = 'Curator cannot reject'
+      where id = unapproved_shared_id;
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Curator was able to reject Shared';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'approved',
+          updated_by_actor = 'gpt',
+          revision_reason = 'GPT cannot impersonate Owner'
+      where id = unapproved_shared_id;
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'GPT actor was able to approve Shared';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'approved',
+          updated_by_actor = 'claude',
+          revision_reason = 'Claude cannot impersonate Owner'
+      where id = unapproved_shared_id;
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Claude actor was able to approve Shared';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'approved',
+          updated_by_actor = 'system',
+          revision_reason = 'System cannot approve'
+      where id = unapproved_shared_id;
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'System was able to approve Shared';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'revoked',
+          updated_by_actor = 'owner',
+          revision_reason = 'Candidate cannot jump to revoked'
+      where id = unapproved_shared_id;
+  exception when check_violation then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'candidate -> revoked was accepted';
+  end if;
+
+  update public.memory_entries
+    set shared_status = 'rejected',
+        updated_by_actor = 'owner',
+        revision_reason = 'Owner rejected this candidate'
+    where id = rejected_shared_id;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'approved',
+          updated_by_actor = 'owner',
+          revision_reason = 'Rejected cannot be reopened'
+      where id = rejected_shared_id;
+  exception when check_violation then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'rejected -> approved was accepted';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'candidate',
+          updated_by_actor = 'owner',
+          revision_reason = 'Rejected cannot return to candidate'
+      where id = rejected_shared_id;
+  exception when check_violation then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'rejected -> candidate was accepted';
+  end if;
 
   update public.memory_entries
     set shared_status = 'approved',
         updated_by_actor = 'owner',
-        revision_reason = 'Owner approved this test candidate'
+        revision_reason = 'Owner approved revocation test'
+    where id = revoked_shared_id;
+  update public.memory_entries
+    set shared_status = 'revoked',
+        updated_by_actor = 'owner',
+        revision_reason = 'Owner revoked this approved snapshot'
+    where id = revoked_shared_id;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'approved',
+          updated_by_actor = 'owner',
+          revision_reason = 'Revoked cannot be restored'
+      where id = revoked_shared_id;
+  exception when check_violation then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'revoked -> approved was accepted';
+  end if;
+
+  update public.memory_entries
+    set shared_status = 'approved',
+        updated_by_actor = 'owner',
+        revision_reason = 'Owner approved exact GPT revision 1'
     where id = shared_id;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set shared_status = 'revoked',
+          updated_by_actor = 'curator',
+          revision_reason = 'Curator cannot revoke'
+      where id = shared_id;
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Curator was able to revoke Shared';
+  end if;
+
+  rejected := false;
+  begin
+    insert into public.memory_revisions (
+      owner_id, memory_id, revision_number, title, content, author, memory_type,
+      tags, emotion, importance, retention, lifecycle_status, editor_actor,
+      revision_reason
+    ) values (
+      owner_one, shared_id, 2, 'Swapped shared title', 'Swapped shared body',
+      'attacker', 'feeling', array['shared'], '{}'::jsonb, 1, 'long', 'active',
+      'owner', 'Attempted revision swap'
+    );
+  exception when check_violation then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Approved Shared accepted a replacement revision';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_entries
+      set content = 'Approved Shared overwrite must fail',
+          updated_by_actor = 'owner',
+          revision_reason = 'Attempted Shared overwrite'
+      where id = shared_id;
+  exception when object_not_in_prerequisite_state then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Approved Shared body was mutable';
+  end if;
 
   rejected := false;
   begin
@@ -133,7 +400,7 @@ begin
     rejected := true;
   end;
   if not rejected then
-    raise exception 'Silent content overwrite was not rejected';
+    raise exception 'Silent private content overwrite was not rejected';
   end if;
 
   update public.memory_entries
@@ -142,6 +409,26 @@ begin
         revision_reason = 'Clarify the test wording'
     where id = gpt_id;
 
+  select id into strict gpt_revision_2
+  from public.memory_revisions
+  where memory_id = gpt_id and revision_number = 2;
+
+  if not exists (
+    select 1 from public.memory_entries
+    where id = shared_id
+      and content = 'GPT private test memory'
+      and source_revision_id = gpt_revision_1
+      and source_revision_hash = gpt_revision_1_hash
+  ) then
+    raise exception 'Shared candidate drifted after the source gained a new revision';
+  end if;
+  if gpt_revision_2 = gpt_revision_1 then
+    raise exception 'Private revision did not advance';
+  end if;
+  if (select count(*) from public.memory_revisions where memory_id = shared_id) <> 1 then
+    raise exception 'Shared status/body handling created an illicit revision';
+  end if;
+
   insert into public.memory_audit_log (
     owner_id, actor, action, memory_id, space_key, result,
     result_count, result_spaces, metadata
@@ -149,7 +436,6 @@ begin
     '10000000-0000-0000-0000-000000000001', 'gpt', 'recall', gpt_id,
     'gpt', 'allowed', 2, array['gpt', 'shared'], '{"request":"test-only"}'::jsonb
   );
-
   insert into public.memory_audit_log (
     owner_id, actor, action, memory_id, space_key, result, reason_code
   ) values (
@@ -166,15 +452,89 @@ begin
     'window-test-1', 'claude', 'dreaming', 'dream-run:test'
   ) returning id into candidate_id;
 
+  select * into strict idempotency_first
+  from public.memory_claim_idempotency(
+    '10000000-0000-0000-0000-000000000001',
+    'gpt',
+    'write_private',
+    '30000000-0000-0000-0000-000000000003',
+    '{"content":"same","tags":["a"]}'::jsonb
+  );
+  update public.memory_mutation_idempotency
+    set status = 'completed',
+        resource_id = gpt_id,
+        response_metadata = jsonb_build_object('memory_id', gpt_id),
+        completed_at = now()
+    where id = idempotency_first.id;
+
+  select * into strict idempotency_replay
+  from public.memory_claim_idempotency(
+    '10000000-0000-0000-0000-000000000001',
+    'gpt',
+    'write_private',
+    '30000000-0000-0000-0000-000000000003',
+    '{"tags":["a"],"content":"same"}'::jsonb
+  );
+  if idempotency_replay.id <> idempotency_first.id
+    or idempotency_replay.status <> 'completed'
+    or idempotency_replay.resource_id <> gpt_id
+  then
+    raise exception 'Same idempotency request did not replay its original resource';
+  end if;
+
+  rejected := false;
+  begin
+    perform * from public.memory_claim_idempotency(
+      '10000000-0000-0000-0000-000000000001',
+      'gpt',
+      'write_private',
+      '30000000-0000-0000-0000-000000000003',
+      '{"content":"different"}'::jsonb
+    );
+  exception when unique_violation then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Same idempotency key with different request hash was accepted';
+  end if;
+
+  insert into public.memory_mutation_idempotency (
+    owner_id, actor, operation, request_id, request_material, request_hash
+  ) values (
+    '10000000-0000-0000-0000-000000000001', 'claude', 'write_private',
+    '40000000-0000-0000-0000-000000000004', '{"content":"database hashes me"}'::jsonb,
+    repeat('0', 64)
+  ) returning request_hash into database_hash;
+  if database_hash = repeat('0', 64) or length(database_hash) <> 64 then
+    raise exception 'Client-controlled request_hash was trusted';
+  end if;
+  if exists (
+    select 1 from public.memory_mutation_idempotency where request_material is not null
+  ) then
+    raise exception 'Transient idempotency request material was retained';
+  end if;
+
+  rejected := false;
+  begin
+    update public.memory_mutation_idempotency
+      set request_hash = repeat('f', 64)
+      where id = idempotency_first.id;
+  exception when object_not_in_prerequisite_state then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Database-computed request_hash was mutable';
+  end if;
+
   if (select count(*) from public.memory_revisions where memory_id = gpt_id) <> 2 then
-    raise exception 'Revision history is incomplete';
+    raise exception 'Private revision history is incomplete';
   end if;
   if not exists (
     select 1 from public.memory_revisions
-    where memory_id = gpt_id and revision_number = 1
-      and content = 'GPT private test memory'
+    where id = gpt_revision_1 and memory_id = gpt_id
+      and revision_number = 1 and content = 'GPT private test memory'
   ) then
-    raise exception 'Original revision is not traceable';
+    raise exception 'Original private revision is not traceable';
   end if;
   if not exists (
     select 1 from public.memory_provenance
@@ -186,12 +546,31 @@ begin
   if not exists (
     select 1 from public.memory_provenance
     where memory_id = shared_id and event_type = 'shared_approved'
-      and parent_memory_id = gpt_id
+      and parent_memory_id = gpt_id and parent_revision_id = gpt_revision_1
+      and details->>'source_revision_hash' = gpt_revision_1_hash
   ) then
-    raise exception 'Shared approval provenance is incomplete';
+    raise exception 'Shared approval provenance does not bind the exact private revision';
+  end if;
+  if not exists (
+    select 1 from public.memory_shared_transitions
+    where memory_id = shared_id and from_status is null and to_status = 'candidate'
+      and actor = 'curator' and source_memory_id = gpt_id
+      and source_revision_id = gpt_revision_1
+      and source_revision_hash = gpt_revision_1_hash
+  ) then
+    raise exception 'Shared candidate transition lacks its exact revision source';
+  end if;
+  if exists (
+    select 1 from public.memory_shared_transitions
+    where from_status is not null and actor <> 'owner'
+  ) then
+    raise exception 'A non-Owner performed a Shared decision transition';
   end if;
   if (select count(*) from public.memory_shared_transitions where memory_id = shared_id) <> 2 then
-    raise exception 'Shared transition history is incomplete';
+    raise exception 'Approved Shared transition history is incomplete';
+  end if;
+  if (select count(*) from public.memory_shared_transitions where memory_id = revoked_shared_id) <> 3 then
+    raise exception 'Revoked Shared transition history is incomplete';
   end if;
   if not exists (
     select 1 from public.memory_ingest_candidates
@@ -204,6 +583,9 @@ begin
     where space_key = 'legacy_pending' and id <> legacy_id
   ) then
     raise exception 'Unexpected Legacy Pending test rows found';
+  end if;
+  if has_table_privilege('authenticated', 'public.memory_mutation_idempotency', 'SELECT') then
+    raise exception 'Authenticated role can read internal idempotency claims';
   end if;
 
   rejected := false;
@@ -230,9 +612,22 @@ $$;
 
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
 do $$
+declare
+  rejected boolean := false;
 begin
-  if (select count(*) from public.memory_entries) <> 5 then
+  if (select count(*) from public.memory_entries) <> 7 then
     raise exception 'Owner RLS did not return all owner test memories';
+  end if;
+  begin
+    perform * from public.memory_claim_idempotency(
+      '10000000-0000-0000-0000-000000000001', 'gpt', 'forged',
+      '50000000-0000-0000-0000-000000000005', '{}'::jsonb
+    );
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Authenticated client could call the internal idempotency function';
   end if;
 end;
 $$;
@@ -244,26 +639,45 @@ declare
   gpt_id bigint;
   claude_id bigint;
   legacy_id bigint;
+  shared_id bigint;
   unapproved_shared_id bigint;
+  gpt_results bigint[];
+  claude_results bigint[];
 begin
-  select id into gpt_id from public.memory_entries where source_ref = 'test:gpt:1';
-  select id into claude_id from public.memory_entries where source_ref = 'test:claude:1';
-  select id into legacy_id from public.memory_entries where source_ref = 'test:legacy:1';
-  select id into unapproved_shared_id from public.memory_entries where source_ref = 'test:shared:unapproved';
+  select id into strict gpt_id from public.memory_entries where source_ref = 'test:gpt:1';
+  select id into strict claude_id from public.memory_entries where source_ref = 'test:claude:1';
+  select id into strict legacy_id from public.memory_entries where source_ref = 'test:legacy:1';
+  select id into strict shared_id from public.memory_entries where source_ref = 'test:shared:approved';
+  select id into strict unapproved_shared_id from public.memory_entries where source_ref = 'test:shared:unapproved';
 
-  if (select count(*) from public.memory_entries) <> 5 then
+  if (select count(*) from public.memory_entries) <> 7 then
     raise exception 'Service role bypass expectation changed; application filtering assumptions need review';
   end if;
-  if (select count(*) from public.memory_recall_gpt(
+
+  select array_agg(id) into gpt_results
+  from public.memory_recall_gpt(
     '10000000-0000-0000-0000-000000000001', 'test', 20, '{}'::text[]
-  )) <> 2 then
-    raise exception 'GPT fixed read door returned the wrong scope';
+  );
+  if gpt_results is distinct from array[shared_id, gpt_id]::bigint[] then
+    raise exception 'GPT recall count/order was influenced by forbidden spaces: %', gpt_results;
   end if;
-  if (select count(*) from public.memory_recall_claude(
+
+  select array_agg(id) into claude_results
+  from public.memory_recall_claude(
     '10000000-0000-0000-0000-000000000001', 'test', 20, '{}'::text[]
-  )) <> 2 then
-    raise exception 'Claude fixed read door returned the wrong scope';
+  );
+  if claude_results is distinct from array[shared_id, claude_id]::bigint[] then
+    raise exception 'Claude recall count/order was influenced by forbidden spaces: %', claude_results;
   end if;
+
+  if exists (select 1 from public.memory_recall_gpt(
+    '10000000-0000-0000-0000-000000000001', 'legacy-only-orchid', 20, '{}'::text[]
+  )) or exists (select 1 from public.memory_recall_claude(
+    '10000000-0000-0000-0000-000000000001', 'legacy-only-orchid', 20, '{}'::text[]
+  )) then
+    raise exception 'Legacy-only keyword leaked through ordinary recall';
+  end if;
+
   if exists (select 1 from public.memory_get_gpt(
     '10000000-0000-0000-0000-000000000001', claude_id
   )) then
@@ -286,7 +700,7 @@ begin
   )) or exists (select 1 from public.memory_get_claude(
     '10000000-0000-0000-0000-000000000001', legacy_id
   )) then
-    raise exception 'Legacy Pending escaped into daily reads';
+    raise exception 'Legacy Pending escaped into ordinary get';
   end if;
 end;
 $$;

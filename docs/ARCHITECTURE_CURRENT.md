@@ -89,7 +89,7 @@ VPS (139.180.146.26)
 
 ### 统一 Memory System V2（仅 Draft，未进入上述生产表）
 
-独立 migration `20260808191311_create_unified_memory_system_v2.sql` 设计了八张全新规范表、四空间、revision/provenance/audit、Shared 状态机和固定 GPT/Claude 数据库读 RPC。它不查询旧正文，也未应用生产；生产表数量仍以本节上方实测清单为准。
+独立 migration `20260808191311_create_unified_memory_system_v2.sql` 设计了九张全新规范表、四空间、revision/provenance/audit、mutation idempotency、Shared 状态机和固定 GPT/Claude 数据库读 RPC。Shared candidate 绑定确定 private revision 并形成不可变快照，只有 Owner 可作最终决定。它不查询旧正文，也未应用生产；生产表数量仍以本节上方实测清单为准。
 
 Bridge 未来读取链为：`固定 MCP actor → AccessPolicy → MemoryService → owner-scoped Repository → 固定 actor RPC → memory_entries`。即使 service key 绕过 RLS，固定 RPC 与服务层二次过滤仍阻止跨空间正文返回。完整方案见 `MEMORY_SYSTEM_PHASE2_SCHEMA.md`。
 

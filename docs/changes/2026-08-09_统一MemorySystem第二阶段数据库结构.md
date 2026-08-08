@@ -2,7 +2,7 @@
 
 日期：2026-08-09
 
-状态：`DRAFT` / `ZERO_COST_VALIDATED` / `NO_PROD_CHANGE` / `NO_DEPLOY`
+状态：`DRAFT` / `ENGINEERING_REVIEW_FIXES` / `REVALIDATION_PENDING` / `NO_PROD_CHANGE` / `NO_DEPLOY`
 
 分支：`agent/memory-system-schema-phase2-20260809`
 
@@ -41,3 +41,13 @@
 1. 保持 Draft，不 merge、不 deploy。
 2. 由工程师审阅 schema、权限矩阵、旧字段映射和 rollback。
 3. P0 RLS 修复继续独立 PR；Legacy 正文整理继续后置。
+
+## 第一轮工程审阅修订
+
+- Shared candidate 改为绑定 `source_memory_id + source_revision_id + source_revision_hash`；数据库复制确定 revision 快照并覆盖客户端正文/hash。
+- Shared 快照所有状态均不可修改；源私有记忆的新 revision 不会改变既有 candidate。
+- 状态机收紧为 `candidate → approved/rejected`、`approved → revoked`；rejected/revoked 均为终态。
+- Curator 只能创建 candidate；只有 Owner 可以 approve/reject/revoke，system/GPT/Claude 无审批权。
+- 增加数据库级 mutation idempotency：owner + actor + operation + request id 唯一，数据库计算 request hash，同请求可重放、不同 payload 冲突。
+- Legacy 专属关键词与高 importance 测试验证其在 SQL 阶段即被排除，不影响普通 recall 的正文、数量和顺序。
+- 修订后的免费临时 Supabase、Bridge、lint/build 结果将在本分支重新验证后补充；PR 继续保持 Draft。

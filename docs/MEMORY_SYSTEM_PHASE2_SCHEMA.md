@@ -12,10 +12,12 @@ erDiagram
   MEMORY_SPACE_CATALOG ||--o{ MEMORY_ENTRIES : classifies
   MEMORY_TYPE_CATALOG ||--o{ MEMORY_ENTRIES : types
   MEMORY_ENTRIES ||--o{ MEMORY_REVISIONS : snapshots
+  MEMORY_REVISIONS ||--o{ MEMORY_ENTRIES : shared_source
   MEMORY_ENTRIES ||--o{ MEMORY_PROVENANCE : traces
   MEMORY_ENTRIES ||--o{ MEMORY_SHARED_TRANSITIONS : reviews
   MEMORY_ENTRIES ||--o{ MEMORY_AUDIT_LOG : audits
   MEMORY_INGEST_CANDIDATES }o--o| MEMORY_ENTRIES : converts_to
+  MEMORY_MUTATION_IDEMPOTENCY }o--o| MEMORY_ENTRIES : replays
 
   MEMORY_ENTRIES {
     bigint id PK
@@ -30,7 +32,9 @@ erDiagram
     text lifecycle_status
     float decay_score
     text shared_status
-    bigint derived_from_memory_id FK
+    bigint source_memory_id FK
+    bigint source_revision_id FK
+    text source_revision_hash
     text original_table
     text original_id
     timestamptz original_created_at
@@ -61,6 +65,7 @@ erDiagram
 | `memory_provenance` | 创建、整理、修订、Shared 审批的来源链 |
 | `memory_shared_transitions` | Shared 状态变化的不可变流水 |
 | `memory_audit_log` | 允许/拒绝/错误访问的元数据审计，不存正文 |
+| `memory_mutation_idempotency` | mutation 的数据库级幂等声明；唯一边界为 owner + actor + operation + request id |
 | `memory_ingest_candidates` | Dreaming/摘要候选生命周期；候选不等于正式记忆 |
 
 ## 2. 旧字段到新结构的映射
@@ -86,7 +91,7 @@ erDiagram
 | `source_table`, `source_id` | `original_table`, `original_id` | Legacy Pending 必填来源 |
 | 旧行 `created_at` | `original_created_at` | 新行的 `created_at` 是暂存时间，不能覆盖原时间 |
 | 旧系统/批次名 | `legacy_source` | 例如 brain-v1/memories-v1 |
-| `brain.ref_id` | `derived_from_memory_id` + provenance | 需人工确认语义后再映射，不自动猜测修订关系 |
+| `brain.ref_id` | provenance parent chain | 需人工确认语义后再映射，不自动猜测修订关系 |
 | `memory_candidates` | `memory_ingest_candidates` | 继承 pending/approved/rejected/merged 生命周期，不自动写正式记忆 |
 | `window_summaries` | candidate 的 source 字段 | 摘要是候选来源，不自动成为 Shared |
 | `dream_runs` | candidate 的 `dream_run_ref`/source metadata | 保留运行链路；运行日志本身不是记忆正文 |
@@ -101,23 +106,28 @@ private memory
       │ 独立申请（未来 Curator 流程）
       ▼
 candidate ──批准──> approved ──撤销──> revoked
-    │  └────撤销──────────────> revoked
-    └────拒绝──> rejected ──重新申请──> candidate
+    └────拒绝──> rejected
 ```
 
-- Shared 新行只能以 `candidate` 创建，并且必须引用同一 owner 的非 Shared 来源记忆。
+- Shared 新行只能由 Curator 以 `candidate` 创建，并且必须绑定同一 owner 私有记忆的 `source_memory_id + source_revision_id`。
+- 数据库从该 revision 复制完整快照并计算 `source_revision_hash`，忽略客户端传入的正文和 hash；源记忆后续产生新 revision 不会让 candidate 漂移。
+- candidate/approved/rejected/revoked 正文和来源绑定全部不可修改。选错 revision 必须 reject 后创建新的 candidate。
+- `memory_revisions` 另有插入校验：Shared 只能拥有与快照完全一致的第 1 版，禁止通过直接插入 revision 2 偷换正文。
 - GPT/Claude 普通 MCP 不能创建、批准、拒绝或撤销 Shared。
-- 状态变化只接受 `owner` / `curator` / `system`，必须提供原因。
+- 只有 Owner 可以执行 `candidate → approved/rejected` 与 `approved → revoked`；Curator/system/GPT/Claude 均无决定权。
+- rejected 与 revoked 都是终态；禁止 candidate → revoked、rejected → candidate/approved、revoked → approved。
 - `approved` 对 GPT/Claude 仍为只读；未来写入只能走独立申请/批准工具。
 - 每次变化同时写入 `memory_shared_transitions` 与 `memory_provenance`。
 
 ## 4. Revision 与 provenance
 
 - 新记忆自动生成 revision 1 和初始来源事件。
-- 正文、标题、type、tags、emotion、importance、retention、lifecycle 任一变化，都必须同时提交新的 `updated_by_actor` 与 `revision_reason`。
+- 正文、标题、author、type、tags、emotion、importance、retention、lifecycle 任一变化，都必须同时提交新的 `updated_by_actor` 与 `revision_reason`。
 - 触发器自动递增 `revision_number` 并保存完整快照；直接 UPDATE/DELETE 历史表会被拒绝。
 - owner、space、初始来源、Legacy 原始来源在正文行上不可静默改写。
 - provenance 记录 parent/source、actor、reason、时间及来源元数据，可以回答“最初来自哪里、经过什么修订、为何进入当前空间”。
+- Shared provenance 同时保存 `parent_memory_id`、`parent_revision_id` 和数据库计算的 revision hash。
+- provenance 与 Shared transition 使用 `(revision_id, memory_id, owner_id)` 复合外键，避免跨 owner 或跨 memory 拼接来源链。
 
 ## 5. Audit
 
@@ -125,11 +135,18 @@ candidate ──批准──> approved ──撤销──> revoked
 
 Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装该 sink，`writeEnabled` 仍为 false。只有 migration 独立审阅、持久化审计接通并获得生产授权后，才有资格讨论开启写入。
 
+### Mutation idempotency
+
+- `memory_mutation_idempotency` 的唯一约束是 `(owner_id, actor, operation, request_id)`。
+- 插入时必须提供规范化 JSONB request material；数据库触发器计算 SHA-256 `request_hash`，覆盖任何客户端 hash，并在落库前清除原始 request material。
+- `memory_claim_idempotency()` 对同 request id + 同 hash 返回原声明及 resource；同 request id + 不同 hash 以唯一冲突失败。
+- 幂等行身份/hash 不可修改，只允许 `started → completed`。完整 mutation 事务调用留给 Phase 3。
+
 ## 6. 两层权限防线
 
 ### 数据库层
 
-- 八张新表全部启用 RLS；`anon` 无权限，`authenticated` 只能读取自己的 owner 行。
+- 九张新表全部启用 RLS；`anon` 无权限，`authenticated` 只能读取自己的 owner 行，并且不能读取内部 idempotency 表。
 - 普通登录用户没有正文写权限。
 - 触发器约束空间/创建 actor、Legacy 来源、Shared 初始状态、审批人与修订理由。
 - 六个只授予 `service_role` 的固定 RPC 是 GPT/Claude 的数据库读门：`memory_get_*`、`memory_list_*`、`memory_recall_*`。函数名固定 actor，参数不接受 actor/space/namespace。
@@ -174,7 +191,13 @@ Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装
 - GPT 固定 RPC 不返回 Claude；Claude 固定 RPC 不返回 GPT
 - 双方读取 approved Shared
 - candidate Shared 不可读取；直接 approved 创建失败
+- candidate 固定 private revision；错误 revision 绑定失败；源记忆更新后 candidate 不漂移
+- candidate/approved Shared 正文不可修改，Shared 永远只有 revision 1
+- 仅 Owner 可 approve/reject/revoke；非法状态边全部失败
+- 数据库计算 revision/request hash，不信任客户端 hash
+- 幂等同请求安全重放、不同 payload 冲突、原始 request material 不落库
 - Legacy Pending 来源字段强制完整，且不进入日常读取
+- Legacy 专属关键词返回 0；高 importance Legacy 不影响允许结果的数量和排序
 - actor 名称作为 tag 被拒绝
 - 静默正文覆盖失败；合法修订可追溯
 - Shared candidate/approved transition 可追溯
@@ -184,7 +207,7 @@ Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装
 - service role 绕过 RLS 的已知事实 + 固定 RPC 的第二道过滤
 - Bridge owner 缺失 fail closed、scope 伪造失败、MCP actor/space 伪造失败
 
-零付费数据库验证已通过：[GitHub Actions run 31274614880](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31274614880)。结果：fresh install、SQL 权限/隔离测试、`supabase db lint`、显式 rollback、对象清空检查、re-apply 与第二次 SQL 测试全部成功；临时容器随后正常停止并删除。唯一 annotation 是所用第三方 Actions 的 Node 20 元数据被 GitHub runner 强制以 Node 24 运行，不影响 migration 或测试结论。
+第一版零付费数据库验证曾通过 [run 31274614880](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31274614880)。本次工程审阅修订必须在同一免费流程重新完成 fresh install、SQL 测试、lint、rollback、re-apply 与复测，最终 run 在二轮审阅报告中记录。
 
 ## 9. Rollback
 
