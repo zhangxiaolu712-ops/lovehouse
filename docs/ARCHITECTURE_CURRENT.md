@@ -50,12 +50,12 @@ VPS (139.180.146.26)
 
 | 表 | 行数 | RLS | 前端模块 | Bridge/MCP | 说明 |
 |----|------|-----|----------|------------|------|
-| **brain** | 343 | on | brainService.js | save_memory, recall, get_starter_pack | 统一记忆中枢（记事/记感受/观点/语录/日记/暗号） |
+| **brain** | 343 | on | brainService.js | 第一阶段后不再由 MCP 直连 | 现有漪记忆结构与未来 Legacy Pending 来源 |
 | **livingroom** | 29 | **off** | LivingroomPage.jsx | read/send/context MCP tools | 三人小客厅（小婷/CC/GPT） |
 | **diary** | 60 | on | diaryService.js | get_starter_pack | 日记（部分已迁入 brain） |
 | **notes** | 96 | on | notesService.js | get_starter_pack | 小纸条留言板 |
 | **quotes** | 84 | on | quotesService.js | — | 语录墙 |
-| **memories** | 21 | on | memoryService.js | — | 旧记忆碎片（已被 brain 替代） |
+| **memories** | 21 | on | memoryService.js | 第一阶段后不再由 MCP 直连 | 旧记忆碎片与未来 Legacy Pending 来源 |
 | **todo** | 5 | on | todoService.js | — | 待办事项 |
 | **mood_log** | — | on | moodService.js | — | 心情日志 |
 | **stream** | 24 | on | streamService.js | — | 私密记录（毛玻璃模糊） |
@@ -215,12 +215,12 @@ brain 是整个记忆系统的核心，字段最多：
 | read_livingroom_messages | 读小客厅消息 |
 | send_livingroom_message | 发消息（sender 按通道固定） |
 | get_livingroom_context | 纯文本上下文 |
-| get_starter_pack | 开场加载（日记+修订+纸条+将忘记忆） |
-| save_memory | 存记忆到 brain |
-| recall | 搜索 + 唤醒记忆 |
-| load_memories | 按 level/category 加载记忆库（memories 表） |
-| search_memories | 关键词搜索记忆库 |
-| save_to_memories | 写入新记忆到记忆库（校验 8 大类） |
+| get_starter_pack | 通过统一 MemoryService 加载自己的私有记忆 + approved Shared |
+| save_memory | 通过固定 actor 写入自己的私有空间 |
+| recall | 通过 AccessPolicy 检索自己的私有空间 + approved Shared |
+| load_memories | 兼容旧工具名，转调统一 MemoryService，不再直连 memories |
+| search_memories | 兼容旧工具名，转调统一 recall |
+| save_to_memories | 兼容旧工具名，转调统一 write |
 
 ---
 
@@ -273,14 +273,44 @@ brain 是整个记忆系统的核心，字段最多：
 4. GPT 定时任务对接（通过受限 MCP 调用 dream_worker）
 5. 前 7 天仅 review-run，禁止自动写入 brain
 
-### 12.1 MEMORY-NAMESPACE-V1（本地迁移草稿，未应用生产）
+### 12.1 统一 Memory System 第一阶段（本分支代码，未部署）
 
-- 新增 `memory_spaces`，以一套记忆引擎承载 `claude`、`gpt`、`shared` 三个隔离空间；不复制三套数据库表。
-- 每个 AI 空间可保存显示名、自我描述、说话方式、记忆策略和扩展档案；`shared` 用于经小婷确认可共同读取的内容。
-- `brain`、旧 `memories` 及四张 Dreaming 表统一增加 `space_key` 外键和索引。
-- 现有数据先归入 `shared`，避免依据旧 `author`/`speaker` 自动误判归属；后续迁移需单独审计。
-- 现有 Bridge 工具在升级前仍写入默认 `shared`；真正的 AI 隔离还需要受限 MCP 强制过滤 `space_key`。
-- migration 会检查 P0 owner-only RLS 是否已落地；当前生产库仍有 Dreaming `allow_all`，因此直接应用会安全失败并整体回滚。
+```text
+GPT SSE MCP ───── actor=gpt ────┐
+                                ├→ AccessPolicy → MemoryService → MemoryRepository → Supabase
+Claude HTTP MCP ─ actor=claude ─┘
+
+MemoryService 管理同一套规则
+├── GPT Memory
+├── Claude Memory
+├── Shared Memory（approved 才可读取）
+└── Legacy Pending（禁止日常 recall）
+```
+
+代码分层：
+
+| 层 | 文件 | 职责 |
+|----|------|------|
+| MCP Channel | `bridge/mcp/channel.js` | 在认证后的 GPT/Claude 路由上用服务端常量闭包固定 actor；不信任 body/query/header/tool args 的身份字段 |
+| MCP Adapter | `bridge/mcp/tools.js` | 保留 CC 的 9 个工具名，固定 actor；没有 namespace 参数 |
+| AccessPolicy | `bridge/memory/accessPolicy.js` | 权限矩阵、Shared approval、Legacy 隔离、伪造 space 拒绝 |
+| MemoryService | `bridge/memory/service.js` | 统一写入/读取/检索与结构标准化；二次过滤 Repository 返回值 |
+| MemoryRepository | `bridge/memory/repository.js` | 唯一未来规范表 `memory_entries` 的 Supabase REST 合约 |
+| Runtime Gate | `bridge/memory/runtimeRepository.js` | `MEMORY_SYSTEM_ENABLED=false` 时四种仓储操作 fail closed，禁止回退旧表 |
+| OAuth/Bridge | `bridge/oauth.js`, `bridge/server.js`, `bridge/security.js` | 选择性复用 CC 的 OAuth/PKCE/签名令牌、GPT SSE、Claude HTTP、小客厅 |
+
+权限矩阵：
+
+| Actor | 自己私有空间 | 对方私有空间 | approved Shared | pending/revoked Shared | Legacy Pending |
+|-------|--------------|--------------|-----------------|------------------------|----------------|
+| GPT | 读写 | 拒绝 | 只读 | 拒绝 | 拒绝 |
+| Claude | 读写 | 拒绝 | 只读 | 拒绝 | 拒绝 |
+
+结构迁移与历史正文迁移完全分离：新系统继承 memory type、tag、emotion、importance、decay、source、revision 等结构能力，但本阶段没有建表、没有复制正文。未来迁移必须保留 `original_table`、`original_id`、`original_created_at`、`legacy_source` 及旧的 `author/source_model` 等追溯信息；全部旧正文先进入 Legacy Pending，禁止默认 Shared 或根据语义猜归属。
+
+已合并但未执行的 `20260808174047_memory_namespace_v1.sql` 仍包含旧数据默认 Shared 的草稿逻辑，与最终确认版冲突，禁止直接应用。下一阶段应建立唯一规范表并修订迁移；生产 RLS/public exposure 的 P0 修复继续独立 PR，不与本重构混合。
+
+第一阶段 Shared 对 GPT/Claude 均为只读；普通 MCP 写入只能进入 actor 自己的私有空间。`NullMemoryAuditSink` 与 `InMemoryAuditSink` 均不是持久化审计，`MemoryService` 要求 `writeEnabled=true` 且 `auditSink.persistent=true` 才允许写入；当前 Bridge 明确使用 `writeEnabled=false`。因此 append-only 审计持久化上线并完成审阅前，生产记忆写入保持关闭。
 
 ---
 
@@ -299,5 +329,6 @@ brain 是整个记忆系统的核心，字段最多：
 | OAUTH_BASE_URL | VPS pm2 env | OAuth issuer base URL |
 | OAUTH_TOKEN_SECRET | VPS pm2 env | 签发 MCP 短期访问令牌的随机密钥（至少 32 字符，不入 git） |
 | MCP_RESOURCE_URL | VPS pm2 env | MCP 对外资源地址；使用 Cloudflare 代理时填写代理后的完整地址 |
+| MEMORY_SYSTEM_ENABLED | VPS pm2 env | 默认 false；仅在 `memory_entries` migration 已应用且权限测试通过后才能设为 true |
 
-> 上述新增 Bridge 变量目前只在修复分支代码中生效，生产 VPS 尚未配置。
+> 上述新增 Bridge 变量目前只在分支代码中生效，生产 VPS尚未配置。本阶段没有修改任何生产环境变量；Memory System 默认 fail closed。

@@ -1,51 +1,344 @@
-import express from 'express'
-import cors from 'cors'
+import crypto from 'crypto'
 import { spawn } from 'child_process'
+import cors from 'cors'
+import express from 'express'
+
+import { installClaudeOAuth } from './oauth.js'
+import {
+  createSupabaseRest,
+  createRuntimeMemoryRepository,
+  MEMORY_ACTORS,
+  MemoryService,
+  SupabaseMemoryRepository,
+} from './memory/index.js'
+import { createMcpChannel } from './mcp/channel.js'
+import { safeEqual } from './security.js'
 
 const app = express()
-app.use(cors())
-app.use(express.json())
+app.disable('x-powered-by')
+app.set('trust proxy', 'loopback')
 
+const corsMiddleware = cors()
+app.use((req, res, next) => {
+  if (req.path === '/oauth/authorize') return next()
+  return corsMiddleware(req, res, next)
+})
+app.use(express.json({ limit: '1mb' }))
+app.use(express.urlencoded({ extended: false }))
+app.use('/oauth/authorize', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  next()
+})
+app.use(['/oauth/token', '/oauth/register'], (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  next()
+})
+
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://cvyguanuaxcypsvoozeo.supabase.co'
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || ''
+const SUPABASE_SERVER_KEY = process.env.SUPABASE_SECRET_KEY
+  || process.env.SUPABASE_SERVICE_ROLE_KEY
+  || ''
+const OWNER_USER_ID = process.env.OWNER_USER_ID || ''
+const LIVINGROOM_KEY = process.env.LIVINGROOM_KEY || ''
+const OAUTH_BASE = process.env.OAUTH_BASE_URL || 'https://tingtunehouse.duckdns.org'
+const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
+const MCP_BASE = process.env.MCP_BASE_URL || `${OAUTH_BASE}/api`
+const MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
+const MEMORY_SYSTEM_ENABLED = process.env.MEMORY_SYSTEM_ENABLED === 'true'
 const SYSTEM_PROMPT = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
 
-app.post('/chat', (req, res) => {
-  const { message, system } = req.body
-  if (!message) return res.status(400).json({ error: 'message required' })
+const rateMap = new Map()
+function checkRate(id, maximum = 30, windowMs = 60_000) {
+  const now = Date.now()
+  const bucket = rateMap.get(id) || []
+  const active = bucket.filter(timestamp => now - timestamp < windowMs)
+  if (active.length >= maximum) return false
+  active.push(now)
+  rateMap.set(id, active)
+  return true
+}
+const rateCleanup = setInterval(() => {
+  const cutoff = Date.now() - 60 * 60_000
+  for (const [key, timestamps] of rateMap) {
+    if (!timestamps.length || timestamps.at(-1) < cutoff) rateMap.delete(key)
+  }
+}, 5 * 60_000)
+rateCleanup.unref?.()
 
+async function verifyOwnerToken(token) {
+  if (!OWNER_USER_ID || !SUPABASE_ANON_KEY) throw new Error('owner authentication is not configured')
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+  })
+  if (!response.ok) return null
+  const user = await response.json()
+  return user.id === OWNER_USER_ID ? user : null
+}
+
+async function verifyOwnerBearer(req, res, next) {
+  const auth = req.headers.authorization
+  if (!auth?.startsWith('Bearer ')) return res.status(401).json({ error: 'authorization required' })
+  try {
+    const user = await verifyOwnerToken(auth.slice(7))
+    if (!user) return res.status(401).json({ error: 'invalid token' })
+    if (!checkRate(user.id)) return res.status(429).json({ error: 'too many requests' })
+    req.userId = user.id
+    return next()
+  } catch (error) {
+    console.error('[auth error]', error.message)
+    return res.status(500).json({ error: 'auth check failed' })
+  }
+}
+
+function verifyLivingroom(req, res, next) {
+  const apiKey = req.headers['x-api-key']
+  if (apiKey && LIVINGROOM_KEY && safeEqual(apiKey, LIVINGROOM_KEY)) {
+    if (!checkRate('livingroom-api-key')) return res.status(429).json({ error: 'too many requests' })
+    req.sender = 'GPT'
+    return next()
+  }
+  const auth = req.headers.authorization
+  if (!auth?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'authorization required (Bearer token or X-API-Key)' })
+  }
+  return verifyOwnerToken(auth.slice(7))
+    .then(user => {
+      if (!user) return res.status(401).json({ error: 'invalid token' })
+      if (!checkRate(user.id)) return res.status(429).json({ error: 'too many requests' })
+      req.sender = '小婷'
+      return next()
+    })
+    .catch(error => {
+      console.error('[auth error]', error.message)
+      return res.status(500).json({ error: 'auth check failed' })
+    })
+}
+
+const supabaseRest = createSupabaseRest({
+  url: SUPABASE_URL,
+  serverKey: SUPABASE_SERVER_KEY,
+})
+const canonicalMemoryRepository = new SupabaseMemoryRepository({ rest: supabaseRest })
+// Fail closed until the future memory_entries migration has been reviewed and
+// applied. This prevents an accidental Bridge deploy from falling back to the
+// old brain/memories tables or silently treating legacy content as Shared.
+const memoryRepository = createRuntimeMemoryRepository({
+  enabled: MEMORY_SYSTEM_ENABLED,
+  canonicalRepository: canonicalMemoryRepository,
+})
+// Writes stay disabled until an append-only persistent audit sink exists.
+const memoryService = new MemoryService({
+  repository: memoryRepository,
+  writeEnabled: false,
+})
+
+app.post('/chat', verifyOwnerBearer, (req, res) => {
+  if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
+    return res.status(400).json({ error: 'message required' })
+  }
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
 
-  const args = ['-p', message, '--output-format', 'text',
-    '--system-prompt', system || SYSTEM_PROMPT]
-
-  const claude = spawn('claude', args)
-
+  const claude = spawn('/usr/bin/claude', [
+    '-p', req.body.message,
+    '--output-format', 'text',
+    '--system-prompt', req.body.system || SYSTEM_PROMPT,
+  ])
   claude.stdout.on('data', chunk => {
     res.write(`data: ${JSON.stringify({ text: chunk.toString() })}\n\n`)
   })
-
-  claude.stderr.on('data', chunk => {
-    console.error('[claude stderr]', chunk.toString())
-  })
-
+  claude.stderr.on('data', chunk => console.error('[claude stderr]', chunk.toString()))
   claude.on('close', code => {
-    if (code !== 0) {
-      res.write(`data: ${JSON.stringify({ error: `claude exited ${code}` })}\n\n`)
-    }
+    if (code !== 0) res.write(`data: ${JSON.stringify({ error: `claude exited ${code}` })}\n\n`)
     res.write('data: [DONE]\n\n')
     res.end()
   })
-
-  req.on('close', () => claude.kill())
+  res.on('close', () => claude.kill())
 })
 
-app.post('/reset', (_req, res) => {
-  res.json({ ok: true })
+app.post('/reset', verifyOwnerBearer, (_req, res) => res.json({ ok: true }))
+
+app.get('/livingroom', verifyLivingroom, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 200)
+    let path = `livingroom?order=created_at.desc&limit=${limit}`
+    if (req.query.since) {
+      const since = new Date(req.query.since)
+      if (Number.isNaN(since.valueOf())) return res.status(400).json({ error: 'invalid since timestamp' })
+      path += `&created_at=gt.${encodeURIComponent(since.toISOString())}`
+    }
+    const rows = await supabaseRest('GET', path)
+    return res.json((rows || []).reverse())
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
 })
+
+app.post('/livingroom', verifyLivingroom, async (req, res) => {
+  try {
+    if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
+      return res.status(400).json({ error: 'message required' })
+    }
+    if (req.body.message.length > 10_000) return res.status(400).json({ error: 'message is too long' })
+    const rows = await supabaseRest('POST', 'livingroom', {
+      sender: req.sender,
+      message: req.body.message.trim(),
+    })
+    return res.json(rows?.[0] || { ok: true })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 1), 100)
+    const rows = await supabaseRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
+    const context = (rows || []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
+    return res.json({ context, count: rows?.length || 0 })
+  } catch (error) {
+    return res.status(500).json({ error: error.message })
+  }
+})
+
+function mcpResult(id, result) {
+  return { jsonrpc: '2.0', id, result }
+}
+
+async function handleMcpMessage(message, { tools, callTool, serverName }) {
+  if (message.method === 'initialize') {
+    return mcpResult(message.id, {
+      protocolVersion: '2024-11-05',
+      capabilities: { tools: {} },
+      serverInfo: { name: serverName, version: '3.0.0-foundation' },
+    })
+  }
+  if (message.method === 'notifications/initialized') return null
+  if (message.method === 'tools/list') return mcpResult(message.id, { tools })
+  if (message.method === 'tools/call') {
+    const text = await callTool(message.params?.name, message.params?.arguments || {})
+    return mcpResult(message.id, { content: [{ type: 'text', text }] })
+  }
+  if (message.method === 'ping') return mcpResult(message.id, {})
+  return {
+    jsonrpc: '2.0',
+    id: message.id,
+    error: { code: -32601, message: `method not found: ${message.method}` },
+  }
+}
+
+const gptChannel = createMcpChannel({
+  actor: MEMORY_ACTORS.GPT,
+  memoryService,
+  livingroomRest: supabaseRest,
+})
+const claudeChannel = createMcpChannel({
+  actor: MEMORY_ACTORS.CLAUDE,
+  memoryService,
+  livingroomRest: supabaseRest,
+})
+
+const gptSessions = new Map()
+function verifyMcpKey(req) {
+  const key = req.query.key || req.headers['x-api-key'] || ''
+  return Boolean(key && LIVINGROOM_KEY && safeEqual(key, LIVINGROOM_KEY))
+}
+
+app.get('/mcp/sse', (req, res) => {
+  if (!verifyMcpKey(req)) return res.status(401).json({ error: 'unauthorized' })
+  const clientId = `mcp_${crypto.randomBytes(24).toString('base64url')}`
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  gptSessions.set(clientId, res)
+  res.write(`event: endpoint\ndata: ${MCP_BASE}/mcp/message?clientId=${clientId}\n\n`)
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 30_000)
+  res.on('close', () => {
+    clearInterval(keepAlive)
+    gptSessions.delete(clientId)
+  })
+})
+
+app.post('/mcp/message', async (req, res) => {
+  const stream = gptSessions.get(req.query.clientId)
+  if (!stream) {
+    return res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'unknown or expired client session' } })
+  }
+  if (!checkRate(`gpt-mcp:${req.query.clientId}`)) return res.status(429).json({ error: 'too many requests' })
+  try {
+    const response = await handleMcpMessage(req.body, {
+      tools: gptChannel.tools,
+      callTool: gptChannel.callTool,
+      serverName: 'lovehouse-gpt-mcp',
+    })
+    if (response) stream.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`)
+    return res.status(202).end()
+  } catch (error) {
+    stream.write(`event: message\ndata: ${JSON.stringify({
+      jsonrpc: '2.0',
+      id: req.body?.id,
+      error: { code: -32000, message: error.message },
+    })}\n\n`)
+    return res.status(202).end()
+  }
+})
+
+const verifyClaudeOAuth = installClaudeOAuth(app, {
+  oauthBase: OAUTH_BASE,
+  resource: MCP_RESOURCE,
+  supabaseUrl: SUPABASE_URL,
+  supabaseAnonKey: SUPABASE_ANON_KEY,
+  ownerUserId: OWNER_USER_ID,
+  tokenSecret: OAUTH_TOKEN_SECRET,
+  checkRate,
+})
+
+app.post('/mcp/claude', verifyClaudeOAuth, async (req, res) => {
+  if (!req.body?.jsonrpc) {
+    return res.status(400).json({ jsonrpc: '2.0', error: { code: -32700, message: 'invalid JSON-RPC' } })
+  }
+  try {
+    const response = await handleMcpMessage(req.body, {
+      tools: claudeChannel.tools,
+      callTool: claudeChannel.callTool,
+      serverName: 'lovehouse-claude-mcp',
+    })
+    return response ? res.json(response) : res.status(204).end()
+  } catch (error) {
+    return res.json({
+      jsonrpc: '2.0',
+      id: req.body.id,
+      error: { code: -32000, message: error.message },
+    })
+  }
+})
+
+app.get('/mcp/claude', verifyClaudeOAuth, (_req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 30_000)
+  res.on('close', () => clearInterval(keepAlive))
+})
+app.delete('/mcp/claude', verifyClaudeOAuth, (_req, res) => res.status(204).end())
 
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' })
+  res.json({
+    status: 'ok',
+    memory_system: 'foundation',
+    memory_system_enabled: MEMORY_SYSTEM_ENABLED,
+    memory_writes_enabled: memoryService.writeEnabled,
+    database_migration: MEMORY_SYSTEM_ENABLED ? 'expected' : 'not_applied',
+  })
 })
 
 app.listen(3000, '0.0.0.0', () => {
