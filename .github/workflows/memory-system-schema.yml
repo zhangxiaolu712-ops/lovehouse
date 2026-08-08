@@ -5,6 +5,7 @@ on:
     paths:
       - "bridge/memory/**"
       - "supabase/migrations/20260808191311_create_unified_memory_system_v2.sql"
+      - "supabase/retired_migrations/20260808174047_memory_namespace_v1.sql"
       - "supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql"
       - "supabase/tests/memory_system_phase2.sql"
       - ".github/workflows/memory-system-schema.yml"
@@ -25,6 +26,14 @@ jobs:
         uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1
         with:
           version: 2.113.0
+
+      - name: Assert legacy V1 is retired and fail closed
+        shell: bash
+        run: |
+          test ! -e supabase/migrations/20260808174047_memory_namespace_v1.sql
+          test -f supabase/retired_migrations/20260808174047_memory_namespace_v1.sql
+          grep -q "MEMORY-NAMESPACE-V1 is retired" \
+            supabase/retired_migrations/20260808174047_memory_namespace_v1.sql
 
       - name: Prepare an isolated local Supabase project
         shell: bash

@@ -160,6 +160,13 @@ for (const attemptedKey of [
   'space',
   'actor',
   'created_by_actor',
+  'owner_id',
+  'permissions',
+  'revision_id',
+  'revision_hash',
+  'source_revision_id',
+  'source_revision_hash',
+  'request_hash',
   'shared_status',
   'approval_status',
 ]) {

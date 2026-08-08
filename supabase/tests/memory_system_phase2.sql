@@ -9,6 +9,14 @@ values
 on conflict (id) do nothing;
 
 do $$
+begin
+  if pg_catalog.to_regclass('public.memory_spaces') is not null then
+    raise exception 'Retired V1 namespace objects leaked into the V2 install';
+  end if;
+end;
+$$;
+
+do $$
 declare
   gpt_id bigint;
   claude_id bigint;
@@ -27,6 +35,10 @@ declare
   database_hash text;
   rejected boolean;
 begin
+  perform pg_catalog.set_config(
+    'request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true
+  );
+
   insert into public.memory_entries (
     owner_id, space_key, memory_type, tags, content, emotion, importance,
     retention, author, source_type, source_model, source_ref,
@@ -73,24 +85,22 @@ begin
       shared_status, source_memory_id, source_revision_id
     ) values (
       '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
-      'test:shared:direct-approved', 'curator', 'approved', gpt_id, gpt_revision_1
+      'test:shared:direct-candidate', 'curator', 'candidate', gpt_id, gpt_revision_1
     );
-  exception when check_violation then
+  exception when insufficient_privilege then
     rejected := true;
   end;
   if not rejected then
-    raise exception 'Direct approved Shared insert was not rejected';
+    raise exception 'Direct Shared candidate insert bypassed the trusted Curator RPC';
   end if;
 
   rejected := false;
   begin
-    insert into public.memory_entries (
-      owner_id, space_key, source_type, source_ref, created_by_actor,
-      shared_status, source_memory_id, source_revision_id
-    ) values (
-      '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
-      'test:shared:mismatched-revision', 'curator', 'candidate',
-      gpt_id, claude_revision_1
+    perform public.memory_curator_create_shared_candidate(
+      '10000000-0000-0000-0000-000000000001',
+      gpt_id,
+      claude_revision_1,
+      'Mismatched revision must fail'
     );
   exception when check_violation then
     rejected := true;
@@ -132,45 +142,29 @@ begin
     raise exception 'Legacy source constraint did not fail closed';
   end if;
 
-  -- Client-provided candidate body and source hash are deliberately wrong.
-  -- The database must replace them with the exact selected private revision.
-  insert into public.memory_entries (
-    owner_id, space_key, memory_type, tags, content, source_type,
-    source_model, source_ref, source_memory_id, source_revision_id,
-    source_revision_hash, shared_status, created_by_actor
-  ) values (
-    '10000000-0000-0000-0000-000000000001', 'shared', 'article',
-    array['client-forged'], 'Client-forged candidate body',
-    'curation', 'curator', 'test:shared:approved', gpt_id, gpt_revision_1,
-    repeat('f', 64), 'candidate', 'curator'
-  ) returning id into shared_id;
+  select id into shared_id
+  from public.memory_curator_create_shared_candidate(
+    '10000000-0000-0000-0000-000000000001', gpt_id, gpt_revision_1,
+    'Candidate that the Owner will approve'
+  );
 
-  insert into public.memory_entries (
-    owner_id, space_key, source_type, source_model, source_ref,
-    source_memory_id, source_revision_id, shared_status, created_by_actor
-  ) values (
-    '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
-    'curator', 'test:shared:unapproved', claude_id, claude_revision_1,
-    'candidate', 'curator'
-  ) returning id into unapproved_shared_id;
+  select id into unapproved_shared_id
+  from public.memory_curator_create_shared_candidate(
+    '10000000-0000-0000-0000-000000000001', claude_id, claude_revision_1,
+    'Candidate that remains unapproved'
+  );
 
-  insert into public.memory_entries (
-    owner_id, space_key, source_type, source_model, source_ref,
-    source_memory_id, source_revision_id, shared_status, created_by_actor
-  ) values (
-    '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
-    'curator', 'test:shared:rejected', claude_id, claude_revision_1,
-    'candidate', 'curator'
-  ) returning id into rejected_shared_id;
+  select id into rejected_shared_id
+  from public.memory_curator_create_shared_candidate(
+    '10000000-0000-0000-0000-000000000001', claude_id, claude_revision_1,
+    'Candidate that the Owner will reject'
+  );
 
-  insert into public.memory_entries (
-    owner_id, space_key, source_type, source_model, source_ref,
-    source_memory_id, source_revision_id, shared_status, created_by_actor
-  ) values (
-    '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
-    'curator', 'test:shared:revoked', gpt_id, gpt_revision_1,
-    'candidate', 'curator'
-  ) returning id into revoked_shared_id;
+  select id into revoked_shared_id
+  from public.memory_curator_create_shared_candidate(
+    '10000000-0000-0000-0000-000000000001', gpt_id, gpt_revision_1,
+    'Candidate that the Owner will later revoke'
+  );
 
   if not exists (
     select 1 from public.memory_entries
@@ -179,7 +173,7 @@ begin
       and memory_type = 'feeling'
       and tags = array['relationship', 'rose']
       and source_revision_hash = gpt_revision_1_hash
-      and source_revision_hash <> repeat('f', 64)
+      and created_by_actor = 'curator'
   ) then
     raise exception 'Shared candidate was not snapshotted from the selected revision';
   end if;
@@ -189,7 +183,7 @@ begin
     update public.memory_entries
       set content = 'Candidate body must be immutable'
       where id = unapproved_shared_id;
-  exception when object_not_in_prerequisite_state then
+  exception when insufficient_privilege or object_not_in_prerequisite_state then
     rejected := true;
   end;
   if not rejected then
@@ -269,10 +263,40 @@ begin
   rejected := false;
   begin
     update public.memory_entries
-      set shared_status = 'revoked',
+      set shared_status = 'approved',
           updated_by_actor = 'owner',
-          revision_reason = 'Candidate cannot jump to revoked'
+          revision_reason = 'Forged Owner field without trusted RPC'
       where id = unapproved_shared_id;
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Direct UPDATE forged the Owner authority';
+  end if;
+
+  perform pg_catalog.set_config(
+    'request.jwt.claim.sub', '20000000-0000-0000-0000-000000000002', true
+  );
+  rejected := false;
+  begin
+    perform public.memory_owner_transition_shared(
+      unapproved_shared_id, 'approved', 'Other owner must not approve'
+    );
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  perform pg_catalog.set_config(
+    'request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true
+  );
+  if not rejected then
+    raise exception 'A different authenticated Owner crossed owner isolation';
+  end if;
+
+  rejected := false;
+  begin
+    perform public.memory_owner_transition_shared(
+      unapproved_shared_id, 'revoked', 'Candidate cannot jump to revoked'
+    );
   exception when check_violation then
     rejected := true;
   end;
@@ -280,19 +304,15 @@ begin
     raise exception 'candidate -> revoked was accepted';
   end if;
 
-  update public.memory_entries
-    set shared_status = 'rejected',
-        updated_by_actor = 'owner',
-        revision_reason = 'Owner rejected this candidate'
-    where id = rejected_shared_id;
+  perform public.memory_owner_transition_shared(
+    rejected_shared_id, 'rejected', 'Owner rejected this candidate'
+  );
 
   rejected := false;
   begin
-    update public.memory_entries
-      set shared_status = 'approved',
-          updated_by_actor = 'owner',
-          revision_reason = 'Rejected cannot be reopened'
-      where id = rejected_shared_id;
+    perform public.memory_owner_transition_shared(
+      rejected_shared_id, 'approved', 'Rejected cannot be reopened'
+    );
   exception when check_violation then
     rejected := true;
   end;
@@ -302,11 +322,9 @@ begin
 
   rejected := false;
   begin
-    update public.memory_entries
-      set shared_status = 'candidate',
-          updated_by_actor = 'owner',
-          revision_reason = 'Rejected cannot return to candidate'
-      where id = rejected_shared_id;
+    perform public.memory_owner_transition_shared(
+      rejected_shared_id, 'candidate', 'Rejected cannot return to candidate'
+    );
   exception when check_violation then
     rejected := true;
   end;
@@ -314,24 +332,18 @@ begin
     raise exception 'rejected -> candidate was accepted';
   end if;
 
-  update public.memory_entries
-    set shared_status = 'approved',
-        updated_by_actor = 'owner',
-        revision_reason = 'Owner approved revocation test'
-    where id = revoked_shared_id;
-  update public.memory_entries
-    set shared_status = 'revoked',
-        updated_by_actor = 'owner',
-        revision_reason = 'Owner revoked this approved snapshot'
-    where id = revoked_shared_id;
+  perform public.memory_owner_transition_shared(
+    revoked_shared_id, 'approved', 'Owner approved revocation test'
+  );
+  perform public.memory_owner_transition_shared(
+    revoked_shared_id, 'revoked', 'Owner revoked this approved snapshot'
+  );
 
   rejected := false;
   begin
-    update public.memory_entries
-      set shared_status = 'approved',
-          updated_by_actor = 'owner',
-          revision_reason = 'Revoked cannot be restored'
-      where id = revoked_shared_id;
+    perform public.memory_owner_transition_shared(
+      revoked_shared_id, 'approved', 'Revoked cannot be restored'
+    );
   exception when check_violation then
     rejected := true;
   end;
@@ -339,11 +351,9 @@ begin
     raise exception 'revoked -> approved was accepted';
   end if;
 
-  update public.memory_entries
-    set shared_status = 'approved',
-        updated_by_actor = 'owner',
-        revision_reason = 'Owner approved exact GPT revision 1'
-    where id = shared_id;
+  perform public.memory_owner_transition_shared(
+    shared_id, 'approved', 'Owner approved exact GPT revision 1'
+  );
 
   rejected := false;
   begin
@@ -385,7 +395,7 @@ begin
           updated_by_actor = 'owner',
           revision_reason = 'Attempted Shared overwrite'
       where id = shared_id;
-  exception when object_not_in_prerequisite_state then
+  exception when insufficient_privilege or object_not_in_prerequisite_state then
     rejected := true;
   end;
   if not rejected then
@@ -588,6 +598,39 @@ begin
   if has_table_privilege('authenticated', 'public.memory_mutation_idempotency', 'SELECT') then
     raise exception 'Authenticated role can read internal idempotency claims';
   end if;
+  if not has_function_privilege(
+    'service_role',
+    'public.memory_curator_create_shared_candidate(uuid,bigint,bigint,text)',
+    'EXECUTE'
+  ) or has_function_privilege(
+    'authenticated',
+    'public.memory_curator_create_shared_candidate(uuid,bigint,bigint,text)',
+    'EXECUTE'
+  ) then
+    raise exception 'Curator RPC privilege boundary is incorrect';
+  end if;
+  if not has_function_privilege(
+    'authenticated',
+    'public.memory_owner_transition_shared(bigint,text,text)',
+    'EXECUTE'
+  ) or has_function_privilege(
+    'service_role',
+    'public.memory_owner_transition_shared(bigint,text,text)',
+    'EXECUTE'
+  ) then
+    raise exception 'Owner RPC privilege boundary is incorrect';
+  end if;
+  if has_function_privilege(
+    'anon',
+    'public.memory_owner_transition_shared(bigint,text,text)',
+    'EXECUTE'
+  ) or has_function_privilege(
+    'anon',
+    'public.memory_curator_create_shared_candidate(uuid,bigint,bigint,text)',
+    'EXECUTE'
+  ) then
+    raise exception 'Anonymous role can reach a trusted authority RPC';
+  end if;
 
   rejected := false;
   begin
@@ -615,6 +658,7 @@ select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001
 do $$
 declare
   rejected boolean := false;
+  candidate_id bigint;
 begin
   if (select count(*) from public.memory_entries) <> 7 then
     raise exception 'Owner RLS did not return all owner test memories';
@@ -630,6 +674,15 @@ begin
   if not rejected then
     raise exception 'Authenticated client could call the internal idempotency function';
   end if;
+
+  select id into strict candidate_id
+  from public.memory_entries
+  where space_key = 'shared' and shared_status = 'candidate'
+  order by id
+  limit 1;
+  perform public.memory_owner_transition_shared(
+    candidate_id, 'rejected', 'Authenticated Owner rejected the remaining candidate'
+  );
 end;
 $$;
 reset role;
@@ -642,14 +695,24 @@ declare
   legacy_id bigint;
   shared_id bigint;
   unapproved_shared_id bigint;
+  curator_candidate_id bigint;
+  history_probe_id bigint;
+  history_probe_revision bigint;
   gpt_results bigint[];
   claude_results bigint[];
+  rejected boolean;
 begin
   select id into strict gpt_id from public.memory_entries where source_ref = 'test:gpt:1';
   select id into strict claude_id from public.memory_entries where source_ref = 'test:claude:1';
   select id into strict legacy_id from public.memory_entries where source_ref = 'test:legacy:1';
-  select id into strict shared_id from public.memory_entries where source_ref = 'test:shared:approved';
-  select id into strict unapproved_shared_id from public.memory_entries where source_ref = 'test:shared:unapproved';
+  select id into strict shared_id
+  from public.memory_entries
+  where source_memory_id = gpt_id and shared_status = 'approved';
+  select id into strict unapproved_shared_id
+  from public.memory_entries
+  where source_memory_id = claude_id and shared_status <> 'approved'
+  order by id
+  limit 1;
 
   if (select count(*) from public.memory_entries) <> 7 then
     raise exception 'Service role bypass expectation changed; application filtering assumptions need review';
@@ -702,6 +765,92 @@ begin
     '10000000-0000-0000-0000-000000000001', legacy_id
   )) then
     raise exception 'Legacy Pending escaped into ordinary get';
+  end if;
+
+  rejected := false;
+  begin
+    perform public.memory_owner_transition_shared(
+      unapproved_shared_id, 'approved', 'Service role must not impersonate Owner'
+    );
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Service role reached the authenticated Owner RPC';
+  end if;
+
+  rejected := false;
+  begin
+    insert into public.memory_entries (
+      owner_id, space_key, source_type, created_by_actor, shared_status,
+      source_memory_id, source_revision_id
+    ) values (
+      '10000000-0000-0000-0000-000000000001', 'shared', 'curation',
+      'curator', 'candidate', gpt_id,
+      (select id from public.memory_revisions
+       where memory_id = gpt_id and revision_number = 1)
+    );
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Service role bypassed the trusted Curator RPC with a raw INSERT';
+  end if;
+
+  select id into curator_candidate_id
+  from public.memory_curator_create_shared_candidate(
+    '10000000-0000-0000-0000-000000000001',
+    gpt_id,
+    (select id from public.memory_revisions
+     where memory_id = gpt_id and revision_number = 2),
+    'Service-only Curator entry verification'
+  );
+  if not exists (
+    select 1 from public.memory_entries
+    where id = curator_candidate_id
+      and created_by_actor = 'curator'
+      and shared_status = 'candidate'
+      and source_revision_hash is not null
+  ) then
+    raise exception 'Trusted Curator RPC did not create a fixed candidate snapshot';
+  end if;
+
+  insert into public.memory_entries (
+    owner_id, space_key, memory_type, content, source_type, source_model,
+    source_ref, created_by_actor
+  ) values (
+    '10000000-0000-0000-0000-000000000001', 'gpt', 'fact',
+    'Private history trigger probe', 'mcp', 'gpt',
+    'test:private-history-probe', 'gpt'
+  ) returning id into history_probe_id;
+
+  update public.memory_entries
+    set content = 'Private history trigger probe revised',
+        updated_by_actor = 'gpt',
+        revision_reason = 'Verify trigger-only history writes'
+    where id = history_probe_id;
+
+  if (select count(*) from public.memory_revisions where memory_id = history_probe_id) <> 2 then
+    raise exception 'Legitimate private entry update did not create revision history';
+  end if;
+  select max(revision_number) into history_probe_revision
+  from public.memory_revisions where memory_id = history_probe_id;
+
+  rejected := false;
+  begin
+    insert into public.memory_revisions (
+      owner_id, memory_id, revision_number, content, memory_type, tags,
+      emotion, importance, lifecycle_status, editor_actor, revision_reason
+    ) values (
+      '10000000-0000-0000-0000-000000000001', history_probe_id,
+      history_probe_revision + 1, 'Forged private revision', 'fact',
+      '{}'::text[], '{}'::jsonb, 1, 'active', 'gpt', 'Direct forgery'
+    );
+  exception when insufficient_privilege then
+    rejected := true;
+  end;
+  if not rejected then
+    raise exception 'Service role directly forged a private revision';
   end if;
 end;
 $$;

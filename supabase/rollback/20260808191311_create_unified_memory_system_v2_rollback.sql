@@ -9,6 +9,9 @@ drop function if exists public.memory_list_gpt(uuid, integer, text, text[], text
 drop function if exists public.memory_get_claude(uuid, bigint);
 drop function if exists public.memory_get_gpt(uuid, bigint);
 drop function if exists public.memory_claim_idempotency(uuid, text, text, uuid, jsonb);
+drop function if exists public.memory_curator_create_shared_candidate(uuid, bigint, bigint, text);
+drop function if exists public.memory_owner_transition_shared(bigint, text, text);
+drop function if exists public.memory_internal_authority_is(text);
 
 drop trigger if exists memory_idempotency_prepare on public.memory_mutation_idempotency;
 drop function if exists public.memory_prepare_idempotency();

@@ -1,4 +1,14 @@
--- MEMORY-NAMESPACE-V1
+-- RETIRED — DO NOT APPLY.
+-- This historical V1 draft defaulted every legacy row to Shared and conflicts
+-- with the canonical V2 Memory System. It is outside supabase/migrations and
+-- contains an explicit fail-closed guard against accidental manual execution.
+do $$
+begin
+  raise exception 'MEMORY-NAMESPACE-V1 is retired; use unified Memory System V2';
+end
+$$;
+
+-- MEMORY-NAMESPACE-V1 (historical draft below; unreachable by design)
 -- Adds one shared memory engine with isolated Claude, GPT, and shared spaces.
 -- This migration is intentionally blocked until the P0 owner-only RLS migration
 -- has replaced every public allow_all policy on the memory tables.

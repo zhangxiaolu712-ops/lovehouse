@@ -97,7 +97,7 @@ erDiagram
 | `dream_runs` | candidate 的 `dream_run_ref`/source metadata | 保留运行链路；运行日志本身不是记忆正文 |
 | `active_threads` | 后续独立话题结构 | 不强塞进规范记忆正文；仅在形成候选时建立 provenance |
 
-旧 migration `20260808174047_memory_namespace_v1.sql` 会把旧内容默认设为 Shared，与最终规则冲突。本阶段的免费 CI **只复制并执行 V2 migration**，明确排除该旧文件；它仍禁止用于生产。
+旧 migration `20260808174047_memory_namespace_v1.sql` 会把旧内容默认设为 Shared，与最终规则冲突，现已移出 `supabase/migrations/`，只在 `supabase/retired_migrations/` 保留历史副本。该副本开头有强制失败保护，即使被手工执行也会立即中止；免费 CI 同时断言旧 V1 不得重新进入 active migrations。
 
 ## 3. Shared 状态机
 
@@ -148,13 +148,18 @@ Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装
 
 - 九张新表全部启用 RLS；`anon` 无权限，`authenticated` 只能读取自己的 owner 行，并且不能读取内部 idempotency 表。
 - 普通登录用户没有正文写权限。
+- Curator 只能通过仅授予 Bridge `service_role` 的 `memory_curator_create_shared_candidate()` 创建候选。该入口固定 Curator 身份，仅接收 Bridge 内部注入的 owner、确定 private memory/revision 和理由；它不接受 actor、space、状态、正文或 hash。
+- Owner 只能通过授予 `authenticated` 的 `memory_owner_transition_shared()` 作最终决定。Owner 身份取自已验证 JWT 的 `auth.uid()`，调用参数不含 owner/actor/space；`service_role` 无权调用该 Owner 入口。
+- 两个入口使用仅数据库对象所有者可生效的事务内 authority 标记；直接表写、伪造 header/body/tool args 或自行设置 session 标记均不能冒充 Curator/Owner。数据库对象所有者仍是受信任的迁移管理根，不属于应用调用面。
 - 触发器约束空间/创建 actor、Legacy 来源、Shared 初始状态、审批人与修订理由。
 - 六个只授予 `service_role` 的固定 RPC 是 GPT/Claude 的数据库读门：`memory_get_*`、`memory_list_*`、`memory_recall_*`。函数名固定 actor，参数不接受 actor/space/namespace。
 - RPC 内部固定为“自己的私有空间 + approved Shared”，不会返回另一方私有记忆、未批准 Shared 或 Legacy Pending。
+- `memory_revisions` 对 `service_role` 也只有读取权限，新增 revision 只能由 `memory_entries` 的可信历史触发器生成；因此 Bridge 或 AI 不能直接伪造 revision/revision hash。
 
 ### 应用层
 
 - MCP Adapter 在服务端固定 actor；AccessPolicy 拒绝伪造 namespace/space。
+- AccessPolicy 同时拒绝 owner、permission、revision id/hash、source revision id/hash 与 request hash 等内部字段；九个兼容 MCP 工具没有新增参数或调用步骤。
 - Repository 强制注入 `OWNER_USER_ID`，缺失时 fail closed。
 - Repository 的读取只调用固定 actor RPC，不直接拼接 `memory_entries` WHERE。
 - MemoryService 仍对返回结果再次执行 `canRead`，防止 Repository/后端回归。
@@ -193,7 +198,8 @@ Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装
 - candidate Shared 不可读取；直接 approved 创建失败
 - candidate 固定 private revision；错误 revision 绑定失败；源记忆更新后 candidate 不漂移
 - candidate/approved Shared 正文不可修改，Shared 永远只有 revision 1
-- 仅 Owner 可 approve/reject/revoke；非法状态边全部失败
+- 仅可信 Curator RPC 可创建 candidate；仅认证 Owner RPC 可 approve/reject/revoke；跨 owner、service role 冒充 Owner、直接表写与非法状态边全部失败
+- private revision 只能由历史触发器产生；service role 直接插入 revision 失败
 - 数据库计算 revision/request hash，不信任客户端 hash
 - 幂等同请求安全重放、不同 payload 冲突、原始 request material 不落库
 - Legacy Pending 来源字段强制完整，且不进入日常读取
@@ -222,5 +228,6 @@ Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装
 - `active_threads` 的未来规范需要单独设计，不能为了兼容旧表污染 memory_entries。
 - 当前搜索是固定 RPC 的文本匹配；embedding/向量检索需在权限过滤之后独立设计。
 - Shared 申请/批准 UI 与 Curator MCP 尚未实现。
+- Phase 3 的 AI-facing 保存/召回接口仍未实现；未来不得要求 GPT/Claude 传 revision/hash/owner/permission，这些字段必须继续由 Bridge/数据库内部生成。
 - persistent audit sink 尚未在生产 Bridge 启用；`MEMORY_SYSTEM_ENABLED` 仍必须保持 false。
 - 第三阶段应先在得到明确授权后建立非生产环境/受控迁移演练，再实现 Legacy dry-run 清单、Curator 工具与备份校验；仍不得自动猜历史归属。

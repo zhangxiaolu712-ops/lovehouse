@@ -462,6 +462,127 @@ begin
 end;
 $$;
 
+-- Trusted administrative doors. They are deliberately separate from the
+-- GPT/Claude read/write RPCs and never accept actor, space, status owner, or
+-- client-computed hash fields from an AI tool call.
+create or replace function public.memory_curator_create_shared_candidate(
+  p_owner_id uuid,
+  p_source_memory_id bigint,
+  p_source_revision_id bigint,
+  p_reason text
+)
+returns public.memory_entries
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  previous_authority text;
+  candidate public.memory_entries%rowtype;
+begin
+  if p_owner_id is null
+    or nullif(pg_catalog.btrim(p_reason), '') is null
+  then
+    raise exception 'Curator candidate requires owner and reason'
+      using errcode = '23514';
+  end if;
+
+  previous_authority := pg_catalog.current_setting('lovehouse.memory_authority', true);
+  perform pg_catalog.set_config('lovehouse.memory_authority', 'curator', true);
+  begin
+    insert into public.memory_entries (
+      owner_id, space_key, source_type, source_model, source_ref,
+      source_metadata, source_memory_id, source_revision_id,
+      shared_status, created_by_actor
+    ) values (
+      p_owner_id, 'shared', 'curation', 'curator',
+      pg_catalog.format('memory:%s:revision:%s', p_source_memory_id, p_source_revision_id),
+      pg_catalog.jsonb_build_object('candidate_reason', pg_catalog.btrim(p_reason)),
+      p_source_memory_id, p_source_revision_id, 'candidate', 'curator'
+    ) returning * into candidate;
+  exception when others then
+    perform pg_catalog.set_config(
+      'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+    );
+    raise;
+  end;
+  perform pg_catalog.set_config(
+    'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+  );
+  return candidate;
+end;
+$$;
+
+create or replace function public.memory_owner_transition_shared(
+  p_memory_id bigint,
+  p_to_status text,
+  p_reason text
+)
+returns public.memory_entries
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller_owner uuid;
+  previous_authority text;
+  transitioned public.memory_entries%rowtype;
+begin
+  caller_owner := auth.uid();
+  if caller_owner is null then
+    raise exception 'Authenticated Owner is required' using errcode = '42501';
+  end if;
+  if p_to_status is null
+    or p_to_status not in ('approved', 'rejected', 'revoked')
+    or nullif(pg_catalog.btrim(p_reason), '') is null
+  then
+    raise exception 'Owner transition requires an allowed state and reason'
+      using errcode = '23514';
+  end if;
+
+  previous_authority := pg_catalog.current_setting('lovehouse.memory_authority', true);
+  perform pg_catalog.set_config('lovehouse.memory_authority', 'owner', true);
+  begin
+    update public.memory_entries
+      set shared_status = p_to_status,
+          updated_by_actor = 'owner',
+          revision_reason = pg_catalog.btrim(p_reason)
+      where id = p_memory_id
+        and owner_id = caller_owner
+        and space_key = 'shared'
+      returning * into transitioned;
+    if not found then
+      raise exception 'Owner cannot access this Shared memory' using errcode = '42501';
+    end if;
+  exception when others then
+    perform pg_catalog.set_config(
+      'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+    );
+    raise;
+  end;
+  perform pg_catalog.set_config(
+    'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+  );
+  return transitioned;
+end;
+$$;
+
+create or replace function public.memory_internal_authority_is(p_expected text)
+returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+  select pg_catalog.coalesce(
+    p_expected in ('curator', 'owner')
+    and pg_catalog.current_setting('lovehouse.memory_authority', true) = p_expected
+    and current_user = pg_catalog.pg_get_userbyid(c.relowner),
+    false
+  )
+  from pg_catalog.pg_class c
+  where c.oid = 'public.memory_entries'::pg_catalog.regclass;
+$$;
+
 -- Fixed-actor database read doors. The Bridge calls these RPCs instead of
 -- querying memory_entries directly, so a forgotten application WHERE clause
 -- cannot expose the other actor, unapproved Shared, or Legacy Pending rows.
@@ -601,6 +722,10 @@ begin
       raise exception 'Initial memory creation cannot preload revision metadata' using errcode = '23514';
     end if;
     if new.space_key = 'shared' then
+      if not public.memory_internal_authority_is('curator') then
+        raise exception 'Shared candidates require the trusted Curator RPC'
+          using errcode = '42501';
+      end if;
       if new.created_by_actor <> 'curator' then
         raise exception 'Only Curator may create a Shared candidate' using errcode = '42501';
       end if;
@@ -671,6 +796,10 @@ begin
   end if;
 
   if old.space_key = 'shared' then
+    if not public.memory_internal_authority_is('owner') then
+      raise exception 'Shared decisions require the authenticated Owner RPC'
+        using errcode = '42501';
+    end if;
     if row(
       new.memory_type, new.tags, new.title, new.content, new.emotion,
       new.importance, new.retention, new.lifecycle_status, new.decay_score,
@@ -768,6 +897,7 @@ $$;
 create or replace function public.memory_capture_entry_history()
 returns trigger
 language plpgsql
+security definer
 set search_path = ''
 as $$
 declare
@@ -993,14 +1123,15 @@ grant select on table public.memory_audit_log to authenticated;
 grant select on table public.memory_ingest_candidates to authenticated;
 
 grant select, insert, update, delete on table public.memory_entries to service_role;
-grant select, insert on table public.memory_revisions to service_role;
+revoke all on table public.memory_revisions from service_role;
+grant select on table public.memory_revisions to service_role;
 grant select, insert on table public.memory_provenance to service_role;
 grant select, insert on table public.memory_shared_transitions to service_role;
 grant select, insert on table public.memory_audit_log to service_role;
 grant select, insert, update on table public.memory_mutation_idempotency to service_role;
 grant select, insert, update, delete on table public.memory_ingest_candidates to service_role;
 grant usage, select on sequence public.memory_entries_id_seq to service_role;
-grant usage, select on sequence public.memory_revisions_id_seq to service_role;
+revoke all on sequence public.memory_revisions_id_seq from anon, authenticated, service_role;
 grant usage, select on sequence public.memory_provenance_id_seq to service_role;
 grant usage, select on sequence public.memory_shared_transitions_id_seq to service_role;
 grant usage, select on sequence public.memory_audit_log_id_seq to service_role;
@@ -1015,6 +1146,9 @@ revoke execute on function public.memory_hash_jsonb(jsonb) from public, anon, au
 revoke execute on function public.memory_compute_revision_hash(bigint) from public, anon, authenticated;
 revoke execute on function public.memory_prepare_idempotency() from public, anon, authenticated;
 revoke execute on function public.memory_claim_idempotency(uuid, text, text, uuid, jsonb) from public, anon, authenticated;
+revoke execute on function public.memory_curator_create_shared_candidate(uuid, bigint, bigint, text) from public, anon, authenticated, service_role;
+revoke execute on function public.memory_owner_transition_shared(bigint, text, text) from public, anon, authenticated, service_role;
+revoke execute on function public.memory_internal_authority_is(text) from public, anon, authenticated, service_role;
 revoke execute on function public.memory_get_gpt(uuid, bigint) from public, anon, authenticated;
 revoke execute on function public.memory_get_claude(uuid, bigint) from public, anon, authenticated;
 revoke execute on function public.memory_list_gpt(uuid, integer, text, text[], text) from public, anon, authenticated;
@@ -1031,6 +1165,8 @@ grant execute on function public.memory_recall_claude(uuid, text, integer, text[
 grant execute on function public.memory_hash_jsonb(jsonb) to service_role;
 grant execute on function public.memory_compute_revision_hash(bigint) to service_role;
 grant execute on function public.memory_claim_idempotency(uuid, text, text, uuid, jsonb) to service_role;
+grant execute on function public.memory_curator_create_shared_candidate(uuid, bigint, bigint, text) to service_role;
+grant execute on function public.memory_owner_transition_shared(bigint, text, text) to authenticated;
 
 comment on table public.memory_entries is
   'Canonical LoveHouse Memory System entries. No legacy body is migrated by this migration.';
@@ -1041,7 +1177,7 @@ comment on column public.memory_entries.memory_type is
 comment on column public.memory_entries.tags is
   'Topic dimension. AI actor names are forbidden as tags.';
 comment on table public.memory_revisions is
-  'Append-only content snapshots created automatically on every tracked revision.';
+  'Append-only content snapshots created only by the trusted memory_entries history trigger.';
 comment on table public.memory_provenance is
   'Append-only source and curation chain explaining how a memory reached its current form.';
 comment on table public.memory_shared_transitions is

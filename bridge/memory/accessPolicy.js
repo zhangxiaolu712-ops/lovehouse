@@ -5,7 +5,15 @@ const RESERVED_INPUT_KEYS = new Set([
   'createdbyactor',
   'namespace',
   'owner',
+  'ownerid',
   'ownermodel',
+  'permission',
+  'permissions',
+  'requesthash',
+  'revisionhash',
+  'revisionid',
+  'sourcerevisionhash',
+  'sourcerevisionid',
   'space',
   'spacekey',
   'sharedstatus',
@@ -46,7 +54,7 @@ export class MemoryAccessPolicy {
     const key = findReservedKey(input)
     if (key) {
       throw new MemoryAccessError(
-        `Memory space is assigned by the server; '${key}' is not accepted`,
+        `Memory authority and storage fields are assigned by the server; '${key}' is not accepted`,
         'SPACE_OVERRIDE_REJECTED'
       )
     }
