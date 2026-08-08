@@ -522,10 +522,12 @@ begin
       row_number() over (order by similarity desc, created_at desc, id desc)::integer semantic_rank
     from (
       select id, created_at,
-        1 - (embedding <=> p_query_embedding::extensions.vector) as similarity
+        1 - (
+          embedding OPERATOR(extensions.<=>) p_query_embedding::extensions.vector
+        ) as similarity
       from eligible
       where embedding is not null
-      order by embedding <=> p_query_embedding::extensions.vector
+      order by embedding OPERATOR(extensions.<=>) p_query_embedding::extensions.vector
       limit candidate_limit
     ) nearest
     where similarity >= profile.semantic_threshold
