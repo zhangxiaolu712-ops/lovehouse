@@ -1,4 +1,5 @@
 import { useLocation, Link } from 'react-router'
+import { MobileEmptyState, MobilePage, MobilePageHeader } from '../../shared/MobileUI'
 
 // 规划中的抽屉：路由 → 介绍
 const DRAWERS = {
@@ -23,25 +24,16 @@ export default function PlaceholderPage() {
   const info = DRAWERS[pathname] || { icon: '📦', title: '新抽屉', center: '', desc: '' }
 
   return (
-    <div>
-      <div className="page-header">
-        <div className="page-title">{info.icon} {info.title}</div>
-        <span className="tag">规划中</span>
-      </div>
-
-      <div className="card" style={{ textAlign: 'center', padding: '56px 24px' }}>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>{info.icon}</div>
-        <div style={{ fontSize: 17, fontWeight: 600, marginBottom: 8 }}>这个抽屉还没打开~</div>
-        {info.center && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>{info.center} 的抽屉</div>
-        )}
-        <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.8, maxWidth: 360, margin: '0 auto' }}>
-          {info.desc}
-        </p>
-        <div style={{ marginTop: 24 }}>
-          <Link to="/" className="btn" style={{ textDecoration: 'none' }}>回房间 →</Link>
-        </div>
-      </div>
-    </div>
+    <MobilePage>
+      <MobilePageHeader title={info.title} icon="inbox" subtitle={info.center || 'New drawer'} />
+      <MobileEmptyState
+        icon="inbox"
+        title="这个抽屉还没打开~"
+        description={info.desc}
+      >
+        {info.center && <span className="mobile-empty-context">{info.center} · 规划中</span>}
+        <Link to="/" className="btn mobile-home-link">回房间</Link>
+      </MobileEmptyState>
+    </MobilePage>
   )
 }

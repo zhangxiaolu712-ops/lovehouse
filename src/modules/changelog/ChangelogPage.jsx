@@ -1,5 +1,5 @@
-import { Link } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
+import { MobileCard, MobilePage, MobilePageHeader } from '../../shared/MobileUI'
 
 const LOGS = [
   {
@@ -88,52 +88,41 @@ const LOGS = [
 
 export default function ChangelogPage() {
   return (
-    <div>
-      <div className="page-header">
-        <h2 className="page-title page-title-with-icon"><LineIcon name="history" />搭建日志</h2>
-        <Link to="/" style={{ textDecoration: 'none', fontSize: 14, color: 'var(--accent)' }}>返回首页</Link>
-      </div>
+    <MobilePage className="changelog-page">
+      <MobilePageHeader title="搭建日志" icon="history" subtitle="Building notes" />
 
-      <div className="card" style={{ marginBottom: 16, padding: '16px 20px', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+      <MobileCard className="changelog-intro">
         记录小屋从零搭建的每一步。<br />
         每次修改、新增、修复都会留下痕迹~
-      </div>
+      </MobileCard>
 
-      <div style={{ position: 'relative' }}>
-        <div style={{
-          position: 'absolute', left: 16, top: 0, bottom: 0, width: 2,
-          background: 'var(--border)', borderRadius: 1,
-        }} />
+      <div className="changelog-timeline">
+        <div className="changelog-line" aria-hidden="true" />
 
-        {LOGS.map((log, i) => (
-          <div key={i} style={{ position: 'relative', paddingLeft: 40, marginBottom: 20 }}>
-            <div style={{
-              position: 'absolute', left: 8, top: 4, width: 18, height: 18,
-              background: 'var(--bg-card)', border: '2px solid var(--accent)',
-              borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: 'var(--accent)', zIndex: 1,
-            }}>
+        {LOGS.map(log => (
+          <article key={`${log.date}-${log.title}`} className="changelog-entry">
+            <div className="changelog-marker" aria-hidden="true">
               <LineIcon name={log.icon} size={11} />
             </div>
 
-            <div className="card" style={{ padding: '16px 18px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                <div style={{ fontWeight: 600, fontSize: 15 }}>{log.title}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{log.date}</div>
+            <MobileCard className="changelog-card">
+              <div className="changelog-card-head">
+                <h2>{log.title}</h2>
+                <time dateTime={log.date}>{log.date}</time>
               </div>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
+              <ul>
                 {log.items.map((item, j) => (
                   <li key={j}>{item}</li>
                 ))}
               </ul>
-            </div>
-          </div>
+            </MobileCard>
+          </article>
         ))}
       </div>
 
-      <div style={{ textAlign: 'center', padding: '16px 0 8px', fontSize: 12, color: 'var(--text-muted)' }}>
+      <footer className="changelog-footer">
         — 小屋的故事，从这里开始 —
-      </div>
-    </div>
+      </footer>
+    </MobilePage>
   )
 }
