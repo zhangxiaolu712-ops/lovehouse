@@ -2,7 +2,7 @@
 
 - 日期：2026-08-09
 - 执行者：Codex
-- 状态：Draft PR 准备中；未合并、未部署
+- 状态：Draft PR #26 已创建并通过免费验证；未合并、未部署
 
 ## 做了什么
 
@@ -35,7 +35,9 @@
 - Bridge：63 项测试通过，包含真实 GPT SSE 与 Claude HTTP transport。
 - 前端：lint 通过（仅既有 warning）；build 通过（仅既有 bundle-size warning）。
 - `git diff --check`：通过。
-- 免费临时 Supabase：等待 Draft PR GitHub Actions 执行；本机没有 Docker，因此不伪报本地数据库结果。
+- 免费临时 Supabase：GitHub Actions `runtime` 全绿；fresh install、Phase 2 冻结契约、Phase 3 SQL、rollback/re-apply、完整卸载重装均通过，任务结束后临时栈已删除。
+- 回归检查：既有 `Memory System schema` 的 `validate` 全绿；Cloudflare 仅完成既有的非生产分支预览构建，未推广版本、未切生产流量。
+- 验证记录：`runtime` run `31281943239`（2m01s），`validate` run `31281943233`（2m22s）。
 
 ## 数据、环境与部署
 
@@ -46,6 +48,6 @@
 
 ## 下一步
 
-1. 创建 Draft PR，等待免费数据库 CI 与工程审阅。
+1. 保持 Draft PR #26，等待工程审阅。
 2. 只修本 PR 的 Runtime、SQL、权限、测试问题，不顺手加潮汐/向量检索/Legacy 整理等功能。
 3. 未经新的生产变更授权，不合并、不部署、不打开开关。
