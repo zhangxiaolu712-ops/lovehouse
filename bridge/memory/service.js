@@ -47,6 +47,7 @@ export class MemoryService {
     repository,
     accessPolicy = new MemoryAccessPolicy(),
     auditSink = new NullMemoryAuditSink(),
+    writeEnabled = false,
     clock = () => new Date(),
   }) {
     if (!repository) throw new Error('MemoryRepository is required')
@@ -54,6 +55,9 @@ export class MemoryService {
     this.repository = repository
     this.accessPolicy = accessPolicy
     this.auditSink = auditSink
+    // A caller cannot enable writes with a flag alone. Phase-one writes are
+    // available only when an explicitly persistent audit sink is installed.
+    this.writeEnabled = writeEnabled === true && auditSink.persistent === true
     this.clock = clock
   }
 
@@ -85,6 +89,11 @@ export class MemoryService {
 
   async write(actor, input = {}) {
     return this.audited(actor, 'write', async () => {
+      if (!this.writeEnabled) {
+        const error = new Error('Memory writes require persistent audit storage')
+        error.code = 'MEMORY_WRITES_DISABLED'
+        throw error
+      }
       this.accessPolicy.assertActor(actor)
       this.accessPolicy.assertNoSpaceOverride(input)
       if (typeof input.content !== 'string' || !input.content.trim()) {

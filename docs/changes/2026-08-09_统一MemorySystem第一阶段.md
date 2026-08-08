@@ -2,7 +2,7 @@
 
 日期：2026-08-09
 
-状态：`READY_FOR_REVIEW` / `NO_DATABASE_CHANGE` / `NO_PROD_CHANGE` / `NO_DEPLOY`
+状态：`DRAFT` / `AWAITING_ENGINEER_FINAL_REVIEW` / `NO_DATABASE_CHANGE` / `NO_PROD_CHANGE` / `NO_DEPLOY`
 
 分支：`agent/memory-system-foundation-20260809`
 
@@ -17,7 +17,7 @@
 - Repository 只面向未来唯一规范表 `memory_entries`；当前生产没有该表，因此使用 `MEMORY_SYSTEM_ENABLED=false` 默认关闭并 fail closed。
 - 将日记、文章、感受、小事记、备忘录、问心、语录、总结、观点等旧结构提炼成稳定的 `memory_type`；统一入口同时规范 tag、emotion、importance、retention、decay、source 与 revision 基础字段。
 - 新增不记录正文的审计事件边界；第一阶段使用空 sink，后续 migration 接入 append-only 审计表。
-- 新增 26 项 Node 自动测试，覆盖所有第一阶段权限边界。
+- Node 自动测试由初始 26 项扩展为 40 项，覆盖第一阶段权限边界与最终审阅补充项。
 
 ## 为什么这样做
 
@@ -109,7 +109,7 @@ Shared 的提出、批准、撤销和 Legacy 整理将由后续主人/Curator �
 
 ## 测试结果
 
-- `cd bridge && npm.cmd test`：26 项通过，0 失败。
+- `cd bridge && npm.cmd test`：40 项通过，0 失败。
 - `npm.cmd run lint`：通过；只有仓库原有 warning，本次没有新增 lint error。
 - `npm.cmd run build`：通过；保留现有主包大于 500 kB 提示。
 - `git diff --check`：通过。
@@ -143,3 +143,125 @@ Shared 的提出、批准、撤销和 Legacy 整理将由后续主人/Curator �
 ## 回滚
 
 本阶段没有数据库或部署变化。代码回滚只需撤销本分支提交；生产数据不受影响。由于默认开关为 false，即使误启动本分支 Bridge，也不会回退读取旧 `brain`/`memories` 内容。
+
+## Draft 转 Ready 前最终审阅确认（2026-08-09 补充）
+
+本节对应工程师提出的六项最终确认。当前 PR **继续保持 Draft**；以下结论不代表授权合并或部署。
+
+### 1. Actor 只能由服务端认证通道固定
+
+| MCP 入口 | 前置认证 | 服务端固定通道 | 固定 actor | 不被采用的身份来源 |
+|---|---|---|---|---|
+| GPT `/mcp/sse` + `/mcp/message` | `LIVINGROOM_KEY` 建立的服务端 session | `gptChannel` | `gpt` | body、query、header、tool args |
+| Claude `/mcp/claude` | OAuth/PKCE 签名 token + owner/audience 校验 | `claudeChannel` | `claude` | body、query、header、tool args |
+
+- `bridge/server.js` 只在启动时以常量 `MEMORY_ACTORS.GPT` / `MEMORY_ACTORS.CLAUDE` 创建两条通道。
+- `bridge/mcp/channel.js` 将 actor 闭包绑定进 handler；请求元数据不会传入 actor 决策。
+- MCP schema 不声明 `actor`、`space_key`、`namespace` 或 Shared approval 字段，且全部 `additionalProperties: false`。
+- 即使绕过 schema 直接构造 JSON-RPC，`MemoryAccessPolicy.assertNoSpaceOverride()` 仍会递归拒绝 `actor`、`created_by_actor`、`space_key`、`spaceKey`、`namespace`、`space`、`shared_status`、`approval_status`，包括嵌套对象。
+- 发送小客厅消息时 sender 同样由通道固定：GPT → `GPT`，Claude → `CC`；客户端传入 sender 不生效。
+
+结论：客户端不能通过 body、query、header 或 tool args 把 GPT 通道变成 Claude，也不能选择任意空间。
+
+### 2. `MEMORY_SYSTEM_ENABLED=false` 时 fail closed
+
+- `createRuntimeMemoryRepository()` 在开关为 false 时返回 `DisabledMemoryRepository`。
+- `insert`、`getById`、`list`、`search` 四种仓储操作统一抛出 `MEMORY_SYSTEM_DISABLED`。
+- 六个记忆类 MCP 工具全部经 `MemoryService` 进入该仓储；不存在 `brain`、`memories` fallback。
+- 开关为 true 时只接受规范 `SupabaseMemoryRepository(table='memory_entries')`，不会选择旧表。
+
+结论：关闭开关会明确失败，不会静默读取或写入旧 `brain` / `memories`。
+
+### 3. Approved Shared 第一阶段只读
+
+- `MemoryAccessPolicy.canRead()` 只允许 `shared_status=approved` 的 Shared 被两侧读取。
+- `MemoryAccessPolicy.canMutate()` 只允许 actor 修改自己的私有空间，Shared 对 GPT/Claude 均返回 false。
+- 普通写入由服务端强制落入 actor 私有空间；`shared_status` / `approval_status` 参数会被拒绝。
+- 第一阶段没有 Shared create/approve/revoke MCP 工具。
+
+未来 Shared 写入必须新增独立的“申请 → 审批 → 审计”流程，不能复用普通 `save_memory` 或兼容工具。
+
+### 4. 9 个兼容 MCP 工具调用映射
+
+| 工具 | Adapter 路由 | 下游调用 | AccessPolicy 路径 | 是否接触记忆旧表 |
+|---|---|---|---|---|
+| `read_livingroom_messages` | `livingroom.read` | `livingroomRest(GET)` | 非记忆工具 | 否 |
+| `send_livingroom_message` | `livingroom.write` | `livingroomRest(POST)`，sender 固定 | 非记忆工具 | 否 |
+| `get_livingroom_context` | `livingroom.context` | `livingroomRest(GET)` | 非记忆工具 | 否 |
+| `get_starter_pack` | `memory.starterPack` | `MemoryService.starterPack → list` | `assertActor → assertNoSpaceOverride → readScopeFor → canRead` | 否 |
+| `save_memory` | `memory.write` | `MemoryService.write` | `assertActor → assertNoSpaceOverride → privateSpaceFor` | 否 |
+| `recall` | `memory.recall` | `MemoryService.recall` | `assertActor → assertNoSpaceOverride → readScopeFor → canRead` | 否 |
+| `load_memories` | `memory.list` | `MemoryService.list` | `assertActor → assertNoSpaceOverride → readScopeFor → canRead` | 否 |
+| `search_memories` | `memory.recall` | `MemoryService.recall` | `assertActor → assertNoSpaceOverride → readScopeFor → canRead` | 否 |
+| `save_to_memories` | `memory.write` | `MemoryService.write` | `assertActor → assertNoSpaceOverride → privateSpaceFor` | 否 |
+
+`MCP_TOOL_ROUTES` 将九项映射固定为可测试契约。三项小客厅工具只访问 `livingroom`；六项记忆工具只调用 `MemoryService`，MCP Adapter 不直接调用 `MemoryRepository` 或 Supabase，不存在绕过 AccessPolicy 的记忆路径。
+
+### 5. 持久化审计上线前禁止生产写入
+
+- `NullMemoryAuditSink` 和测试用 `InMemoryAuditSink` 均显式声明 `persistent=false`。
+- `MemoryService` 只有在 `writeEnabled=true` **且** `auditSink.persistent=true` 时才允许写入；仅设置开关无法开启写入。
+- 当前 `bridge/server.js` 硬编码 `writeEnabled=false`，并且尚未安装持久化 sink，因此构成双重关闭。
+- `/health` 报告 `memory_writes_enabled:false`。
+
+结论：append-only 持久化审计 migration、Repository 与验证上线前，生产记忆写入无法开启。
+
+### 6. 权限与隔离测试清单
+
+原第一阶段基线 26 项现已扩展为 **40 项**，其中权限/隔离相关测试名称与覆盖场景如下（名称与 Node test 输出一致）：
+
+| 测试名称 | 覆盖场景 |
+|---|---|
+| `gpt channel ignores actor spoofing in body, query, headers and tool args` | GPT 通道忽略 body/query/header/tool args 伪造 actor |
+| `claude channel ignores actor spoofing in body, query, headers and tool args` | Claude 通道忽略 body/query/header/tool args 伪造 actor |
+| `MCP schemas expose no actor, namespace, space or Shared approval selector` | 工具 schema 不给客户端身份/空间/审批选择器 |
+| `all nine compatibility tools have an explicit adapter route` | 九个工具均有明确、可审计的下游映射 |
+| `all nine adapter routes reach only MemoryService or livingroom REST` | 逐项执行九个工具，确认只能到统一 MemoryService 或小客厅 REST |
+| `all MCP tool schemas reject unknown arguments` | schema 关闭额外参数 |
+| `GPT compatibility tools call one MemoryService with fixed GPT actor` | 兼容工具固定 GPT actor 且统一转入 MemoryService |
+| `Claude livingroom sender is fixed by the adapter` | Claude sender 不能由 tool args 伪造 |
+| `GPT can write only to GPT Memory and cannot choose a space` | GPT 只能写 GPT 私有空间 |
+| `Claude can write only to Claude Memory` | Claude 只能写 Claude 私有空间 |
+| `GPT reads GPT Memory plus explicitly approved Shared Memory` | GPT 可读自身 + approved Shared |
+| `Claude reads Claude Memory plus explicitly approved Shared Memory` | Claude 可读自身 + approved Shared |
+| `GPT cannot read Claude private memory by id` | GPT 跨空间读取 Claude 失败 |
+| `Claude cannot read GPT private memory by id` | Claude 跨空间读取 GPT 失败 |
+| `unapproved Shared and Legacy Pending never appear in daily recall` | pending Shared / Legacy Pending 不进入日常 recall |
+| `direct reads of unapproved Shared and Legacy Pending fail closed` | 直接按 ID 读取未批准 Shared / Legacy 也失败 |
+| `forged space_key is rejected instead of trusted` | tool args 伪造 snake_case 空间失败 |
+| `forged spaceKey is rejected instead of trusted` | tool args 伪造 camelCase 空间失败 |
+| `forged namespace is rejected instead of trusted` | tool args 伪造 namespace 失败 |
+| `forged space is rejected instead of trusted` | tool args 伪造 space 失败 |
+| `forged actor is rejected instead of trusted` | tool args 伪造 actor 失败 |
+| `forged created_by_actor is rejected instead of trusted` | tool args 伪造落库 actor 失败 |
+| `forged shared_status is rejected instead of trusted` | tool args 伪造 Shared 审批状态失败 |
+| `forged approval_status is rejected instead of trusted` | tool args 伪造审批字段失败 |
+| `approved Shared memory is read-only for both MCP actors` | approved Shared 对两侧可读但不可修改 |
+| `Shared approval fields cannot be supplied through the ordinary write path` | 普通写入不能申请/批准 Shared |
+| `memory writes remain disabled without a persistent audit sink` | 无持久化审计时即使请求启用也禁止写入 |
+| `nested forged namespace is rejected` | 嵌套对象中的 namespace 伪造失败 |
+| `repository receives a server-created actor scope` | Repository 范围只由服务端 AccessPolicy 生成 |
+| `audit metadata records allowed and denied access without memory content` | 允许/拒绝审计不泄露记忆正文 |
+| `repository targets one canonical table with a scoped read filter` | 只访问规范表，并携带私有 + approved Shared 范围 |
+| `repository inserts into the canonical table only` | 写入不落到 brain/memories |
+| `disabled runtime repository fails closed for every operation without touching canonical storage` | false 开关下四种 Repository 操作全部关闭 |
+| `enabled runtime repository uses only the canonical repository` | true 开关只选规范 Repository |
+| `all six memory MCP tools fail closed while Memory System is disabled` | 六个记忆工具全部失败且不碰小客厅/旧表 |
+| `signed access token checks signature, owner and audience data` | Claude OAuth token 的签名、owner、audience 身份约束 |
+
+其余 4 项测试覆盖 Repository 结构兼容与 OAuth redirect/PKCE/弱密钥安全；完整命令结果为 `40 passed, 0 failed`。
+
+### 本次补充涉及文件
+
+- `bridge/mcp/channel.js`、`bridge/mcp/channel.test.js`
+- `bridge/mcp/tools.js`、`bridge/mcp/tools.test.js`
+- `bridge/memory/accessPolicy.js`、`bridge/memory/audit.js`
+- `bridge/memory/runtimeRepository.js`、`bridge/memory/runtimeRepository.test.js`
+- `bridge/memory/service.js`、`bridge/memory/memory.test.js`、`bridge/memory/index.js`
+- `bridge/server.js`
+- 本变更记录
+
+### 保持不变的边界
+
+- PR 保持 Draft，等待工程师最终确认后才由主人决定是否转 Ready。
+- 不 merge、不 deploy、不修改生产数据库、不迁旧内容、不修改生产密钥、不触碰 Toy。

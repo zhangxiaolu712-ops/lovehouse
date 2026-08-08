@@ -3,10 +3,14 @@
  * content. A later migration will replace this sink with an append-only table.
  */
 export class NullMemoryAuditSink {
+  persistent = false
+
   async record(_event) {}
 }
 
 export class InMemoryAuditSink {
+  persistent = false
+
   constructor() {
     this.events = []
   }

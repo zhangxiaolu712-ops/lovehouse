@@ -291,10 +291,12 @@ MemoryService 管理同一套规则
 
 | 层 | 文件 | 职责 |
 |----|------|------|
+| MCP Channel | `bridge/mcp/channel.js` | 在认证后的 GPT/Claude 路由上用服务端常量闭包固定 actor；不信任 body/query/header/tool args 的身份字段 |
 | MCP Adapter | `bridge/mcp/tools.js` | 保留 CC 的 9 个工具名，固定 actor；没有 namespace 参数 |
 | AccessPolicy | `bridge/memory/accessPolicy.js` | 权限矩阵、Shared approval、Legacy 隔离、伪造 space 拒绝 |
 | MemoryService | `bridge/memory/service.js` | 统一写入/读取/检索与结构标准化；二次过滤 Repository 返回值 |
 | MemoryRepository | `bridge/memory/repository.js` | 唯一未来规范表 `memory_entries` 的 Supabase REST 合约 |
+| Runtime Gate | `bridge/memory/runtimeRepository.js` | `MEMORY_SYSTEM_ENABLED=false` 时四种仓储操作 fail closed，禁止回退旧表 |
 | OAuth/Bridge | `bridge/oauth.js`, `bridge/server.js`, `bridge/security.js` | 选择性复用 CC 的 OAuth/PKCE/签名令牌、GPT SSE、Claude HTTP、小客厅 |
 
 权限矩阵：
@@ -307,6 +309,8 @@ MemoryService 管理同一套规则
 结构迁移与历史正文迁移完全分离：新系统继承 memory type、tag、emotion、importance、decay、source、revision 等结构能力，但本阶段没有建表、没有复制正文。未来迁移必须保留 `original_table`、`original_id`、`original_created_at`、`legacy_source` 及旧的 `author/source_model` 等追溯信息；全部旧正文先进入 Legacy Pending，禁止默认 Shared 或根据语义猜归属。
 
 已合并但未执行的 `20260808174047_memory_namespace_v1.sql` 仍包含旧数据默认 Shared 的草稿逻辑，与最终确认版冲突，禁止直接应用。下一阶段应建立唯一规范表并修订迁移；生产 RLS/public exposure 的 P0 修复继续独立 PR，不与本重构混合。
+
+第一阶段 Shared 对 GPT/Claude 均为只读；普通 MCP 写入只能进入 actor 自己的私有空间。`NullMemoryAuditSink` 与 `InMemoryAuditSink` 均不是持久化审计，`MemoryService` 要求 `writeEnabled=true` 且 `auditSink.persistent=true` 才允许写入；当前 Bridge 明确使用 `writeEnabled=false`。因此 append-only 审计持久化上线并完成审阅前，生产记忆写入保持关闭。
 
 ---
 

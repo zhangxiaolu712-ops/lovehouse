@@ -6,11 +6,12 @@ import express from 'express'
 import { installClaudeOAuth } from './oauth.js'
 import {
   createSupabaseRest,
+  createRuntimeMemoryRepository,
   MEMORY_ACTORS,
   MemoryService,
   SupabaseMemoryRepository,
 } from './memory/index.js'
-import { createMcpToolDefinitions, createMcpToolHandler } from './mcp/tools.js'
+import { createMcpChannel } from './mcp/channel.js'
 import { safeEqual } from './security.js'
 
 const app = express()
@@ -126,21 +127,18 @@ const supabaseRest = createSupabaseRest({
   serverKey: SUPABASE_SERVER_KEY,
 })
 const canonicalMemoryRepository = new SupabaseMemoryRepository({ rest: supabaseRest })
-const memoryNotReady = async () => {
-  throw new Error('Memory System schema is not enabled; apply and verify the separate migration before enabling it')
-}
 // Fail closed until the future memory_entries migration has been reviewed and
 // applied. This prevents an accidental Bridge deploy from falling back to the
 // old brain/memories tables or silently treating legacy content as Shared.
-const memoryRepository = MEMORY_SYSTEM_ENABLED
-  ? canonicalMemoryRepository
-  : {
-      insert: memoryNotReady,
-      getById: memoryNotReady,
-      list: memoryNotReady,
-      search: memoryNotReady,
-    }
-const memoryService = new MemoryService({ repository: memoryRepository })
+const memoryRepository = createRuntimeMemoryRepository({
+  enabled: MEMORY_SYSTEM_ENABLED,
+  canonicalRepository: canonicalMemoryRepository,
+})
+// Writes stay disabled until an append-only persistent audit sink exists.
+const memoryService = new MemoryService({
+  repository: memoryRepository,
+  writeEnabled: false,
+})
 
 app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
@@ -238,14 +236,12 @@ async function handleMcpMessage(message, { tools, callTool, serverName }) {
   }
 }
 
-const gptTools = createMcpToolDefinitions(MEMORY_ACTORS.GPT)
-const claudeTools = createMcpToolDefinitions(MEMORY_ACTORS.CLAUDE)
-const callGptTool = createMcpToolHandler({
+const gptChannel = createMcpChannel({
   actor: MEMORY_ACTORS.GPT,
   memoryService,
   livingroomRest: supabaseRest,
 })
-const callClaudeTool = createMcpToolHandler({
+const claudeChannel = createMcpChannel({
   actor: MEMORY_ACTORS.CLAUDE,
   memoryService,
   livingroomRest: supabaseRest,
@@ -280,8 +276,8 @@ app.post('/mcp/message', async (req, res) => {
   if (!checkRate(`gpt-mcp:${req.query.clientId}`)) return res.status(429).json({ error: 'too many requests' })
   try {
     const response = await handleMcpMessage(req.body, {
-      tools: gptTools,
-      callTool: callGptTool,
+      tools: gptChannel.tools,
+      callTool: gptChannel.callTool,
       serverName: 'lovehouse-gpt-mcp',
     })
     if (response) stream.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`)
@@ -312,8 +308,8 @@ app.post('/mcp/claude', verifyClaudeOAuth, async (req, res) => {
   }
   try {
     const response = await handleMcpMessage(req.body, {
-      tools: claudeTools,
-      callTool: callClaudeTool,
+      tools: claudeChannel.tools,
+      callTool: claudeChannel.callTool,
       serverName: 'lovehouse-claude-mcp',
     })
     return response ? res.json(response) : res.status(204).end()
@@ -340,6 +336,7 @@ app.get('/health', (_req, res) => {
     status: 'ok',
     memory_system: 'foundation',
     memory_system_enabled: MEMORY_SYSTEM_ENABLED,
+    memory_writes_enabled: memoryService.writeEnabled,
     database_migration: MEMORY_SYSTEM_ENABLED ? 'expected' : 'not_applied',
   })
 })

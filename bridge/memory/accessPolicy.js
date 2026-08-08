@@ -8,6 +8,8 @@ const RESERVED_INPUT_KEYS = new Set([
   'ownermodel',
   'space',
   'spacekey',
+  'sharedstatus',
+  'approvalstatus',
 ])
 
 function normalizedKey(key) {

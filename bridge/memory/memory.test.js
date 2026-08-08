@@ -5,6 +5,7 @@ import {
   MEMORY_ACTORS,
   MEMORY_SPACES,
   InMemoryAuditSink,
+  MemoryAccessPolicy,
   MemoryAccessError,
   MemoryService,
   SHARED_STATES,
@@ -64,6 +65,8 @@ function createService(rows = seed) {
   const repository = new InMemoryRepository(rows)
   const service = new MemoryService({
     repository,
+    auditSink: { persistent: true, async record() {} },
+    writeEnabled: true,
     clock: () => new Date('2026-08-09T00:00:00.000Z'),
   })
   return { repository, service }
@@ -147,7 +150,16 @@ test('direct reads of unapproved Shared and Legacy Pending fail closed', async (
   )
 })
 
-for (const attemptedKey of ['space_key', 'spaceKey', 'namespace', 'space']) {
+for (const attemptedKey of [
+  'space_key',
+  'spaceKey',
+  'namespace',
+  'space',
+  'actor',
+  'created_by_actor',
+  'shared_status',
+  'approval_status',
+]) {
   test(`forged ${attemptedKey} is rejected instead of trusted`, async () => {
     const { service } = createService([])
     await assert.rejects(
@@ -159,6 +171,52 @@ for (const attemptedKey of ['space_key', 'spaceKey', 'namespace', 'space']) {
     )
   })
 }
+
+test('approved Shared memory is read-only for both MCP actors', () => {
+  const policy = new MemoryAccessPolicy()
+  const approvedShared = {
+    space_key: MEMORY_SPACES.SHARED,
+    shared_status: SHARED_STATES.APPROVED,
+  }
+
+  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+    assert.equal(policy.canRead(actor, approvedShared), true)
+    assert.equal(policy.canMutate(actor, approvedShared), false)
+    assert.throws(
+      () => policy.assertCanMutate(actor, approvedShared),
+      error => error instanceof MemoryAccessError && error.code === 'MEMORY_ACCESS_DENIED'
+    )
+  }
+})
+
+test('Shared approval fields cannot be supplied through the ordinary write path', async () => {
+  const { service } = createService([])
+  await assert.rejects(
+    service.write(MEMORY_ACTORS.GPT, {
+      content: 'not a direct shared write',
+      shared_status: SHARED_STATES.APPROVED,
+    }),
+    error => error instanceof MemoryAccessError && error.code === 'SPACE_OVERRIDE_REJECTED'
+  )
+})
+
+test('memory writes remain disabled without a persistent audit sink', async () => {
+  const repository = new InMemoryRepository([])
+  const auditSink = new InMemoryAuditSink()
+  const service = new MemoryService({
+    repository,
+    auditSink,
+    writeEnabled: true,
+  })
+
+  await assert.rejects(
+    service.write(MEMORY_ACTORS.GPT, { content: 'must not persist' }),
+    error => error.code === 'MEMORY_WRITES_DISABLED'
+  )
+  assert.equal(repository.lastInsert, null)
+  assert.equal(auditSink.events[0].allowed, false)
+  assert.equal(auditSink.events[0].reason_code, 'MEMORY_WRITES_DISABLED')
+})
 
 test('nested forged namespace is rejected', async () => {
   const { service } = createService()

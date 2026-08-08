@@ -1,5 +1,17 @@
 import { MEMORY_ACTORS } from '../memory/index.js'
 
+export const MCP_TOOL_ROUTES = Object.freeze({
+  read_livingroom_messages: 'livingroom.read',
+  send_livingroom_message: 'livingroom.write',
+  get_livingroom_context: 'livingroom.context',
+  get_starter_pack: 'memory.starterPack',
+  save_memory: 'memory.write',
+  recall: 'memory.recall',
+  load_memories: 'memory.list',
+  search_memories: 'memory.recall',
+  save_to_memories: 'memory.write',
+})
+
 const closedObject = properties => ({
   type: 'object',
   properties,
