@@ -502,12 +502,12 @@ begin
     ) returning * into candidate;
   exception when others then
     perform pg_catalog.set_config(
-      'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+      'lovehouse.memory_authority', coalesce(previous_authority, ''), true
     );
     raise;
   end;
   perform pg_catalog.set_config(
-    'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+    'lovehouse.memory_authority', coalesce(previous_authority, ''), true
   );
   return candidate;
 end;
@@ -556,12 +556,12 @@ begin
     end if;
   exception when others then
     perform pg_catalog.set_config(
-      'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+      'lovehouse.memory_authority', coalesce(previous_authority, ''), true
     );
     raise;
   end;
   perform pg_catalog.set_config(
-    'lovehouse.memory_authority', pg_catalog.coalesce(previous_authority, ''), true
+    'lovehouse.memory_authority', coalesce(previous_authority, ''), true
   );
   return transitioned;
 end;
@@ -573,7 +573,7 @@ language sql
 stable
 set search_path = ''
 as $$
-  select pg_catalog.coalesce(
+  select coalesce(
     p_expected in ('curator', 'owner')
     and pg_catalog.current_setting('lovehouse.memory_authority', true) = p_expected
     and current_user = pg_catalog.pg_get_userbyid(c.relowner),
