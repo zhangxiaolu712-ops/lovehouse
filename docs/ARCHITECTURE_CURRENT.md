@@ -273,6 +273,15 @@ brain 是整个记忆系统的核心，字段最多：
 4. GPT 定时任务对接（通过受限 MCP 调用 dream_worker）
 5. 前 7 天仅 review-run，禁止自动写入 brain
 
+### 12.1 MEMORY-NAMESPACE-V1（本地迁移草稿，未应用生产）
+
+- 新增 `memory_spaces`，以一套记忆引擎承载 `claude`、`gpt`、`shared` 三个隔离空间；不复制三套数据库表。
+- 每个 AI 空间可保存显示名、自我描述、说话方式、记忆策略和扩展档案；`shared` 用于经小婷确认可共同读取的内容。
+- `brain`、旧 `memories` 及四张 Dreaming 表统一增加 `space_key` 外键和索引。
+- 现有数据先归入 `shared`，避免依据旧 `author`/`speaker` 自动误判归属；后续迁移需单独审计。
+- 现有 Bridge 工具在升级前仍写入默认 `shared`；真正的 AI 隔离还需要受限 MCP 强制过滤 `space_key`。
+- migration 会检查 P0 owner-only RLS 是否已落地；当前生产库仍有 Dreaming `allow_all`，因此直接应用会安全失败并整体回滚。
+
 ---
 
 ## 13. 环境变量
