@@ -2,7 +2,7 @@
 
 日期：2026-08-09
 
-状态：`DRAFT` / `ENGINEERING_REVIEW_FIXES` / `REVALIDATION_PENDING` / `NO_PROD_CHANGE` / `NO_DEPLOY`
+状态：`DRAFT` / `READY_FOR_FINAL_REVIEW` / `ZERO_COST_REVALIDATED` / `NO_PROD_CHANGE` / `NO_DEPLOY`
 
 分支：`agent/memory-system-schema-phase2-20260809`
 
@@ -34,7 +34,7 @@
 - `npm.cmd run lint`：无 error；仅仓库既有 warning。
 - `npm.cmd run build`：通过；保留既有 bundle size warning。
 - `git diff --check`：通过。
-- 免费临时 Supabase：[run 31274614880](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31274614880) 通过，fresh install、SQL 权限测试、`db lint`（No schema errors）、rollback、清空断言、re-apply 与复测全部成功；临时容器已停止并删除。
+- 免费临时 Supabase：[run 31276716101](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31276716101) 通过，fresh install、完整 SQL 权限测试、`db lint`、rollback、清空断言、re-apply 与复测全部成功；临时容器已停止并删除。
 
 ## 下一步
 
@@ -50,4 +50,14 @@
 - Curator 只能创建 candidate；只有 Owner 可以 approve/reject/revoke，system/GPT/Claude 无审批权。
 - 增加数据库级 mutation idempotency：owner + actor + operation + request id 唯一，数据库计算 request hash，同请求可重放、不同 payload 冲突。
 - Legacy 专属关键词与高 importance 测试验证其在 SQL 阶段即被排除，不影响普通 recall 的正文、数量和顺序。
-- 修订后的免费临时 Supabase、Bridge、lint/build 结果将在本分支重新验证后补充；PR 继续保持 Draft。
+- Shared revision 插入也受数据库触发器限制：只能保留与 candidate 快照一致的 revision 1，不能为 approved Shared 直接塞入 revision 2。
+- provenance/Shared transition 的 revision 绑定使用复合外键，确保 revision、source memory、owner 一致。
+- 修订后验证结果：临时 Supabase 全绿、Bridge 43/43、frontend lint 0 error、frontend build 成功、`git diff --check` 成功。
+
+## 尚未解决
+
+- Phase 3 Runtime 尚未施工；idempotency claim 与完整 mutation 的同事务编排留给 Phase 3。
+- Shared 申请/审批 UI、Curator MCP、生产 persistent audit sink 均未启用。
+- 生产 Supabase、VPS、Cloudflare、密钥、Toy 均未触碰；`MEMORY_SYSTEM_ENABLED` 仍保持关闭。
+
+结论：数据库契约已达到第二轮最终工程审阅条件；PR #25 继续保持 Draft，等待审阅者决定是否转 Ready。

@@ -207,7 +207,7 @@ Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装
 - service role 绕过 RLS 的已知事实 + 固定 RPC 的第二道过滤
 - Bridge owner 缺失 fail closed、scope 伪造失败、MCP actor/space 伪造失败
 
-第一版零付费数据库验证曾通过 [run 31274614880](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31274614880)。本次工程审阅修订必须在同一免费流程重新完成 fresh install、SQL 测试、lint、rollback、re-apply 与复测，最终 run 在二轮审阅报告中记录。
+工程审阅修订版已通过零付费临时 Supabase [run 31276716101](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31276716101)：fresh install、完整 SQL 权限测试、`db lint`、显式 rollback、V2 对象清空断言、re-apply 与复测全部成功；临时容器随后停止并删除。
 
 ## 9. Rollback
 
