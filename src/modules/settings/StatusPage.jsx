@@ -1,5 +1,10 @@
-import { Link } from 'react-router'
-import LineIcon from '../../shared/LineIcon'
+import {
+  MobileBadge,
+  MobileCard,
+  MobilePage,
+  MobilePageHeader,
+  MobileSection,
+} from '../../shared/MobileUI'
 
 const URLS = [
   {
@@ -39,95 +44,60 @@ const INFRA = [
   { label: 'Process', value: 'pm2 · keeps bridge alive' },
 ]
 
-function Badge({ type, children }) {
-  const colors = {
-    green: { bg: 'var(--green-bg, #e8f5ec)', color: 'var(--green, #5a9e6f)' },
-    yellow: { bg: 'var(--yellow-bg, #fdf5e0)', color: 'var(--yellow, #c49a2a)' },
-  }
-  const c = colors[type] || colors.green
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 3,
-      fontSize: 10, fontWeight: 600, padding: '2px 7px',
-      borderRadius: 12, background: c.bg, color: c.color,
-    }}>{children}</span>
-  )
-}
-
 export default function StatusPage() {
   return (
-    <div>
-      <div className="page-header">
-        <h2 className="page-title page-title-with-icon"><LineIcon name="workbench" />Config</h2>
-        <Link to="/" style={{ textDecoration: 'none', fontSize: 14, color: 'var(--accent)' }}>Home</Link>
-      </div>
+    <MobilePage className="status-page">
+      <MobilePageHeader title="Config" icon="workbench" />
 
-      <section style={{ marginBottom: 24 }}>
-        <h3 style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 10 }}>URLs</h3>
-
-        {URLS.map((u, i) => (
-          <div key={i} className="card" style={{ padding: '14px 16px', marginBottom: 8, position: 'relative', borderLeft: u.recommended ? '3px solid var(--accent)' : undefined }}>
-            {u.recommended && (
-              <span style={{
-                position: 'absolute', top: -1, right: -1,
-                background: 'var(--accent)', color: '#fff',
-                fontSize: 9, fontWeight: 600, padding: '2px 8px',
-                borderRadius: '0 10px 0 8px',
-              }}>REC</span>
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{u.name}</span>
-              {u.tags.map(t => (
-                <Badge key={t} type={t === 'UI Only' ? 'yellow' : 'green'}>{t}</Badge>
-              ))}
+      <MobileSection title="URLs">
+        {URLS.map(url => (
+          <MobileCard
+            key={url.url}
+            className={`status-url-card${url.recommended ? ' is-recommended' : ''}`}
+          >
+            {url.recommended && <span className="status-rec">REC</span>}
+            <div className="status-card-title-row">
+              <h3>{url.name}</h3>
+              <div className="status-badges">
+                {url.tags.map(tag => (
+                  <MobileBadge key={tag} tone={tag === 'UI Only' ? 'gold' : 'green'}>{tag}</MobileBadge>
+                ))}
+              </div>
             </div>
-            <code style={{ fontSize: 11, color: 'var(--accent)', wordBreak: 'break-all', display: 'block', marginBottom: 4, fontFamily: 'var(--font-num)' }}>{u.url}</code>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>{u.desc}</p>
-          </div>
+            <code className="status-url">{url.url}</code>
+            <p>{url.desc}</p>
+          </MobileCard>
         ))}
-      </section>
+      </MobileSection>
 
-      <section style={{ marginBottom: 24 }}>
-        <h3 style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 10 }}>VPS Services</h3>
-
-        {VPS_SERVICES.map((s, i) => (
-          <div key={i} className="card" style={{ padding: '12px 16px', marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</span>
-              <Badge type="green">{s.status}</Badge>
+      <MobileSection title="VPS Services">
+        {VPS_SERVICES.map(service => (
+          <MobileCard key={service.name} className="status-service-card">
+            <div className="status-card-title-row">
+              <h3>{service.name}</h3>
+              <MobileBadge>{service.status}</MobileBadge>
             </div>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>{s.desc}</p>
-          </div>
+            <p>{service.desc}</p>
+          </MobileCard>
         ))}
-      </section>
+      </MobileSection>
 
-      <section style={{ marginBottom: 24 }}>
-        <h3 style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 10 }}>Infrastructure</h3>
-
-        <div className="card" style={{ padding: '10px 16px' }}>
-          {INFRA.map((row, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'baseline', gap: 8,
-              padding: '7px 0',
-              borderBottom: i < INFRA.length - 1 ? '1px solid var(--border)' : 'none',
-              fontSize: 13,
-            }}>
-              <span style={{ fontWeight: 600, minWidth: 70, flexShrink: 0 }}>{row.label}</span>
-              <span style={{ color: 'var(--text-secondary)', fontSize: 12, wordBreak: 'break-all' }}>{row.value}</span>
+      <MobileSection title="Infrastructure">
+        <MobileCard className="status-infra-card">
+          {INFRA.map(row => (
+            <div className="status-infra-row" key={row.label}>
+              <strong>{row.label}</strong>
+              <span>{row.value}</span>
             </div>
           ))}
-        </div>
-      </section>
+        </MobileCard>
+      </MobileSection>
 
-      <div className="card" style={{
-        padding: '12px 14px', fontSize: 12,
-        color: 'var(--text-secondary)', lineHeight: 1.7,
-        borderLeft: '3px solid var(--accent)',
-      }}>
-        <strong style={{ color: 'var(--accent)' }}>Daily use:</strong> Cloudflare or DuckDNS — both full HTTPS + chat.<br />
-        <strong style={{ color: 'var(--accent)' }}>Updates:</strong> Cloudflare = <code>npx wrangler deploy</code> on PC; VPS = SSH + pull + rebuild.<br />
-        <strong style={{ color: 'var(--accent)' }}>VPS auto-runs:</strong> pm2 keeps bridge alive, no need to stay online.
-      </div>
-    </div>
+      <MobileCard className="status-notice">
+        <p><strong>Daily use:</strong> Cloudflare or DuckDNS — both full HTTPS + chat.</p>
+        <p><strong>Updates:</strong> Cloudflare = <code>npx wrangler deploy</code> on PC; VPS = SSH + pull + rebuild.</p>
+        <p><strong>VPS auto-runs:</strong> pm2 keeps bridge alive, no need to stay online.</p>
+      </MobileCard>
+    </MobilePage>
   )
 }

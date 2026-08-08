@@ -23,6 +23,13 @@ export default function Home() {
   const [quote, setQuote] = useState(null)
   const ref = useRef(null)
 
+  function goToPage(nextPage) {
+    const el = ref.current
+    if (!el) return
+    el.scrollTo({ left: nextPage * el.clientWidth, behavior: 'smooth' })
+    setPage(nextPage)
+  }
+
   useEffect(() => {
     const id = setInterval(() => setTime(clock()), 30_000)
     return () => clearInterval(id)
@@ -57,7 +64,7 @@ export default function Home() {
       </header>
 
       {/* Swipeable pages */}
-      <div className="pd-pages" ref={ref}
+      <div className="pd-pages" ref={ref} aria-label="小屋桌面分页"
         onScroll={() => {
           const el = ref.current
           if (el) setPage(Math.round(el.scrollLeft / el.clientWidth))
@@ -114,9 +121,17 @@ export default function Home() {
       </div>
 
       {/* Page dots */}
-      <div className="pd-dots">
-        <span className={`pd-dot${page === 0 ? ' on' : ''}`} />
-        <span className={`pd-dot${page === 1 ? ' on' : ''}`} />
+      <div className="pd-dots" aria-label="切换桌面分页">
+        {[0, 1].map(index => (
+          <button
+            key={index}
+            type="button"
+            className={`pd-dot${page === index ? ' on' : ''}`}
+            aria-label={`前往第 ${index + 1} 页`}
+            aria-current={page === index ? 'page' : undefined}
+            onClick={() => goToPage(index)}
+          />
+        ))}
       </div>
     </div>
   )
