@@ -1,5 +1,3 @@
-const DEFAULT_TABLE = 'memory_entries'
-
 function clampLimit(value, fallback, maximum) {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed) || parsed < 1) return fallback
@@ -65,17 +63,16 @@ export function createSupabaseRest({ url, serverKey, fetchImpl = fetch }) {
 }
 
 /**
- * Repository for the future canonical memory_entries table.
- * Phase one intentionally does not create or access that table in production.
- * Old brain/memories tables will later be treated as legacy sources, never as
- * two independent memory engines.
+ * Repository for the canonical Memory Runtime. It never queries a memory table
+ * directly; every operation goes through a server-selected fixed-actor RPC.
  */
 export class SupabaseMemoryRepository {
-  constructor({ rest, ownerId, table = DEFAULT_TABLE }) {
+  transactionalAudit = true
+
+  constructor({ rest, ownerId }) {
     if (typeof rest !== 'function') throw new Error('A Supabase REST function is required')
     this.rest = rest
     this.ownerId = ownerId
-    this.table = table
   }
 
   requireOwnerId() {
@@ -87,45 +84,105 @@ export class SupabaseMemoryRepository {
     return this.ownerId
   }
 
-  async insert(entry) {
-    const ownerId = this.requireOwnerId()
-    const rows = await this.rest('POST', this.table, {
-      ...entry,
-      owner_id: ownerId,
-    })
-    return Array.isArray(rows) ? rows[0] : rows
+  unwrapEnvelope(payload) {
+    const envelope = Array.isArray(payload) ? payload[0] : payload
+    if (!envelope || typeof envelope !== 'object') {
+      const error = new Error('Memory Runtime returned an invalid response')
+      error.code = 'INVALID_MEMORY_RUNTIME_RESPONSE'
+      throw error
+    }
+    if (envelope.ok === false) {
+      const error = new Error(envelope.message || 'Memory Runtime rejected the operation')
+      error.code = envelope.error_code || 'MEMORY_OPERATION_FAILED'
+      error.auditPersisted = envelope.audit_persisted === true
+      throw error
+    }
+    return envelope
   }
 
-  async getById(id, { scope }) {
+  runtimePath(operation, actor) {
+    return `rpc/memory_runtime_${operation}_${actor}`
+  }
+
+  async remember(entry, { actor, requestId }) {
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      this.runtimePath('remember', actor),
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_memory: entry,
+      }
+    ))
+    return envelope.memory
+  }
+
+  async getById(id, { scope, requestId }) {
     const actor = actorFromScope(scope)
-    const rows = await this.rest('POST', `rpc/memory_get_${actor}`, {
+    const envelope = this.unwrapEnvelope(await this.rest('POST', this.runtimePath('get', actor), {
       p_owner_id: this.requireOwnerId(),
+      p_request_id: requestId,
       p_memory_id: id,
-    })
-    return rows?.[0] || null
+    }))
+    return envelope.memory || null
   }
 
-  async list({ scope, limit = 100, memoryType, tags = [], retention }) {
+  async list({ scope, limit = 20, cursorId = null, memoryType, tags = [], retention, requestId }) {
     const actor = actorFromScope(scope)
-    const safeLimit = clampLimit(limit, 100, 200)
-    return await this.rest('POST', `rpc/memory_list_${actor}`, {
+    const safeLimit = clampLimit(limit, 20, 50)
+    const envelope = this.unwrapEnvelope(await this.rest('POST', this.runtimePath('list', actor), {
       p_owner_id: this.requireOwnerId(),
+      p_request_id: requestId,
       p_limit: safeLimit,
+      p_cursor_id: cursorId,
       p_memory_type: memoryType || null,
       p_tags: tags,
       p_retention: retention || null,
-    }) || []
+    }))
+    return envelope.items || []
   }
 
-  async search({ scope, query, limit = 20, tags = [] }) {
+  async search({ scope, query, limit = 5, cursorId = null, tags = [], requestId }) {
     const actor = actorFromScope(scope)
-    const safeLimit = clampLimit(limit, 20, 50)
+    const safeLimit = clampLimit(limit, 5, 10)
     const term = sanitizeSearchTerm(query)
-    return await this.rest('POST', `rpc/memory_recall_${actor}`, {
+    const envelope = this.unwrapEnvelope(await this.rest('POST', this.runtimePath('recall', actor), {
       p_owner_id: this.requireOwnerId(),
+      p_request_id: requestId,
       p_query: term,
       p_limit: safeLimit,
+      p_cursor_id: cursorId,
       p_tags: tags,
-    }) || []
+    }))
+    return envelope.items || []
+  }
+
+  async revise(id, patch, reason, { actor, requestId }) {
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      this.runtimePath('revise', actor),
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_memory_id: id,
+        p_patch: patch,
+        p_reason: reason,
+      }
+    ))
+    return envelope.memory
+  }
+
+  async proposeShared(id, reason, { actor, requestId }) {
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      this.runtimePath('propose_shared', actor),
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_memory_id: id,
+        p_reason: reason,
+      }
+    ))
+    return envelope.memory
   }
 }

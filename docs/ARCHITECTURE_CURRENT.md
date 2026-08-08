@@ -338,3 +338,14 @@ MemoryService 管理同一套规则
 | MEMORY_SYSTEM_ENABLED | VPS pm2 env | 默认 false；仅在 `memory_entries` migration 已应用且权限测试通过后才能设为 true |
 
 > 上述新增 Bridge 变量目前只在分支代码中生效，生产 VPS尚未配置。本阶段没有修改任何生产环境变量；Memory System 默认 fail closed。
+
+---
+
+## 14. Memory Runtime Phase 3（Draft，未部署）
+
+- 两种真实 MCP transport 已统一进入固定 actor 的 `MemoryService`，客户端提供的 body/query/header/tool args 不能改变 actor。
+- Repository 只调用 `memory_runtime_*_gpt|claude` 固定 RPC；service role 对规范表和旧内部 RPC 的直接路径已撤销。
+- `remember/revise/propose_shared` 将正文、revision、provenance、audit、idempotency 放在一笔数据库事务中；读取审计失败同样 fail closed。
+- Shared 推荐在可信事务内解析当前 private revision 并形成不可漂移 candidate；Owner approve/reject/revoke 仍走 Phase 2 独立认证门。
+- Legacy Pending 在普通 SQL 查询条件中即被排除；不迁正文、不默认 Shared。
+- 本分支只提供 migration、Bridge Runtime、测试与免费临时 Supabase CI；生产环境仍保持 V2/V3 未应用、开关关闭。详见 `docs/MEMORY_SYSTEM_PHASE3_RUNTIME.md`。

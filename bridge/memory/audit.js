@@ -28,11 +28,10 @@ export class InMemoryAuditSink {
 export class SupabaseMemoryAuditSink {
   persistent = true
 
-  constructor({ rest, ownerId, table = 'memory_audit_log' }) {
+  constructor({ rest, ownerId }) {
     if (typeof rest !== 'function') throw new Error('A Supabase REST function is required')
     this.rest = rest
     this.ownerId = ownerId
-    this.table = table
   }
 
   async record(event) {
@@ -45,20 +44,27 @@ export class SupabaseMemoryAuditSink {
     const resultSpaces = Array.isArray(event.result_spaces)
       ? event.result_spaces.filter(Boolean)
       : []
-    const row = {
-      owner_id: this.ownerId,
-      actor: event.actor,
-      action: event.action,
-      memory_id: event.memory_id || null,
-      space_key: event.target_space || (resultSpaces.length === 1 ? resultSpaces[0] : null),
-      result: event.allowed ? 'allowed' : 'denied',
-      reason_code: event.reason_code || null,
-      result_count: Number.isInteger(event.result_count) ? event.result_count : null,
-      result_spaces: resultSpaces,
-      metadata: {},
-      occurred_at: event.occurred_at,
+    if (!['gpt', 'claude'].includes(event.actor)) {
+      const error = new Error('A fixed memory actor is required for persistent audit')
+      error.code = 'INVALID_MEMORY_ACTOR'
+      throw error
     }
-    const rows = await this.rest('POST', this.table, row)
-    return Array.isArray(rows) ? rows[0] : rows
+    if (!event.request_id) {
+      const error = new Error('A server-generated request id is required for persistent audit')
+      error.code = 'MEMORY_REQUEST_ID_REQUIRED'
+      throw error
+    }
+
+    return this.rest('POST', `rpc/memory_runtime_audit_${event.actor}`, {
+      p_owner_id: this.ownerId,
+      p_request_id: event.request_id,
+      p_action: event.action,
+      p_memory_id: event.memory_id || null,
+      p_space_key: event.target_space || (resultSpaces.length === 1 ? resultSpaces[0] : null),
+      p_result: event.result || (event.allowed ? 'allowed' : 'denied'),
+      p_reason_code: event.reason_code || null,
+      p_result_count: Number.isInteger(event.result_count) ? event.result_count : null,
+      p_result_spaces: resultSpaces,
+    })
   }
 }

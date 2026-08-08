@@ -10,6 +10,9 @@ export const MCP_TOOL_ROUTES = Object.freeze({
   load_memories: 'memory.list',
   search_memories: 'memory.recall',
   save_to_memories: 'memory.write',
+  get_memory: 'memory.get',
+  revise_memory: 'memory.revise',
+  propose_shared_candidate: 'memory.proposeShared',
 })
 
 const closedObject = properties => ({
@@ -17,6 +20,27 @@ const closedObject = properties => ({
   properties,
   additionalProperties: false,
 })
+
+const memoryFields = {
+  content: { type: 'string', minLength: 1, maxLength: 50000 },
+  title: { type: 'string', maxLength: 500 },
+  memory_type: {
+    type: 'string',
+    enum: ['fact', 'feeling', 'diary', 'article', 'small_moment', 'memo', 'self_inquiry', 'quote', 'summary', 'reflection'],
+  },
+  kind: { type: 'string', enum: ['记事', '记感受'] },
+  tag: { type: 'string', maxLength: 80 },
+  tags: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 80 } },
+  feeling: { type: 'string', maxLength: 1000 },
+  mood: { type: 'string', maxLength: 80 },
+  importance: { type: 'integer', minimum: 1, maximum: 5 },
+  retention: { type: 'string', enum: ['fixed', 'long', 'short', 'temporary'] },
+  source_ref: { type: 'string', maxLength: 500 },
+}
+
+const revisionMemoryFields = Object.fromEntries(
+  Object.entries(memoryFields).filter(([name]) => name !== 'source_ref')
+)
 
 export function createMcpToolDefinitions(actor) {
   const sender = actor === MEMORY_ACTORS.GPT ? 'GPT' : 'CC'
@@ -46,47 +70,40 @@ export function createMcpToolDefinitions(actor) {
     },
     {
       name: 'get_starter_pack',
-      description: '通过统一 Memory System 加载自己的私有记忆与已批准 Shared Memory。',
+      description: '加载自己的私有记忆与已批准 Shared Memory。默认只返回少量结果。',
       inputSchema: closedObject({
-        limit: { type: 'integer', minimum: 1, maximum: 50 },
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
       }),
     },
     {
       name: 'save_memory',
-      description: '通过统一 Memory System 保存记忆。目标私有空间由服务端 actor 固定。',
+      description: '主动保存一条私有记忆。归属、actor、审计和幂等均由服务端处理。',
       inputSchema: {
-        ...closedObject({
-          content: { type: 'string', minLength: 1, maxLength: 50000 },
-          title: { type: 'string' },
-          kind: { type: 'string', enum: ['记事', '记感受'] },
-          tag: { type: 'string' },
-          tags: { type: 'array', items: { type: 'string' } },
-          feeling: { type: 'string' },
-          mood: { type: 'string' },
-          importance: { type: 'integer', minimum: 1, maximum: 5 },
-          source_ref: { type: 'string' },
-        }),
+        ...closedObject(memoryFields),
         required: ['content'],
       },
     },
     {
       name: 'recall',
-      description: '检索自己的私有记忆与已批准 Shared Memory；不会检索另一方私有空间或 Legacy Pending。',
+      description: '检索自己的私有记忆与已批准 Shared；不会检索另一方私有空间或 Legacy Pending。',
       inputSchema: {
         ...closedObject({
-          query: { type: 'string', minLength: 1 },
-          limit: { type: 'integer', minimum: 1, maximum: 50 },
+          query: { type: 'string', minLength: 1, maxLength: 500 },
+          limit: { type: 'integer', minimum: 1, maximum: 10 },
+          cursor: { type: 'integer', minimum: 1 },
+          tags: memoryFields.tags,
         }),
         required: ['query'],
       },
     },
     {
       name: 'load_memories',
-      description: '兼容旧工具名；实际调用统一 Memory System，不再直接读取 memories 表。',
+      description: '兼容旧工具名；实际调用统一 Memory System，不直接读取旧 memories 表。',
       inputSchema: closedObject({
         level: { type: 'string' },
         category: { type: 'string' },
-        limit: { type: 'integer', minimum: 1, maximum: 200 },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+        cursor: { type: 'integer', minimum: 1 },
       }),
     },
     {
@@ -94,24 +111,56 @@ export function createMcpToolDefinitions(actor) {
       description: '兼容旧工具名；实际调用统一 Memory System 的 recall。',
       inputSchema: {
         ...closedObject({
-          keyword: { type: 'string', minLength: 1 },
+          keyword: { type: 'string', minLength: 1, maxLength: 500 },
           category: { type: 'string' },
-          limit: { type: 'integer', minimum: 1, maximum: 50 },
+          limit: { type: 'integer', minimum: 1, maximum: 10 },
+          cursor: { type: 'integer', minimum: 1 },
         }),
         required: ['keyword'],
       },
     },
     {
       name: 'save_to_memories',
-      description: '兼容旧工具名；实际调用统一 Memory System，不再直接写入 memories 表。',
+      description: '兼容旧工具名；实际保存到统一 Memory System 的固定私有空间。',
       inputSchema: {
         ...closedObject({
-          content: { type: 'string', minLength: 1, maxLength: 50000 },
+          content: memoryFields.content,
           category: { type: 'string' },
           level: { type: 'string' },
-          importance: { type: 'integer', minimum: 1, maximum: 5 },
+          importance: memoryFields.importance,
         }),
         required: ['content'],
+      },
+    },
+    {
+      name: 'get_memory',
+      description: '按编号读取一条自己有权访问的记忆。',
+      inputSchema: {
+        ...closedObject({ memory_id: { type: 'integer', minimum: 1 } }),
+        required: ['memory_id'],
+      },
+    },
+    {
+      name: 'revise_memory',
+      description: '修订自己的私有记忆；旧版本、来源链和审计由服务端自动保存。',
+      inputSchema: {
+        ...closedObject({
+          memory_id: { type: 'integer', minimum: 1 },
+          reason: { type: 'string', minLength: 1, maxLength: 1000 },
+          ...revisionMemoryFields,
+        }),
+        required: ['memory_id', 'reason'],
+      },
+    },
+    {
+      name: 'propose_shared_candidate',
+      description: '推荐把自己私有记忆的当前确定版本作为 Shared 候选；只有 Owner 能批准。',
+      inputSchema: {
+        ...closedObject({
+          memory_id: { type: 'integer', minimum: 1 },
+          reason: { type: 'string', minLength: 1, maxLength: 1000 },
+        }),
+        required: ['memory_id', 'reason'],
       },
     },
   ]
@@ -137,7 +186,7 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
   if (typeof livingroomRest !== 'function') throw new Error('Livingroom REST function is required')
   const sender = actor === MEMORY_ACTORS.GPT ? 'GPT' : 'CC'
 
-  return async function callMcpTool(name, args = {}) {
+  return async function callMcpTool(name, args = {}, trustedContext = {}) {
     if (name === 'read_livingroom_messages') {
       const limit = parseLimit(args.limit, 50, 200)
       const since = parseSince(args.since)
@@ -148,9 +197,7 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
     }
 
     if (name === 'send_livingroom_message') {
-      if (typeof args.message !== 'string' || !args.message.trim()) {
-        throw new TypeError('message is required')
-      }
+      if (typeof args.message !== 'string' || !args.message.trim()) throw new TypeError('message is required')
       if (args.message.length > 10_000) throw new TypeError('message is too long')
       const rows = await livingroomRest('POST', 'livingroom', {
         sender,
@@ -167,44 +214,50 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
     }
 
     if (name === 'get_starter_pack') {
-      return JSON.stringify(await memoryService.starterPack(actor, args))
+      return JSON.stringify(await memoryService.starterPack(actor, args, trustedContext))
     }
-
     if (name === 'save_memory') {
-      const saved = await memoryService.write(actor, args)
+      const saved = await memoryService.write(actor, args, trustedContext)
       return JSON.stringify({ ok: true, id: saved?.id, preview: args.content.slice(0, 80) })
     }
-
     if (name === 'recall') {
-      return JSON.stringify(await memoryService.recall(actor, args))
+      return JSON.stringify(await memoryService.recall(actor, args, trustedContext))
     }
-
     if (name === 'load_memories') {
       return JSON.stringify(await memoryService.list(actor, {
         limit: args.limit,
+        cursor: args.cursor,
         level: args.level,
         category: args.category,
-      }))
+      }, trustedContext))
     }
-
     if (name === 'search_memories') {
       return JSON.stringify(await memoryService.recall(actor, {
         query: args.keyword,
         limit: args.limit,
+        cursor: args.cursor,
         category: args.category,
-      }))
+      }, trustedContext))
     }
-
     if (name === 'save_to_memories') {
       const saved = await memoryService.write(actor, {
         content: args.content,
         category: args.category,
         level: args.level,
         importance: args.importance,
-      })
+      }, trustedContext)
       return JSON.stringify({ ok: true, id: saved?.id, preview: args.content.slice(0, 80) })
     }
-
+    if (name === 'get_memory') {
+      return JSON.stringify(await memoryService.get(actor, args.memory_id, trustedContext))
+    }
+    if (name === 'revise_memory') {
+      return JSON.stringify(await memoryService.revise(actor, args, trustedContext))
+    }
+    if (name === 'propose_shared_candidate') {
+      const candidate = await memoryService.proposeShared(actor, args, trustedContext)
+      return JSON.stringify({ ok: true, candidate_id: candidate?.id, status: candidate?.shared_status })
+    }
     throw new Error(`unknown tool: ${name}`)
   }
 }

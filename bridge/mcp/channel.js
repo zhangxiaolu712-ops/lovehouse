@@ -15,8 +15,8 @@ export function createMcpChannel({ actor, memoryService, livingroomRest }) {
   return Object.freeze({
     actor,
     tools,
-    callTool(name, args, _untrustedRequestMetadata) {
-      return fixedActorToolHandler(name, args)
+    callTool(name, args, trustedContext = {}) {
+      return fixedActorToolHandler(name, args, trustedContext)
     },
   })
 }

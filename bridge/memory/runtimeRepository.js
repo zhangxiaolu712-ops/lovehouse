@@ -7,10 +7,12 @@ export class MemorySystemDisabledError extends Error {
 }
 
 export class DisabledMemoryRepository {
-  async insert() { throw new MemorySystemDisabledError() }
+  async remember() { throw new MemorySystemDisabledError() }
   async getById() { throw new MemorySystemDisabledError() }
   async list() { throw new MemorySystemDisabledError() }
   async search() { throw new MemorySystemDisabledError() }
+  async revise() { throw new MemorySystemDisabledError() }
+  async proposeShared() { throw new MemorySystemDisabledError() }
 }
 
 export function createRuntimeMemoryRepository({ enabled, canonicalRepository }) {

@@ -1,0 +1,114 @@
+name: Memory Runtime Phase 3 (free ephemeral Supabase)
+
+on:
+  pull_request:
+    paths:
+      - "bridge/**"
+      - "supabase/migrations/20260808191311_create_unified_memory_system_v2.sql"
+      - "supabase/migrations/20260808215808_memory_runtime_phase3.sql"
+      - "supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql"
+      - "supabase/rollback/20260808215808_memory_runtime_phase3_rollback.sql"
+      - "supabase/tests/memory_system_phase2.sql"
+      - "supabase/tests/memory_runtime_phase3.sql"
+      - ".github/workflows/memory-runtime-phase3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1
+        with:
+          version: 2.113.0
+
+      - name: Prepare free disposable local Supabase
+        shell: bash
+        run: |
+          mkdir -p .memory-runtime-ci
+          supabase init --workdir .memory-runtime-ci --yes
+          supabase start --workdir .memory-runtime-ci \
+            --exclude studio,imgproxy,storage-api,realtime,mailpit,edge-runtime,logflare,vector,supavisor
+
+      - name: Apply Phase 2 then verify its frozen contract
+        shell: bash
+        run: |
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260808191311_create_unified_memory_system_v2.sql
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/memory_system_phase2.sql
+
+      - name: Apply and verify Phase 3 Runtime
+        shell: bash
+        run: |
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260808215808_memory_runtime_phase3.sql
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/memory_runtime_phase3.sql
+          supabase db lint --workdir .memory-runtime-ci --local --schema public \
+            --level warning --fail-on error
+
+      - name: Roll back Phase 3 and re-apply
+        shell: bash
+        run: |
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/rollback/20260808215808_memory_runtime_phase3_rollback.sql
+          test "$(psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -Atc \
+            "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'memory_runtime_%';")" = "0"
+          test "$(psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -Atc \
+            "select count(*) from pg_class where oid='public.memory_entries'::regclass;")" = "1"
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260808215808_memory_runtime_phase3.sql
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/memory_runtime_phase3.sql
+
+      - name: Full rollback and fresh reinstall
+        shell: bash
+        run: |
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/rollback/20260808215808_memory_runtime_phase3_rollback.sql
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql
+          test "$(psql postgresql://postgres:postgres@127.0.0.1:54322/postgres -Atc \
+            "select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'memory_%';")" = "0"
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260808191311_create_unified_memory_system_v2.sql
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20260808215808_memory_runtime_phase3.sql
+          psql postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            -v ON_ERROR_STOP=1 \
+            -f supabase/tests/memory_runtime_phase3.sql
+
+      - name: Bridge tests
+        working-directory: bridge
+        run: |
+          npm install --ignore-scripts --no-package-lock --no-audit --no-fund
+          npm test
+
+      - name: Frontend lint and build
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Stop and delete the disposable stack
+        if: always()
+        run: supabase stop --workdir .memory-runtime-ci --no-backup

@@ -14,7 +14,7 @@ test('MCP schemas expose no authority, owner, revision, hash, space or Shared ap
       const propertyNames = Object.keys(tool.inputSchema.properties || {})
       assert.deepEqual(
         propertyNames.filter(name => (
-          /^(actor|created_by_actor|owner|owner_id|permission|permissions|revision_id|revision_hash|source_revision_id|source_revision_hash|request_hash|space_key|spaceKey|namespace|shared_status|approval_status)$/
+          /^(actor|created_by_actor|owner|owner_id|permission|permissions|revision_id|revision_hash|source_revision_id|source_revision_hash|request_id|request_hash|idempotency_key|space_key|spaceKey|namespace|shared_status|approval_status)$/
             .test(name)
         )),
         [],
@@ -24,12 +24,12 @@ test('MCP schemas expose no authority, owner, revision, hash, space or Shared ap
   }
 })
 
-test('all nine compatibility tools have an explicit adapter route', () => {
+test('all nine compatibility tools remain and all twelve tools have an explicit adapter route', () => {
   const toolNames = createMcpToolDefinitions(MEMORY_ACTORS.GPT).map(tool => tool.name)
-  assert.equal(toolNames.length, 9)
+  assert.equal(toolNames.length, 12)
   assert.deepEqual(Object.keys(MCP_TOOL_ROUTES), toolNames)
   assert.deepEqual(
-    Object.values(MCP_TOOL_ROUTES).filter(route => route.startsWith('memory.')),
+    Object.values(MCP_TOOL_ROUTES).slice(3, 9),
     [
       'memory.starterPack',
       'memory.write',
@@ -41,13 +41,16 @@ test('all nine compatibility tools have an explicit adapter route', () => {
   )
 })
 
-test('all nine adapter routes reach only MemoryService or livingroom REST', async () => {
+test('all twelve adapter routes reach only MemoryService or livingroom REST', async () => {
   const calls = []
   const memoryService = {
     async write() { calls.push('memory.write'); return { id: 1 } },
     async recall() { calls.push('memory.recall'); return [] },
     async list() { calls.push('memory.list'); return [] },
     async starterPack() { calls.push('memory.starterPack'); return {} },
+    async get() { calls.push('memory.get'); return null },
+    async revise() { calls.push('memory.revise'); return {} },
+    async proposeShared() { calls.push('memory.proposeShared'); return {} },
   }
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
@@ -69,6 +72,9 @@ test('all nine adapter routes reach only MemoryService or livingroom REST', asyn
   await handler('load_memories', {})
   await handler('search_memories', { keyword: 'three' })
   await handler('save_to_memories', { content: 'four' })
+  await handler('get_memory', { memory_id: 1 })
+  await handler('revise_memory', { memory_id: 1, content: 'five', reason: 'clarify' })
+  await handler('propose_shared_candidate', { memory_id: 1, reason: 'useful together' })
 
   assert.deepEqual(calls, [
     'livingroom.read',
@@ -80,6 +86,9 @@ test('all nine adapter routes reach only MemoryService or livingroom REST', asyn
     'memory.list',
     'memory.recall',
     'memory.write',
+    'memory.get',
+    'memory.revise',
+    'memory.proposeShared',
   ])
 })
 
@@ -96,6 +105,9 @@ test('GPT compatibility tools call one MemoryService with fixed GPT actor', asyn
     async recall(...args) { calls.push(['recall', ...args]); return [] },
     async list(...args) { calls.push(['list', ...args]); return [] },
     async starterPack(...args) { calls.push(['starterPack', ...args]); return {} },
+    async get(...args) { calls.push(['get', ...args]); return null },
+    async revise(...args) { calls.push(['revise', ...args]); return {} },
+    async proposeShared(...args) { calls.push(['proposeShared', ...args]); return {} },
   }
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,

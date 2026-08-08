@@ -11,7 +11,9 @@ export const MEMORY_SPACES = Object.freeze({
 })
 
 export const SHARED_STATES = Object.freeze({
-  PENDING: 'pending',
+  CANDIDATE: 'candidate',
+  // Compatibility alias for Phase 1 tests and callers.
+  PENDING: 'candidate',
   APPROVED: 'approved',
   REJECTED: 'rejected',
   REVOKED: 'revoked',

@@ -21,10 +21,12 @@ test('disabled runtime repository fails closed for every operation without touch
 
   assert.equal(repository instanceof DisabledMemoryRepository, true)
   for (const operation of [
-    () => repository.insert({}),
+    () => repository.remember({}),
     () => repository.getById(1),
     () => repository.list({}),
     () => repository.search({}),
+    () => repository.revise(1, {}, 'reason'),
+    () => repository.proposeShared(1, 'reason'),
   ]) {
     await assert.rejects(
       operation(),
@@ -43,7 +45,7 @@ test('enabled runtime repository uses only the canonical repository', () => {
   )
 })
 
-test('all six memory MCP tools fail closed while Memory System is disabled', async () => {
+test('all nine memory MCP tools fail closed while Memory System is disabled', async () => {
   const memoryService = new MemoryService({
     repository: createRuntimeMemoryRepository({ enabled: false }),
     auditSink: { persistent: true, async record() {} },
@@ -62,6 +64,9 @@ test('all six memory MCP tools fail closed while Memory System is disabled', asy
     ['load_memories', {}],
     ['search_memories', { keyword: 'blocked' }],
     ['save_to_memories', { content: 'blocked' }],
+    ['get_memory', { memory_id: 1 }],
+    ['revise_memory', { memory_id: 1, content: 'blocked', reason: 'test' }],
+    ['propose_shared_candidate', { memory_id: 1, reason: 'test' }],
   ]
 
   for (const [name, args] of calls) {
