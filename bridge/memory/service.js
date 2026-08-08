@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { memoryTypeFromInput, SHARED_STATES } from './model.js'
 import { MemoryAccessPolicy } from './accessPolicy.js'
 import { NullMemoryAuditSink } from './audit.js'
+import { semanticFallbackAllowed } from './embedding.js'
 
 function stringOrNull(value, maximum = 500) {
   if (typeof value !== 'string') return null
@@ -91,6 +92,9 @@ export class MemoryService {
     accessPolicy = new MemoryAccessPolicy(),
     auditSink = new NullMemoryAuditSink(),
     writeEnabled = false,
+    semanticRecallEnabled = false,
+    embeddingProvider = null,
+    rankingProfile = 'ranking_v1',
     clock = () => new Date(),
   }) {
     if (!repository) throw new Error('MemoryRepository is required')
@@ -101,6 +105,9 @@ export class MemoryService {
     // A caller cannot enable writes with a flag alone. Phase-one writes are
     // available only when an explicitly persistent audit sink is installed.
     this.writeEnabled = writeEnabled === true && auditSink.persistent === true
+    this.semanticRecallEnabled = semanticRecallEnabled === true
+    this.embeddingProvider = embeddingProvider
+    this.rankingProfile = rankingProfile
     this.clock = clock
   }
 
@@ -212,14 +219,47 @@ export class MemoryService {
       if (typeof input.query !== 'string' || !input.query.trim()) {
         throw new TypeError('query is required')
       }
-      const rows = await this.repository.search({
+      const search = {
         scope: this.accessPolicy.readScopeFor(actor),
         query: input.query.trim(),
         limit: input.limit,
         cursorId: input.cursor ? positiveId(input.cursor, 'cursor') : null,
         tags: normalizeTags(input),
         requestId: trusted.requestId,
-      })
+      }
+      let rows
+      if (this.semanticRecallEnabled) {
+        try {
+          if (typeof this.embeddingProvider?.embed !== 'function') {
+            const error = new Error('Embedding provider is unavailable')
+            error.code = 'MEMORY_EMBEDDING_NOT_CONFIGURED'
+            error.semanticFallbackAllowed = true
+            throw error
+          }
+          const generated = await this.embeddingProvider.embed(search.query)
+          rows = await this.repository.hybridSearch({
+            ...search,
+            queryEmbedding: generated.vector,
+            rankingProfile: this.rankingProfile,
+          })
+        } catch (error) {
+          if (!semanticFallbackAllowed(error)) throw error
+          await this.auditSink.record({
+            actor,
+            action: 'recall_semantic_fallback',
+            allowed: true,
+            result: 'allowed',
+            request_id: trusted.requestId,
+            reason_code: error.code || 'MEMORY_SEMANTIC_UNAVAILABLE',
+            result_count: 0,
+            result_spaces: [],
+            occurred_at: this.clock().toISOString(),
+          })
+          rows = await this.repository.search(search)
+        }
+      } else {
+        rows = await this.repository.search(search)
+      }
       // Defense in depth: never trust a repository/backend filter by itself.
       return rows.filter(row => this.accessPolicy.canRead(actor, row))
     })

@@ -124,6 +124,108 @@ test('Claude reads Claude Memory plus explicitly approved Shared Memory', async 
   assert.deepEqual(rows.map(row => row.id), [2, 3])
 })
 
+test('semantic recall uses hybrid ranking without changing the AI-facing input', async () => {
+  const calls = []
+  const repository = {
+    transactionalAudit: true,
+    async hybridSearch(input) {
+      calls.push(input)
+      return [
+        { id: 1, space_key: 'gpt', content: 'semantic private' },
+        { id: 2, space_key: 'claude', content: 'repository leak' },
+      ]
+    },
+  }
+  const service = new MemoryService({
+    repository,
+    auditSink: { persistent: true, async record() {} },
+    semanticRecallEnabled: true,
+    embeddingProvider: {
+      async embed(query) {
+        assert.equal(query, '没有原词的意思')
+        return { vector: [0.1, 0.9], profile: 'semantic-test-v1', dimensions: 2 }
+      },
+    },
+    rankingProfile: 'ranking_v1',
+  })
+
+  const rows = await service.recall('gpt', { query: '没有原词的意思', limit: 5 })
+  assert.deepEqual(rows.map(row => row.id), [1])
+  assert.deepEqual(calls[0].queryEmbedding, [0.1, 0.9])
+  assert.equal(calls[0].rankingProfile, 'ranking_v1')
+})
+
+test('semantic provider failure is persistently audited before keyword fallback', async () => {
+  const events = []
+  let keywordCalls = 0
+  const repository = {
+    transactionalAudit: true,
+    async search() {
+      keywordCalls += 1
+      return [{ id: 1, space_key: 'gpt', content: 'keyword result' }]
+    },
+  }
+  const error = new Error('provider offline')
+  error.code = 'MEMORY_EMBEDDING_UNAVAILABLE'
+  error.semanticFallbackAllowed = true
+  const service = new MemoryService({
+    repository,
+    auditSink: { persistent: true, async record(event) { events.push(event) } },
+    semanticRecallEnabled: true,
+    embeddingProvider: { async embed() { throw error } },
+  })
+
+  const rows = await service.recall('gpt', { query: 'keyword' })
+  assert.deepEqual(rows.map(row => row.id), [1])
+  assert.equal(keywordCalls, 1)
+  assert.equal(events[0].action, 'recall_semantic_fallback')
+  assert.equal(events[0].reason_code, 'MEMORY_EMBEDDING_UNAVAILABLE')
+  assert.equal(JSON.stringify(events).includes('keyword result'), false)
+})
+
+test('fallback audit failure keeps keyword recall fail closed', async () => {
+  let keywordCalls = 0
+  const error = new Error('provider offline')
+  error.semanticFallbackAllowed = true
+  const service = new MemoryService({
+    repository: {
+      transactionalAudit: true,
+      async search() { keywordCalls += 1; return [] },
+    },
+    auditSink: {
+      persistent: true,
+      async record() { throw new Error('audit unavailable') },
+    },
+    semanticRecallEnabled: true,
+    embeddingProvider: { async embed() { throw error } },
+  })
+  await assert.rejects(service.recall('gpt', { query: 'keyword' }), /audit unavailable/)
+  assert.equal(keywordCalls, 0)
+})
+
+test('security failures never use keyword fallback', async () => {
+  let keywordCalls = 0
+  const securityError = new Error('scope denied')
+  securityError.code = 'MEMORY_ACCESS_DENIED'
+  const service = new MemoryService({
+    repository: {
+      transactionalAudit: true,
+      async hybridSearch() { throw securityError },
+      async search() { keywordCalls += 1; return [] },
+    },
+    auditSink: { persistent: true, async record() {} },
+    semanticRecallEnabled: true,
+    embeddingProvider: {
+      async embed() { return { vector: [0.1, 0.9], profile: 'semantic-test-v1', dimensions: 2 } },
+    },
+  })
+  await assert.rejects(
+    service.recall('gpt', { query: 'private' }),
+    error => error.code === 'MEMORY_ACCESS_DENIED'
+  )
+  assert.equal(keywordCalls, 0)
+})
+
 test('GPT cannot read Claude private memory by id', async () => {
   const { service } = createService()
   await assert.rejects(
