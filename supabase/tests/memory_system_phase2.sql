@@ -366,7 +366,8 @@ begin
       tags, emotion, importance, retention, lifecycle_status, editor_actor,
       revision_reason
     ) values (
-      owner_one, shared_id, 2, 'Swapped shared title', 'Swapped shared body',
+      '10000000-0000-0000-0000-000000000001', shared_id, 2,
+      'Swapped shared title', 'Swapped shared body',
       'attacker', 'feeling', array['shared'], '{}'::jsonb, 1, 'long', 'active',
       'owner', 'Attempted revision swap'
     );
