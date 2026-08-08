@@ -87,6 +87,12 @@ VPS (139.180.146.26)
 - **迁移尚未应用到生产库**。必须先部署并验证 Bridge 服务端密钥，再执行迁移，避免小客厅和记忆工具被一起锁住。
 - `toy_commands` 不在本次修复范围内，迁移明确不修改它。
 
+### 统一 Memory System V2（仅 Draft，未进入上述生产表）
+
+独立 migration `20260808191311_create_unified_memory_system_v2.sql` 设计了九张全新规范表、四空间、revision/provenance/audit、mutation idempotency、Shared 状态机和固定 GPT/Claude 数据库读 RPC。Shared candidate 绑定确定 private revision 并形成不可变快照：仅 Bridge 内部 Curator RPC 可创建，只有从认证 JWT `auth.uid()` 固定身份的 Owner RPC 可作最终决定。`memory_revisions` 对 Bridge 服务角色只读，只能由历史触发器生成。AI-facing 工具不接收 owner、revision/hash 或权限字段。它不查询旧正文，也未应用生产；生产表数量仍以本节上方实测清单为准。
+
+Bridge 未来读取链为：`固定 MCP actor → AccessPolicy → MemoryService → owner-scoped Repository → 固定 actor RPC → memory_entries`。即使 service key 绕过 RLS，固定 RPC 与服务层二次过滤仍阻止跨空间正文返回。完整方案见 `MEMORY_SYSTEM_PHASE2_SCHEMA.md`。
+
 ---
 
 ## 4. Brain 表详细 Schema
@@ -308,7 +314,7 @@ MemoryService 管理同一套规则
 
 结构迁移与历史正文迁移完全分离：新系统继承 memory type、tag、emotion、importance、decay、source、revision 等结构能力，但本阶段没有建表、没有复制正文。未来迁移必须保留 `original_table`、`original_id`、`original_created_at`、`legacy_source` 及旧的 `author/source_model` 等追溯信息；全部旧正文先进入 Legacy Pending，禁止默认 Shared 或根据语义猜归属。
 
-已合并但未执行的 `20260808174047_memory_namespace_v1.sql` 仍包含旧数据默认 Shared 的草稿逻辑，与最终确认版冲突，禁止直接应用。下一阶段应建立唯一规范表并修订迁移；生产 RLS/public exposure 的 P0 修复继续独立 PR，不与本重构混合。
+含“旧数据默认 Shared”逻辑的 `20260808174047_memory_namespace_v1.sql` 已退出 active migrations，仅在 `supabase/retired_migrations/` 保存带强制失败保护的历史副本，禁止应用。唯一规范结构由 V2 migration 承担；生产 RLS/public exposure 的 P0 修复继续独立 PR，不与本重构混合。
 
 第一阶段 Shared 对 GPT/Claude 均为只读；普通 MCP 写入只能进入 actor 自己的私有空间。`NullMemoryAuditSink` 与 `InMemoryAuditSink` 均不是持久化审计，`MemoryService` 要求 `writeEnabled=true` 且 `auditSink.persistent=true` 才允许写入；当前 Bridge 明确使用 `writeEnabled=false`。因此 append-only 审计持久化上线并完成审阅前，生产记忆写入保持关闭。
 

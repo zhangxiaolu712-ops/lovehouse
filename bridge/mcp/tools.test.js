@@ -8,13 +8,13 @@ import {
   MCP_TOOL_ROUTES,
 } from './tools.js'
 
-test('MCP schemas expose no actor, namespace, space or Shared approval selector', () => {
+test('MCP schemas expose no authority, owner, revision, hash, space or Shared approval selector', () => {
   for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     for (const tool of createMcpToolDefinitions(actor)) {
       const propertyNames = Object.keys(tool.inputSchema.properties || {})
       assert.deepEqual(
         propertyNames.filter(name => (
-          /^(actor|created_by_actor|space_key|spaceKey|namespace|shared_status|approval_status)$/
+          /^(actor|created_by_actor|owner|owner_id|permission|permissions|revision_id|revision_hash|source_revision_id|source_revision_hash|request_hash|space_key|spaceKey|namespace|shared_status|approval_status)$/
             .test(name)
         )),
         [],
