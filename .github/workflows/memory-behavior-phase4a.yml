@@ -73,10 +73,10 @@ jobs:
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql
           test "$(psql "$DB" -Atc "select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'memory_%';")" = "0"
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808191311_create_unified_memory_system_v2.sql
-          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808215808_memory_runtime_phase3.sql
-          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808230911_memory_behavior_phase4a.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_system_phase2.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808215808_memory_runtime_phase3.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_runtime_phase3.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808230911_memory_behavior_phase4a.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4a.sql
 
       - name: Bridge regression
