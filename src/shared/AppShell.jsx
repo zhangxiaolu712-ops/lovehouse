@@ -11,7 +11,7 @@ const TABS = [
 
 export default function AppShell() {
   const { pathname } = useLocation()
-  const hideNav = pathname === '/chat'
+  const hideNav = pathname === '/chat' || pathname === '/livingroom'
 
   useEffect(() => { window.scrollTo(0, 0) }, [pathname])
 
