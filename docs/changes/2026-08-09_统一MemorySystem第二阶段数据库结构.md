@@ -2,7 +2,7 @@
 
 日期：2026-08-09
 
-状态：`DRAFT` / `ZERO_COST_TESTING` / `NO_PROD_CHANGE` / `NO_DEPLOY`
+状态：`DRAFT` / `ZERO_COST_VALIDATED` / `NO_PROD_CHANGE` / `NO_DEPLOY`
 
 分支：`agent/memory-system-schema-phase2-20260809`
 
@@ -34,11 +34,10 @@
 - `npm.cmd run lint`：无 error；仅仓库既有 warning。
 - `npm.cmd run build`：通过；保留既有 bundle size warning。
 - `git diff --check`：通过。
-- 数据库 fresh install / rollback / re-apply：等待 Draft PR 的免费临时 Supabase job，完成后补记。
+- 免费临时 Supabase：[run 31274614880](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31274614880) 通过，fresh install、SQL 权限测试、`db lint`（No schema errors）、rollback、清空断言、re-apply 与复测全部成功；临时容器已停止并删除。
 
 ## 下一步
 
 1. 保持 Draft，不 merge、不 deploy。
-2. 等 GitHub Actions 临时本地 Supabase 验证完成，记录 SQL 测试与 lint 结果。
-3. 由工程师审阅 schema、权限矩阵、旧字段映射和 rollback。
-4. P0 RLS 修复继续独立 PR；Legacy 正文整理继续后置。
+2. 由工程师审阅 schema、权限矩阵、旧字段映射和 rollback。
+3. P0 RLS 修复继续独立 PR；Legacy 正文整理继续后置。

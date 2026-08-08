@@ -1,6 +1,6 @@
 # Memory System 第二阶段数据库设计
 
-状态：`DRAFT` / `ZERO_COST_VALIDATION` / `NO_PRODUCTION_CHANGE` / `NO_LEGACY_BODY_IMPORT`
+状态：`DRAFT` / `ZERO_COST_VALIDATED` / `NO_PRODUCTION_CHANGE` / `NO_LEGACY_BODY_IMPORT`
 
 本阶段只建立统一规范结构并在一次性测试环境验证。没有创建付费 Supabase Branch，没有绑定或修改支付方式，没有执行生产 SQL，也没有读取或迁移生产记忆正文。
 
@@ -184,7 +184,7 @@ Bridge 已增加 `SupabaseMemoryAuditSink` 合约，但 `server.js` 仍未安装
 - service role 绕过 RLS 的已知事实 + 固定 RPC 的第二道过滤
 - Bridge owner 缺失 fail closed、scope 伪造失败、MCP actor/space 伪造失败
 
-最终 CI URL 和通过数量在 Draft PR 验证完成后补入变更记录。
+零付费数据库验证已通过：[GitHub Actions run 31274614880](https://github.com/zhangxiaolu712-ops/lovehouse/actions/runs/31274614880)。结果：fresh install、SQL 权限/隔离测试、`supabase db lint`、显式 rollback、对象清空检查、re-apply 与第二次 SQL 测试全部成功；临时容器随后正常停止并删除。唯一 annotation 是所用第三方 Actions 的 Node 20 元数据被 GitHub runner 强制以 Node 24 运行，不影响 migration 或测试结论。
 
 ## 9. Rollback
 
