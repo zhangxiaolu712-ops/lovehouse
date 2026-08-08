@@ -1,4 +1,3 @@
-import crypto from 'crypto'
 import { spawn } from 'child_process'
 import cors from 'cors'
 import express from 'express'
@@ -10,8 +9,10 @@ import {
   MEMORY_ACTORS,
   MemoryService,
   SupabaseMemoryRepository,
+  SupabaseMemoryAuditSink,
 } from './memory/index.js'
 import { createMcpChannel } from './mcp/channel.js'
+import { installMcpTransports } from './mcp/transports.js'
 import { safeEqual } from './security.js'
 
 const app = express()
@@ -140,7 +141,10 @@ const memoryRepository = createRuntimeMemoryRepository({
 // Writes stay disabled until an append-only persistent audit sink exists.
 const memoryService = new MemoryService({
   repository: memoryRepository,
-  writeEnabled: false,
+  auditSink: MEMORY_SYSTEM_ENABLED
+    ? new SupabaseMemoryAuditSink({ rest: supabaseRest, ownerId: OWNER_USER_ID })
+    : undefined,
+  writeEnabled: MEMORY_SYSTEM_ENABLED,
 })
 
 app.post('/chat', verifyOwnerBearer, (req, res) => {
@@ -213,32 +217,6 @@ app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
   }
 })
 
-function mcpResult(id, result) {
-  return { jsonrpc: '2.0', id, result }
-}
-
-async function handleMcpMessage(message, { tools, callTool, serverName }) {
-  if (message.method === 'initialize') {
-    return mcpResult(message.id, {
-      protocolVersion: '2024-11-05',
-      capabilities: { tools: {} },
-      serverInfo: { name: serverName, version: '3.0.0-foundation' },
-    })
-  }
-  if (message.method === 'notifications/initialized') return null
-  if (message.method === 'tools/list') return mcpResult(message.id, { tools })
-  if (message.method === 'tools/call') {
-    const text = await callTool(message.params?.name, message.params?.arguments || {})
-    return mcpResult(message.id, { content: [{ type: 'text', text }] })
-  }
-  if (message.method === 'ping') return mcpResult(message.id, {})
-  return {
-    jsonrpc: '2.0',
-    id: message.id,
-    error: { code: -32601, message: `method not found: ${message.method}` },
-  }
-}
-
 const gptChannel = createMcpChannel({
   actor: MEMORY_ACTORS.GPT,
   memoryService,
@@ -250,50 +228,10 @@ const claudeChannel = createMcpChannel({
   livingroomRest: supabaseRest,
 })
 
-const gptSessions = new Map()
 function verifyMcpKey(req) {
   const key = req.query.key || req.headers['x-api-key'] || ''
   return Boolean(key && LIVINGROOM_KEY && safeEqual(key, LIVINGROOM_KEY))
 }
-
-app.get('/mcp/sse', (req, res) => {
-  if (!verifyMcpKey(req)) return res.status(401).json({ error: 'unauthorized' })
-  const clientId = `mcp_${crypto.randomBytes(24).toString('base64url')}`
-  res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('Connection', 'keep-alive')
-  gptSessions.set(clientId, res)
-  res.write(`event: endpoint\ndata: ${MCP_BASE}/mcp/message?clientId=${clientId}\n\n`)
-  const keepAlive = setInterval(() => res.write(': ping\n\n'), 30_000)
-  res.on('close', () => {
-    clearInterval(keepAlive)
-    gptSessions.delete(clientId)
-  })
-})
-
-app.post('/mcp/message', async (req, res) => {
-  const stream = gptSessions.get(req.query.clientId)
-  if (!stream) {
-    return res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'unknown or expired client session' } })
-  }
-  if (!checkRate(`gpt-mcp:${req.query.clientId}`)) return res.status(429).json({ error: 'too many requests' })
-  try {
-    const response = await handleMcpMessage(req.body, {
-      tools: gptChannel.tools,
-      callTool: gptChannel.callTool,
-      serverName: 'lovehouse-gpt-mcp',
-    })
-    if (response) stream.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`)
-    return res.status(202).end()
-  } catch (error) {
-    stream.write(`event: message\ndata: ${JSON.stringify({
-      jsonrpc: '2.0',
-      id: req.body?.id,
-      error: { code: -32000, message: error.message },
-    })}\n\n`)
-    return res.status(202).end()
-  }
-})
 
 const verifyClaudeOAuth = installClaudeOAuth(app, {
   oauthBase: OAUTH_BASE,
@@ -305,34 +243,14 @@ const verifyClaudeOAuth = installClaudeOAuth(app, {
   checkRate,
 })
 
-app.post('/mcp/claude', verifyClaudeOAuth, async (req, res) => {
-  if (!req.body?.jsonrpc) {
-    return res.status(400).json({ jsonrpc: '2.0', error: { code: -32700, message: 'invalid JSON-RPC' } })
-  }
-  try {
-    const response = await handleMcpMessage(req.body, {
-      tools: claudeChannel.tools,
-      callTool: claudeChannel.callTool,
-      serverName: 'lovehouse-claude-mcp',
-    })
-    return response ? res.json(response) : res.status(204).end()
-  } catch (error) {
-    return res.json({
-      jsonrpc: '2.0',
-      id: req.body.id,
-      error: { code: -32000, message: error.message },
-    })
-  }
+installMcpTransports(app, {
+  gptChannel,
+  claudeChannel,
+  verifyGptRequest: verifyMcpKey,
+  verifyClaudeOAuth,
+  checkRate,
+  mcpBase: MCP_BASE,
 })
-
-app.get('/mcp/claude', verifyClaudeOAuth, (_req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('Connection', 'keep-alive')
-  const keepAlive = setInterval(() => res.write(': ping\n\n'), 30_000)
-  res.on('close', () => clearInterval(keepAlive))
-})
-app.delete('/mcp/claude', verifyClaudeOAuth, (_req, res) => res.status(204).end())
 
 app.get('/health', (_req, res) => {
   res.json({

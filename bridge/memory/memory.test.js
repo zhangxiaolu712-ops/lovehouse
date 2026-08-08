@@ -19,9 +19,16 @@ class InMemoryRepository {
     this.lastSearch = null
   }
 
-  async insert(entry) {
-    this.lastInsert = { ...entry }
-    const saved = { id: this.rows.length + 1, ...entry }
+  async remember(entry, { actor }) {
+    this.lastInsert = { ...entry, actor }
+    const saved = {
+      id: this.rows.length + 1,
+      ...entry,
+      space_key: actor,
+      created_by_actor: actor,
+      source_type: 'mcp_runtime',
+      source_model: actor,
+    }
     this.rows.push(saved)
     return saved
   }
@@ -85,10 +92,11 @@ test('GPT can write only to GPT Memory and cannot choose a space', async () => {
   assert.equal(saved.created_by_actor, MEMORY_ACTORS.GPT)
   assert.equal(saved.memory_type, 'feeling')
   assert.equal(saved.importance, 4)
-  assert.equal(saved.source_type, 'mcp')
+  assert.equal(saved.source_type, 'mcp_runtime')
   assert.equal(saved.source_model, MEMORY_ACTORS.GPT)
   assert.equal(saved.source, undefined)
-  assert.equal(repository.lastInsert.space_key, MEMORY_SPACES.GPT)
+  assert.equal(repository.lastInsert.actor, MEMORY_ACTORS.GPT)
+  assert.equal(repository.lastInsert.space_key, undefined)
 })
 
 test('Claude can write only to Claude Memory', async () => {
@@ -167,6 +175,8 @@ for (const attemptedKey of [
   'source_revision_id',
   'source_revision_hash',
   'request_hash',
+  'request_id',
+  'idempotency_key',
   'shared_status',
   'approval_status',
 ]) {
@@ -269,4 +279,109 @@ test('audit metadata records allowed and denied access without memory content', 
   assert.equal(auditSink.events[1].memory_id, 2)
   assert.equal(auditSink.events[1].target_space, MEMORY_SPACES.CLAUDE)
   assert.equal(JSON.stringify(auditSink.events).includes('gpt private'), false)
+})
+
+test('transactional repository owns mutation audit and receives the trusted request id', async () => {
+  const calls = []
+  const repository = {
+    transactionalAudit: true,
+    async remember(entry, context) {
+      calls.push({ entry, context })
+      return { id: 91, space_key: context.actor, ...entry }
+    },
+  }
+  let externalAudits = 0
+  const service = new MemoryService({
+    repository,
+    auditSink: { persistent: true, async record() { externalAudits += 1 } },
+    writeEnabled: true,
+  })
+  const requestId = '10000000-0000-4000-8000-000000000099'
+  const saved = await service.write(
+    MEMORY_ACTORS.GPT,
+    { content: 'transactionally audited' },
+    { requestId }
+  )
+  assert.equal(saved.id, 91)
+  assert.deepEqual(calls[0].context, { actor: MEMORY_ACTORS.GPT, requestId })
+  assert.equal(externalAudits, 0)
+})
+
+test('an already-audited database denial is not double-audited', async () => {
+  let externalAudits = 0
+  const repository = {
+    transactionalAudit: true,
+    async getById() {
+      const error = new Error('denied')
+      error.code = 'MEMORY_ACCESS_DENIED'
+      error.auditPersisted = true
+      throw error
+    },
+  }
+  const service = new MemoryService({
+    repository,
+    auditSink: { persistent: true, async record() { externalAudits += 1 } },
+  })
+  await assert.rejects(service.get(MEMORY_ACTORS.GPT, 7))
+  assert.equal(externalAudits, 0)
+})
+
+test('preflight audit failure keeps a rejected mutation fail closed', async () => {
+  let repositoryCalls = 0
+  const service = new MemoryService({
+    repository: {
+      transactionalAudit: true,
+      async remember() { repositoryCalls += 1 },
+    },
+    auditSink: {
+      persistent: true,
+      async record() { throw new Error('audit unavailable') },
+    },
+    writeEnabled: true,
+  })
+  await assert.rejects(
+    service.write(MEMORY_ACTORS.GPT, { content: 'blocked', space_key: 'shared' }),
+    /audit unavailable/
+  )
+  assert.equal(repositoryCalls, 0)
+})
+
+test('revise and Shared proposal keep actor and runtime-only fields behind the service', async () => {
+  const calls = []
+  const repository = {
+    transactionalAudit: true,
+    async revise(...args) { calls.push(['revise', ...args]); return { id: 5, space_key: 'gpt' } },
+    async proposeShared(...args) {
+      calls.push(['proposeShared', ...args])
+      return { id: 6, space_key: 'shared', shared_status: 'candidate' }
+    },
+  }
+  const service = new MemoryService({
+    repository,
+    auditSink: { persistent: true, async record() {} },
+    writeEnabled: true,
+  })
+  await service.revise(
+    MEMORY_ACTORS.GPT,
+    { memory_id: 5, content: 'revised', reason: 'clarify' },
+    { requestId: '10000000-0000-4000-8000-000000000101' }
+  )
+  await service.proposeShared(
+    MEMORY_ACTORS.GPT,
+    { memory_id: 5, reason: 'useful to both' },
+    { requestId: '10000000-0000-4000-8000-000000000102' }
+  )
+  assert.deepEqual(calls[0], [
+    'revise',
+    5,
+    { content: 'revised' },
+    'clarify',
+    { actor: 'gpt', requestId: '10000000-0000-4000-8000-000000000101' },
+  ])
+  assert.deepEqual(calls[1], [
+    'proposeShared',
+    5,
+    'useful to both',
+    { actor: 'gpt', requestId: '10000000-0000-4000-8000-000000000102' },
+  ])
 })

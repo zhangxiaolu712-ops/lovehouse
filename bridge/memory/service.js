@@ -1,3 +1,5 @@
+import crypto from 'crypto'
+
 import { memoryTypeFromInput, SHARED_STATES } from './model.js'
 import { MemoryAccessPolicy } from './accessPolicy.js'
 import { NullMemoryAuditSink } from './audit.js'
@@ -52,6 +54,37 @@ function normalizeRetention(input) {
     : null
 }
 
+function positiveId(value, label = 'memory_id') {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new TypeError(`${label} must be a positive integer`)
+  return parsed
+}
+
+function normalizedMemory(input, { partial = false } = {}) {
+  const memory = {}
+  const has = key => Object.prototype.hasOwnProperty.call(input, key)
+  if (!partial || has('content')) {
+    if (typeof input.content !== 'string' || !input.content.trim()) {
+      throw new TypeError('content is required')
+    }
+    if (input.content.length > 50_000) throw new TypeError('content is too long')
+    memory.content = input.content.trim()
+  }
+  if (!partial || has('title')) memory.title = stringOrNull(input.title, 500)
+  if (!partial || has('memory_type') || has('memoryType') || has('kind') || has('tag')) {
+    memory.memory_type = memoryTypeFromInput(input)
+  }
+  if (!partial || has('tags') || has('tag') || has('category')) memory.tags = normalizeTags(input)
+  if (!partial || has('emotion') || has('mood') || has('feeling')) memory.emotion = normalizeEmotion(input)
+  if (!partial || has('importance')) memory.importance = normalizeImportance(input.importance)
+  if (!partial || has('retention') || has('level')) memory.retention = normalizeRetention(input)
+  if (!partial || has('author')) memory.author = stringOrNull(input.author, 200)
+  if (!partial && (has('source_ref') || has('sourceRef'))) {
+    memory.source_ref = stringOrNull(input.source_ref || input.sourceRef, 500)
+  }
+  return memory
+}
+
 export class MemoryService {
   constructor({
     repository,
@@ -71,36 +104,50 @@ export class MemoryService {
     this.clock = clock
   }
 
-  async audited(actor, action, operation) {
+  requestContext(context = {}) {
+    return {
+      requestId: context.requestId || crypto.randomUUID(),
+    }
+  }
+
+  async audited(actor, action, context, operation) {
+    const trusted = this.requestContext(context)
     try {
-      const result = await operation()
+      const result = await operation(trusted)
       const rows = Array.isArray(result) ? result : result ? [result] : []
-      await this.auditSink.record({
-        actor,
-        action,
-        allowed: true,
-        memory_id: rows.length === 1 ? rows[0]?.id || null : null,
-        result_count: rows.length,
-        result_spaces: [...new Set(rows.map(row => row?.space_key).filter(Boolean))],
-        occurred_at: this.clock().toISOString(),
-      })
+      if (this.repository.transactionalAudit !== true) {
+        await this.auditSink.record({
+          actor,
+          action,
+          allowed: true,
+          request_id: trusted.requestId,
+          memory_id: rows.length === 1 ? rows[0]?.id || null : null,
+          result_count: rows.length,
+          result_spaces: [...new Set(rows.map(row => row?.space_key).filter(Boolean))],
+          occurred_at: this.clock().toISOString(),
+        })
+      }
       return result
     } catch (error) {
-      await this.auditSink.record({
-        actor,
-        action,
-        allowed: false,
-        memory_id: error?.audit?.memory_id || null,
-        target_space: error?.audit?.target_space || null,
-        reason_code: error?.code || error?.name || 'MEMORY_OPERATION_FAILED',
-        occurred_at: this.clock().toISOString(),
-      })
+      if (error?.auditPersisted !== true) {
+        await this.auditSink.record({
+          actor,
+          action,
+          allowed: false,
+          result: 'error',
+          request_id: trusted.requestId,
+          memory_id: error?.audit?.memory_id || null,
+          target_space: error?.audit?.target_space || null,
+          reason_code: error?.code || error?.name || 'MEMORY_OPERATION_FAILED',
+          occurred_at: this.clock().toISOString(),
+        })
+      }
       throw error
     }
   }
 
-  async write(actor, input = {}) {
-    return this.audited(actor, 'write', async () => {
+  async write(actor, input = {}, context = {}) {
+    return this.audited(actor, 'remember', context, async trusted => {
       if (!this.writeEnabled) {
         const error = new Error('Memory writes require persistent audit storage')
         error.code = 'MEMORY_WRITES_DISABLED'
@@ -108,50 +155,31 @@ export class MemoryService {
       }
       this.accessPolicy.assertActor(actor)
       this.accessPolicy.assertNoSpaceOverride(input)
-      if (typeof input.content !== 'string' || !input.content.trim()) {
-        throw new TypeError('content is required')
-      }
-      if (input.content.length > 50_000) throw new TypeError('content is too long')
 
-      const now = this.clock().toISOString()
       const entry = {
-        space_key: this.accessPolicy.privateSpaceFor(actor),
-        shared_status: null,
-        content: input.content.trim(),
-        title: stringOrNull(input.title, 500),
-        memory_type: memoryTypeFromInput(input),
-        tags: normalizeTags(input),
-        emotion: normalizeEmotion(input),
-        importance: normalizeImportance(input.importance),
-        retention: normalizeRetention(input),
-        decay_score: 1,
-        decay_updated_at: now,
-        author: stringOrNull(input.author, 200),
-        source_type: 'mcp',
-        source_model: actor,
-        source_ref: stringOrNull(input.source_ref || input.sourceRef, 500),
-        source_metadata: {},
-        revision_number: 1,
-        created_by_actor: actor,
-        created_at: now,
-        updated_at: now,
+        ...normalizedMemory(input),
       }
-      return this.repository.insert(entry)
+      return this.repository.remember(entry, {
+        actor,
+        requestId: trusted.requestId,
+      })
     })
   }
 
-  async get(actor, id) {
-    return this.audited(actor, 'read', async () => {
+  async get(actor, id, context = {}) {
+    return this.audited(actor, 'get', context, async trusted => {
       this.accessPolicy.assertActor(actor)
-      const memory = await this.repository.getById(id, {
+      const memoryId = positiveId(id)
+      const memory = await this.repository.getById(memoryId, {
         scope: this.accessPolicy.readScopeFor(actor),
+        requestId: trusted.requestId,
       })
       if (!memory) return null
       try {
         this.accessPolicy.assertCanRead(actor, memory)
       } catch (error) {
         error.audit = {
-          memory_id: id,
+          memory_id: memoryId,
           target_space: memory.space_key,
         }
         throw error
@@ -160,23 +188,25 @@ export class MemoryService {
     })
   }
 
-  async list(actor, input = {}) {
-    return this.audited(actor, 'list', async () => {
+  async list(actor, input = {}, context = {}) {
+    return this.audited(actor, 'list', context, async trusted => {
       this.accessPolicy.assertActor(actor)
       this.accessPolicy.assertNoSpaceOverride(input)
       const rows = await this.repository.list({
         scope: this.accessPolicy.readScopeFor(actor),
         limit: input.limit,
+        cursorId: input.cursor ? positiveId(input.cursor, 'cursor') : null,
         memoryType: input.memory_type || input.memoryType,
         tags: normalizeTags(input),
         retention: normalizeRetention(input),
+        requestId: trusted.requestId,
       })
       return rows.filter(row => this.accessPolicy.canRead(actor, row))
     })
   }
 
-  async recall(actor, input = {}) {
-    return this.audited(actor, 'recall', async () => {
+  async recall(actor, input = {}, context = {}) {
+    return this.audited(actor, 'recall', context, async trusted => {
       this.accessPolicy.assertActor(actor)
       this.accessPolicy.assertNoSpaceOverride(input)
       if (typeof input.query !== 'string' || !input.query.trim()) {
@@ -186,15 +216,57 @@ export class MemoryService {
         scope: this.accessPolicy.readScopeFor(actor),
         query: input.query.trim(),
         limit: input.limit,
+        cursorId: input.cursor ? positiveId(input.cursor, 'cursor') : null,
         tags: normalizeTags(input),
+        requestId: trusted.requestId,
       })
       // Defense in depth: never trust a repository/backend filter by itself.
       return rows.filter(row => this.accessPolicy.canRead(actor, row))
     })
   }
 
-  async starterPack(actor, input = {}) {
-    const memories = await this.list(actor, { limit: input.limit || 20 })
+  async revise(actor, input = {}, context = {}) {
+    return this.audited(actor, 'revise', context, async trusted => {
+      if (!this.writeEnabled) {
+        const error = new Error('Memory writes require persistent audit storage')
+        error.code = 'MEMORY_WRITES_DISABLED'
+        throw error
+      }
+      this.accessPolicy.assertActor(actor)
+      this.accessPolicy.assertNoSpaceOverride(input)
+      const memoryId = positiveId(input.memory_id || input.memoryId)
+      const reason = stringOrNull(input.reason, 1000)
+      if (!reason) throw new TypeError('reason is required')
+      const patch = normalizedMemory(input, { partial: true })
+      if (Object.keys(patch).length === 0) throw new TypeError('a memory change is required')
+      return this.repository.revise(memoryId, patch, reason, {
+        actor,
+        requestId: trusted.requestId,
+      })
+    })
+  }
+
+  async proposeShared(actor, input = {}, context = {}) {
+    return this.audited(actor, 'propose_shared', context, async trusted => {
+      if (!this.writeEnabled) {
+        const error = new Error('Memory writes require persistent audit storage')
+        error.code = 'MEMORY_WRITES_DISABLED'
+        throw error
+      }
+      this.accessPolicy.assertActor(actor)
+      this.accessPolicy.assertNoSpaceOverride(input)
+      const memoryId = positiveId(input.memory_id || input.memoryId)
+      const reason = stringOrNull(input.reason, 1000)
+      if (!reason) throw new TypeError('reason is required')
+      return this.repository.proposeShared(memoryId, reason, {
+        actor,
+        requestId: trusted.requestId,
+      })
+    })
+  }
+
+  async starterPack(actor, input = {}, context = {}) {
+    const memories = await this.list(actor, { limit: input.limit || 10 }, context)
     return {
       actor,
       private_memories: memories.filter(memory => memory.space_key === actor),
