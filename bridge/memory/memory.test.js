@@ -17,6 +17,7 @@ class InMemoryRepository {
     this.lastInsert = null
     this.lastList = null
     this.lastSearch = null
+    this.lastMemoryBox = null
   }
 
   async remember(entry, { actor }) {
@@ -47,6 +48,12 @@ class InMemoryRepository {
     this.lastSearch = input
     // Deliberately return every row. MemoryService must enforce its own boundary.
     return this.rows
+  }
+
+  async memoryBox(input) {
+    this.lastMemoryBox = input
+    // Deliberately return every row. MemoryService is still a second boundary.
+    return { actor: input.scope.privateSpace, mode: 'random_history', items: this.rows }
   }
 }
 
@@ -122,6 +129,39 @@ test('Claude reads Claude Memory plus explicitly approved Shared Memory', async 
   const rows = await service.recall(MEMORY_ACTORS.CLAUDE, { query: 'memory' })
 
   assert.deepEqual(rows.map(row => row.id), [2, 3])
+})
+
+test('AI Memory Box uses the canonical scope and keeps only own private plus approved Shared', async () => {
+  const { repository, service } = createService()
+  const box = await service.memoryBox(MEMORY_ACTORS.GPT, { limit: 3 }, { requestId: 'box-request' })
+
+  assert.equal(box.schema_version, 'lovehouse.memory_box.v1')
+  assert.equal(box.actor, MEMORY_ACTORS.GPT)
+  assert.equal(box.mode, 'random_history')
+  assert.deepEqual(box.items.map(row => row.id), [1, 3])
+  assert.deepEqual(repository.lastMemoryBox.scope, {
+    privateSpace: MEMORY_SPACES.GPT,
+    sharedSpace: MEMORY_SPACES.SHARED,
+    requiredSharedState: SHARED_STATES.APPROVED,
+  })
+  assert.equal(repository.lastMemoryBox.limit, 3)
+  assert.equal(repository.lastMemoryBox.requestId, 'box-request')
+})
+
+test('AI Memory Box rejects authority and revision spoofing before repository access', async () => {
+  for (const input of [
+    { actor: 'claude' },
+    { namespace: 'legacy_pending' },
+    { space_key: 'shared' },
+    { revision_id: 99 },
+  ]) {
+    const { repository, service } = createService()
+    await assert.rejects(
+      service.memoryBox(MEMORY_ACTORS.GPT, input),
+      error => error instanceof MemoryAccessError && error.code === 'SPACE_OVERRIDE_REJECTED'
+    )
+    assert.equal(repository.lastMemoryBox, null)
+  }
 })
 
 test('semantic recall uses hybrid ranking without changing the AI-facing input', async () => {

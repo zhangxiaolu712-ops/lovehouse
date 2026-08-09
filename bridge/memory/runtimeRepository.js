@@ -11,6 +11,7 @@ export class DisabledMemoryRepository {
   async getById() { throw new MemorySystemDisabledError() }
   async list() { throw new MemorySystemDisabledError() }
   async search() { throw new MemorySystemDisabledError() }
+  async memoryBox() { throw new MemorySystemDisabledError() }
   async revise() { throw new MemorySystemDisabledError() }
   async proposeShared() { throw new MemorySystemDisabledError() }
 }

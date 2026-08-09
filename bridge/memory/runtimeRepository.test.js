@@ -25,6 +25,7 @@ test('disabled runtime repository fails closed for every operation without touch
     () => repository.getById(1),
     () => repository.list({}),
     () => repository.search({}),
+    () => repository.memoryBox({}),
     () => repository.revise(1, {}, 'reason'),
     () => repository.proposeShared(1, 'reason'),
   ]) {
@@ -45,7 +46,7 @@ test('enabled runtime repository uses only the canonical repository', () => {
   )
 })
 
-test('all nine memory MCP tools fail closed while Memory System is disabled', async () => {
+test('all ten memory MCP tools fail closed while Memory System is disabled', async () => {
   const memoryService = new MemoryService({
     repository: createRuntimeMemoryRepository({ enabled: false }),
     auditSink: { persistent: true, async record() {} },
@@ -59,6 +60,7 @@ test('all nine memory MCP tools fail closed while Memory System is disabled', as
   })
   const calls = [
     ['get_starter_pack', {}],
+    ['open_memory_box', {}],
     ['save_memory', { content: 'blocked' }],
     ['recall', { query: 'blocked' }],
     ['load_memories', {}],

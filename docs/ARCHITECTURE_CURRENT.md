@@ -214,7 +214,7 @@ brain 是整个记忆系统的核心，字段最多：
 | POST | /oauth/token | — | Token 签发 |
 | GET | /health | — | 健康检查 |
 
-### MCP 工具（GPT + Claude 共享 9 个）
+### MCP 工具（GPT + Claude 共享 13 个）
 
 | 工具名 | 说明 |
 |--------|------|
@@ -222,11 +222,15 @@ brain 是整个记忆系统的核心，字段最多：
 | send_livingroom_message | 发消息（sender 按通道固定） |
 | get_livingroom_context | 纯文本上下文 |
 | get_starter_pack | 新会话先调用；返回 House Rules V1 + 自己的私有记忆 + approved Shared |
+| open_memory_box | AI 启动记忆盲盒；随机返回自己的私有记忆 + approved Shared，默认 3 条、最多 4 条 |
 | save_memory | 通过固定 actor 写入自己的私有空间 |
 | recall | 通过 AccessPolicy 检索自己的私有空间 + approved Shared |
 | load_memories | 兼容旧工具名，转调统一 MemoryService，不再直连 memories |
 | search_memories | 兼容旧工具名，转调统一 recall |
 | save_to_memories | 兼容旧工具名，转调统一 write |
+| get_memory | 按编号读取有权访问的规范记忆 |
+| revise_memory | 修订自己的私有记忆并保留 revision/provenance |
+| propose_shared_candidate | 把自己的确定私有 revision 提交为 Shared candidate，等待 Owner 审批 |
 
 ### House Rules V1 启动契约
 
@@ -236,6 +240,15 @@ brain 是整个记忆系统的核心，字段最多：
 - AI-facing 工具描述明确要求在新对话开始时调用，不需要调用方预先知道 LoveHouse 历史。
 - 未来 VPS `onSessionStart()` 可直接调用现有 `memoryService.starterPack(fixedActor, options, trustedContext)` 并注入同一返回对象；本版本不实现 Orchestrator 或自动注入。
 - 本版本没有新表、RLS、生产环境变量、前端按钮或部署变化。
+
+### AI 启动记忆盲盒 V1
+
+- 调用链固定为 `open_memory_box → MemoryService.memoryBox → SupabaseMemoryRepository.memoryBox → fixed actor RPC`；AI 只传可选 `limit`，不能传 actor、owner、space、namespace、revision 或权限字段。
+- SQL 先物化当前 actor 可读的合法候选集（自己的 private + approved Shared），然后才在该集合内随机；另一 AI private、未批准 Shared、Legacy Pending 和其他 owner 从不进入随机候选集。
+- 每条结果从 `memory_entries` 当前 `revision_number` 精确连接同一条 `memory_revisions`，因此 `revision_id`、`revision_number`、`revision_hash`、`content` 来自同一确定版本。
+- Shared 结果保留真实的 private source memory/revision/hash、来源空间和 provenance events；不会把阅读视角、审批者或整理者伪装成单一作者。
+- 默认 3 条、范围 1–4，同批按 memory id 自然去重；不保存抽取历史，也不跨调用去重。成功读取写入持久化 `memory_box` audit，不记录正文。
+- `MemoryService.memoryBox(fixedActor, options, trustedContext)` 可供未来 VPS `onSessionStart()` 复用；V1 不实现 Orchestrator、自动注入或前端按钮。
 
 ---
 

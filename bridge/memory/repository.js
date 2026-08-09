@@ -211,6 +211,24 @@ export class SupabaseMemoryRepository {
     return envelope.items || []
   }
 
+  async memoryBox({ scope, limit = 3, requestId }) {
+    const actor = actorFromScope(scope)
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      this.runtimePath('memory_box', actor),
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_limit: clampLimit(limit, 3, 4),
+      }
+    ))
+    return {
+      actor: envelope.actor,
+      mode: envelope.mode,
+      items: envelope.items || [],
+    }
+  }
+
   async hybridSearch({
     scope,
     query,

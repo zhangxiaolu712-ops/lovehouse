@@ -19,6 +19,8 @@ export const SHARED_STATES = Object.freeze({
   REVOKED: 'revoked',
 })
 
+export const MEMORY_BOX_SCHEMA_VERSION = 'lovehouse.memory_box.v1'
+
 // Stable keys for the structural abilities inherited from the old tables.
 // Display labels stay outside the storage contract so the UI can change safely.
 export const MEMORY_TYPES = Object.freeze([

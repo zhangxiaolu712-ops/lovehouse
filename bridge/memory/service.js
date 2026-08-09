@@ -1,6 +1,6 @@
 import crypto from 'crypto'
 
-import { memoryTypeFromInput, SHARED_STATES } from './model.js'
+import { MEMORY_BOX_SCHEMA_VERSION, memoryTypeFromInput, SHARED_STATES } from './model.js'
 import { MemoryAccessPolicy } from './accessPolicy.js'
 import { NullMemoryAuditSink } from './audit.js'
 import { semanticFallbackAllowed } from './embedding.js'
@@ -267,6 +267,26 @@ export class MemoryService {
       }
       // Defense in depth: never trust a repository/backend filter by itself.
       return rows.filter(row => this.accessPolicy.canRead(actor, row))
+    })
+  }
+
+  async memoryBox(actor, input = {}, context = {}) {
+    return this.audited(actor, 'memory_box', context, async trusted => {
+      this.accessPolicy.assertActor(actor)
+      this.accessPolicy.assertNoSpaceOverride(input)
+      const result = await this.repository.memoryBox({
+        scope: this.accessPolicy.readScopeFor(actor),
+        limit: input.limit,
+        requestId: trusted.requestId,
+      })
+      const items = (result?.items || [])
+        .filter(memory => this.accessPolicy.canRead(actor, memory))
+      return {
+        schema_version: MEMORY_BOX_SCHEMA_VERSION,
+        actor,
+        mode: 'random_history',
+        items,
+      }
     })
   }
 
