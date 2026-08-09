@@ -70,7 +70,7 @@ export function createMcpToolDefinitions(actor) {
     },
     {
       name: 'get_starter_pack',
-      description: '加载自己的私有记忆与已批准 Shared Memory。默认只返回少量结果。',
+      description: '新对话开始时先调用。返回一眼可读完的 House Rules、自己的私有记忆与已批准 Shared Memory；无需预先了解 LoveHouse 历史，也不会返回另一 AI 的私有记忆或 Legacy Pending。',
       inputSchema: closedObject({
         limit: { type: 'integer', minimum: 1, maximum: 20 },
       }),
