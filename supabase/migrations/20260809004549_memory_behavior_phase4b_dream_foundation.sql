@@ -655,6 +655,11 @@ begin
   end if;
   if job.status = 'completed' then
     if job.output_hash <> outputs_hash then
+      perform public.memory_behavior_internal_audit(
+        p_owner_id, p_actor, 'dream_complete', null, null,
+        'denied', 'MEMORY_DREAM_OUTPUT_CONFLICT', p_request_id, 0, '{}'::text[],
+        pg_catalog.jsonb_build_object('job_id', job.id)
+      );
       return pg_catalog.jsonb_build_object(
         'ok', false, 'error_code', 'MEMORY_DREAM_OUTPUT_CONFLICT',
         'message', 'Completed Dream output is immutable', 'audit_persisted', true
@@ -879,10 +884,15 @@ begin
   if not found or job.status <> 'processing'
     or job.curator_provider <> provider_key or job.curator_model <> model_key
   then
+    perform public.memory_behavior_internal_audit(
+      p_owner_id, p_actor, 'dream_fail', null, null,
+      'denied', 'MEMORY_DREAM_LEASE_INVALID', p_request_id, 0, '{}'::text[],
+      pg_catalog.jsonb_build_object('job_id', p_job_id)
+    );
     return pg_catalog.jsonb_build_object(
       'ok', false, 'error_code', 'MEMORY_DREAM_LEASE_INVALID',
       'message', 'Dream failure does not match an active job',
-      'audit_persisted', false
+      'audit_persisted', true
     );
   end if;
   final_failure := job.attempt_count >= 3;
