@@ -56,6 +56,25 @@ function actorFromScope(scope) {
   return scope.privateSpace
 }
 
+function fixedActor(actor) {
+  if (!['gpt', 'claude'].includes(actor)) {
+    const error = new Error('A fixed memory actor is required')
+    error.code = 'INVALID_MEMORY_ACTOR'
+    throw error
+  }
+  return actor
+}
+
+function sanitizeBoundedText(value, label, maximum) {
+  const text = String(value || '').trim()
+  if (!text || text.length > maximum) {
+    const error = new Error(`${label} is required and must not exceed ${maximum} characters`)
+    error.code = 'INVALID_MEMORY_BEHAVIOR_INPUT'
+    throw error
+  }
+  return text
+}
+
 export function createSupabaseRest({ url, serverKey, fetchImpl = fetch }) {
   return async function supabaseRest(method, path, body) {
     if (!url) throw new Error('SUPABASE_URL is not configured')
@@ -268,6 +287,97 @@ export class SupabaseMemoryRepository {
         p_request_id: requestId,
         p_embedding_id: id,
         p_reason_code: String(reasonCode || 'MEMORY_EMBEDDING_FAILED').slice(0, 100),
+      }
+    ))
+  }
+
+  async setAnchor(id, pinned, reason, { actor, requestId }) {
+    const memoryId = Number.parseInt(id, 10)
+    if (!Number.isSafeInteger(memoryId) || memoryId < 1) throw new TypeError('memory_id must be positive')
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_set_anchor_${fixedActor(actor)}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_memory_id: memoryId,
+        p_pinned: pinned === true,
+        p_reason: sanitizeBoundedText(reason, 'anchor reason', 1_000),
+      }
+    ))
+    return envelope.anchor
+  }
+
+  async listAnchors({ actor }) {
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_list_anchors_${fixedActor(actor)}`,
+      { p_owner_id: this.requireOwnerId() }
+    ))
+    return envelope.items || []
+  }
+
+  async enqueueDream({ actor, requestId, perspective, limit = 4 }) {
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_enqueue_dream_${fixedActor(actor)}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_perspective: sanitizeBoundedText(perspective, 'Dream perspective', 500),
+        p_limit: clampLimit(limit, 4, 4),
+      }
+    ))
+    return envelope.job || null
+  }
+
+  async claimDream({ actor, requestId, providerKey, model }) {
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_claim_dream_${fixedActor(actor)}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_curator_provider: sanitizeEmbeddingIdentity(providerKey, 'Curator provider'),
+        p_curator_model: sanitizeEmbeddingIdentity(model, 'Curator model'),
+      }
+    ))
+    return envelope.job || null
+  }
+
+  async completeDream(id, outputs, { actor, requestId, providerKey, model }) {
+    const jobId = Number.parseInt(id, 10)
+    if (!Number.isSafeInteger(jobId) || jobId < 1) throw new TypeError('dream_job_id must be positive')
+    if (!Array.isArray(outputs) || outputs.length < 1 || outputs.length > 3) {
+      throw new TypeError('Dream completion requires 1-3 bounded outputs')
+    }
+    return this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_complete_dream_${fixedActor(actor)}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_job_id: jobId,
+        p_curator_provider: sanitizeEmbeddingIdentity(providerKey, 'Curator provider'),
+        p_curator_model: sanitizeEmbeddingIdentity(model, 'Curator model'),
+        p_outputs: outputs,
+      }
+    ))
+  }
+
+  async failDream(id, reasonCode, { actor, requestId, providerKey, model }) {
+    const jobId = Number.parseInt(id, 10)
+    if (!Number.isSafeInteger(jobId) || jobId < 1) throw new TypeError('dream_job_id must be positive')
+    return this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_fail_dream_${fixedActor(actor)}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_job_id: jobId,
+        p_curator_provider: sanitizeEmbeddingIdentity(providerKey, 'Curator provider'),
+        p_curator_model: sanitizeEmbeddingIdentity(model, 'Curator model'),
+        p_reason_code: sanitizeEmbeddingIdentity(reasonCode || 'MEMORY_DREAM_CURATOR_FAILED', 'Dream reason code'),
       }
     ))
   }
