@@ -12,13 +12,13 @@ import {
   MCP_TOOL_ROUTES,
 } from './tools.js'
 
-test('MCP schemas expose no authority, owner, revision, hash, space or Shared approval selector', () => {
+test('MCP schemas expose no author, authority, owner, revision, hash, space or Shared approval selector', () => {
   for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     for (const tool of createMcpToolDefinitions(actor)) {
       const propertyNames = Object.keys(tool.inputSchema.properties || {})
       assert.deepEqual(
         propertyNames.filter(name => (
-          /^(actor|created_by_actor|owner|owner_id|permission|permissions|revision_id|revision_hash|source_revision_id|source_revision_hash|request_id|request_hash|idempotency_key|space_key|spaceKey|namespace|shared_status|approval_status)$/
+          /^(actor|author|created_by_actor|owner|owner_id|permission|permissions|revision_id|revision_hash|source_revision_id|source_revision_hash|request_id|request_hash|idempotency_key|space_key|spaceKey|namespace|shared_status|approval_status)$/
             .test(name)
         )),
         [],
@@ -128,6 +128,17 @@ test('Memory Box tool is understandable to a memoryless AI and exposes only a sm
   assert.match(tool.description, /接受旧理解、质疑它/)
   assert.match(tool.description, /revise_memory/)
   assert.match(tool.description, /暂时不处理/)
+})
+
+test('save_memory explains first-person AI diary semantics and the fixed server author', () => {
+  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+    const tool = createMcpToolDefinitions(actor).find(candidate => candidate.name === 'save_memory')
+    assert.match(tool.description, /memory_type=diary/)
+    assert.match(tool.description, /第一人称记录自己的经历、判断、感受和变化/)
+    assert.match(tool.description, /不是对小婷的观察报告/)
+    assert.match(tool.description, new RegExp(`服务端固定为 ${actor}`))
+    assert.equal('author' in tool.inputSchema.properties, false)
+  }
 })
 
 test('GPT and Claude receive House Rules through the actual starter-pack MCP adapter', async () => {

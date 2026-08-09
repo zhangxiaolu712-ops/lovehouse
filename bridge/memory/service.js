@@ -80,7 +80,6 @@ function normalizedMemory(input, { partial = false } = {}) {
   if (!partial || has('emotion') || has('mood') || has('feeling')) memory.emotion = normalizeEmotion(input)
   if (!partial || has('importance')) memory.importance = normalizeImportance(input.importance)
   if (!partial || has('retention') || has('level')) memory.retention = normalizeRetention(input)
-  if (!partial || has('author')) memory.author = stringOrNull(input.author, 200)
   if (!partial && (has('source_ref') || has('sourceRef'))) {
     memory.source_ref = stringOrNull(input.source_ref || input.sourceRef, 500)
   }
@@ -167,9 +166,8 @@ export class MemoryService {
       this.accessPolicy.assertActor(actor)
       this.accessPolicy.assertNoSpaceOverride(input)
 
-      const entry = {
-        ...normalizedMemory(input),
-      }
+      const entry = normalizedMemory(input)
+      if (entry.memory_type === 'diary') entry.author = actor
       return this.repository.remember(entry, {
         actor,
         requestId: trusted.requestId,
@@ -303,6 +301,10 @@ export class MemoryService {
       const reason = stringOrNull(input.reason, 1000)
       if (!reason) throw new TypeError('reason is required')
       const patch = normalizedMemory(input, { partial: true })
+      // A memory converted into a diary receives the same trusted author rule
+      // as a newly created diary. Existing diary revisions omit author from the
+      // patch, so the repository carries the original author forward.
+      if (patch.memory_type === 'diary') patch.author = actor
       if (Object.keys(patch).length === 0) throw new TypeError('a memory change is required')
       return this.repository.revise(memoryId, patch, reason, {
         actor,

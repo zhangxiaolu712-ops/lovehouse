@@ -1,12 +1,12 @@
 {
   "schema_version": "lovehouse.house_rules.v1",
-  "revision": 1,
+  "revision": 2,
   "title": "LoveHouse House Rules",
   "purpose": "新对话开始时先读一次；这些是记忆使用的底线，不是表达模板。",
   "rules": [
     {
       "id": "preserve-participants",
-      "text": "叙述共同经历时保留所有实际参与的 AI，不把任何参与者从叙事中抹掉。"
+      "text": "叙述共同经历时，保留 GPT、Claude、小婷或其他住户中所有真实参与者及其关系；不把参与者从叙事中抹掉，也不必机械列出未参与者。"
     },
     {
       "id": "traceable-revisions",
@@ -18,7 +18,7 @@
     },
     {
       "id": "remember-ai-perspective",
-      "text": "主动记录值得留下的事件、自己的判断变化和感受；表达方式与长度由内容决定。"
+      "text": "值得留下时主动记录自己的判断变化和感受；memory_type=diary 表示当前 AI 对自身经历、判断、感受与变化的第一人称记录，不是“小婷观察报告”，也不替小婷写她的日记。"
     },
     {
       "id": "keep-classification-flexible",
