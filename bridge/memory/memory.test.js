@@ -34,6 +34,18 @@ class InMemoryRepository {
     return saved
   }
 
+  async revise(id, patch, _reason, { actor }) {
+    const index = this.rows.findIndex(row => row.id === id && row.space_key === actor)
+    if (index < 0) throw new Error('memory not found in actor private space')
+    const revised = {
+      ...this.rows[index],
+      ...patch,
+      revision_number: (this.rows[index].revision_number || 1) + 1,
+    }
+    this.rows[index] = revised
+    return revised
+  }
+
   async getById(id) {
     return this.rows.find(row => row.id === id) || null
   }
@@ -115,7 +127,41 @@ test('Claude can write only to Claude Memory', async () => {
 
   assert.equal(saved.space_key, MEMORY_SPACES.CLAUDE)
   assert.equal(saved.memory_type, 'diary')
+  assert.equal(saved.author, MEMORY_ACTORS.CLAUDE)
 })
+
+for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+  test(`${actor} diary author is fixed by the server and inherited by revisions`, async () => {
+    const { repository, service } = createService([])
+    const saved = await service.write(actor, {
+      content: `${actor} first-person diary`,
+      memory_type: 'diary',
+    })
+    assert.equal(saved.author, actor)
+    assert.equal(repository.lastInsert.author, actor)
+
+    const revised = await service.revise(actor, {
+      memory_id: saved.id,
+      content: `${actor} clarified first-person diary`,
+      reason: 'My understanding changed',
+    })
+    assert.equal(revised.author, actor)
+    assert.equal(revised.memory_type, 'diary')
+    assert.equal(revised.revision_number, 2)
+
+    await assert.rejects(
+      service.revise(actor, {
+        memory_id: saved.id,
+        content: 'forged diary author revision',
+        author: actor === MEMORY_ACTORS.GPT ? MEMORY_ACTORS.CLAUDE : MEMORY_ACTORS.GPT,
+        reason: 'attempt author drift',
+      }),
+      error => error instanceof MemoryAccessError && error.code === 'SPACE_OVERRIDE_REJECTED'
+    )
+    assert.equal(repository.rows[0].author, actor)
+    assert.equal(repository.rows[0].content, `${actor} clarified first-person diary`)
+  })
+}
 
 test('GPT reads GPT Memory plus explicitly approved Shared Memory', async () => {
   const { service } = createService()
@@ -349,6 +395,7 @@ for (const attemptedKey of [
   'namespace',
   'space',
   'actor',
+  'author',
   'created_by_actor',
   'owner_id',
   'permissions',

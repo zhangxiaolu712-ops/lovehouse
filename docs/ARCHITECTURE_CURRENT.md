@@ -250,6 +250,15 @@ brain 是整个记忆系统的核心，字段最多：
 - 默认 3 条、范围 1–4，同批按 memory id 自然去重；不保存抽取历史，也不跨调用去重。成功读取写入持久化 `memory_box` audit，不记录正文。
 - `MemoryService.memoryBox(fixedActor, options, trustedContext)` 可供未来 VPS `onSessionStart()` 复用；V1 不实现 Orchestrator、自动注入或前端按钮。
 
+### AI 日记 V1 + 参与者叙事完整性（Draft，未部署）
+
+- 不增加新工具或新表；AI 继续调用 `save_memory(memory_type=diary)` 写自己的私有日记。
+- MCP 参数不暴露 `author`。`MemoryService` 根据认证路由的 fixed actor 注入 `author=gpt|claude`，AccessPolicy 同时拒绝 body/tool args 中的 author 伪造。
+- `revise_memory` 不接受 author patch；既有 diary 沿用原 author，记忆转换为 diary 时也只能由服务端写入当前 fixed actor。Shared candidate 仍由数据库绑定 exact private revision，并复制该 revision 的 author 与来源链。
+- Dream 的统一 Worker 出口会标准化所有可替换 provider 的结果：不得创建 `derived_memory/shared_candidate` 类型的 diary；只允许对现有可追溯来源提交 diary `revision_suggestion`，不会冒充某个 AI 制造亲历日记。
+- House Rules revision 2 要求保留所有真实参与者及其关系，但不机械罗列未参与者；日记是当前 AI 对自身经历、判断、感受与变化的第一人称记录，不是“小婷观察报告”，也不替小婷写日记。
+- 叙事规则只用于 House Rules/MCP 引导；代码只强制可信 actor、author、source、revision、type 与权限，不扫描或拦截正文措辞。
+
 ---
 
 ## 9. 共享组件

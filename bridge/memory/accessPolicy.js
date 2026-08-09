@@ -2,6 +2,7 @@ import { MEMORY_ACTORS, MEMORY_SPACES, SHARED_STATES } from './model.js'
 
 const RESERVED_INPUT_KEYS = new Set([
   'actor',
+  'author',
   'createdbyactor',
   'namespace',
   'owner',

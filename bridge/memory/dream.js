@@ -1,5 +1,7 @@
 import crypto from 'crypto'
 
+import { memoryTypeFromInput } from './model.js'
+
 const MAX_DREAM_SOURCES = 4
 const MAX_SOURCE_CHARS = 6_000
 const MAX_TOTAL_SOURCE_CHARS = 24_000
@@ -66,10 +68,23 @@ export function normalizeDreamOutputs(value) {
     if (!['derived_memory', 'revision_suggestion', 'shared_candidate'].includes(proposalKind)) {
       throw new DreamCuratorError('Curator proposal kind is invalid', 'MEMORY_DREAM_OUTPUT_INVALID')
     }
+    const memoryType = typeof output.memory_type === 'string' && output.memory_type.trim()
+      ? output.memory_type.trim().slice(0, 80)
+      : 'summary'
+    const canonicalMemoryType = memoryTypeFromInput({
+      memory_type: memoryType.toLowerCase(),
+      tag: memoryType,
+    })
+    if (proposalKind !== 'revision_suggestion' && canonicalMemoryType === 'diary') {
+      throw new DreamCuratorError(
+        'Dream cannot create a first-person diary for an AI actor',
+        'MEMORY_DREAM_DIARY_FORBIDDEN'
+      )
+    }
     const normalized = {
       proposal_kind: proposalKind,
       content: boundedText(output.content, MAX_OUTPUT_CHARS, 'Curator candidate content'),
-      memory_type: typeof output.memory_type === 'string' ? output.memory_type.slice(0, 80) : 'summary',
+      memory_type: memoryType,
       tags: Array.isArray(output.tags)
         ? output.tags.filter(tag => typeof tag === 'string' && tag.trim()).slice(0, 12).map(tag => tag.trim().slice(0, 80))
         : [],
@@ -149,7 +164,7 @@ export class HttpDreamCuratorProvider {
             messages: [
               {
                 role: 'system',
-                content: 'You are a memory curator. Return JSON {"candidates":[]} only. Never rewrite or delete source memories. Preserve dream_actor, source_actor and exact source ordinals in every proposal.',
+                content: 'You are a memory curator. Return JSON {"candidates":[]} only. Never rewrite or delete source memories. Preserve every real participant and the dream_actor, source_actor and exact source ordinals in every proposal. Never invent a first-person diary on behalf of an AI; diary revision suggestions must remain traceable to an existing source diary.',
               },
               {
                 role: 'user',
@@ -231,7 +246,9 @@ export class DreamWorker {
     })
     if (!job) return { status: 'idle' }
     try {
-      const outputs = await this.curatorProvider.curate(job)
+      // Every replaceable provider crosses the same deterministic boundary.
+      // Provider-specific prompts or adapters are never the authority layer.
+      const outputs = normalizeDreamOutputs(await this.curatorProvider.curate(job))
       const result = await this.repository.completeDream(job.id, outputs, {
         actor,
         requestId: crypto.randomUUID(),

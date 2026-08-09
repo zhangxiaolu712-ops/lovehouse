@@ -145,6 +145,66 @@ test('HTTP Curator receives bounded exact-source narrative and returns candidate
   assert.equal(prompt.sources[0].revision_hash, 'a'.repeat(64))
   assert.equal(body.model, 'curator-test')
   assert.equal(requests[0].headers.Authorization, 'Bearer test-key')
+  assert.match(body.messages[0].content, /Preserve every real participant/)
+  assert.match(body.messages[0].content, /Never invent a first-person diary/)
+})
+
+test('Dream cannot create a new AI diary but may suggest a traceable diary revision', () => {
+  for (const [proposalKind, memoryType] of [
+    ['derived_memory', 'diary'],
+    ['derived_memory', '日记'],
+    ['shared_candidate', 'diary'],
+  ]) {
+    assert.throws(
+      () => normalizeDreamOutputs([{
+        proposal_kind: proposalKind,
+        content: 'A curator must not impersonate an AI diary author.',
+        memory_type: memoryType,
+        source_ordinals: [1],
+      }]),
+      error => error.code === 'MEMORY_DREAM_DIARY_FORBIDDEN'
+    )
+  }
+
+  const suggestion = normalizeDreamOutputs([{
+    proposal_kind: 'revision_suggestion',
+    target_source_ordinal: 1,
+    source_ordinals: [1],
+    content: 'A traceable suggestion for the existing diary author to review.',
+    memory_type: 'diary',
+  }])[0]
+  assert.equal(suggestion.proposal_kind, 'revision_suggestion')
+  assert.equal(suggestion.memory_type, 'diary')
+  assert.equal(suggestion.target_source_ordinal, 1)
+})
+
+test('Dream Worker applies the diary boundary to every replaceable provider', async () => {
+  const calls = []
+  const repository = {
+    async enqueueDream() {},
+    async claimDream() {
+      return { id: 81, actor: 'gpt', perspective: 'gpt perspective', sources: [exactSource()] }
+    },
+    async completeDream() { calls.push('complete') },
+    async failDream(id, code) { calls.push(['fail', id, code]) },
+  }
+  const curatorProvider = {
+    providerKey: 'custom-replaceable-provider',
+    model: 'custom-model',
+    async curate() {
+      return [{
+        proposal_kind: 'derived_memory',
+        content: 'I am a fabricated diary entry.',
+        memory_type: 'diary',
+        source_ordinals: [1],
+      }]
+    },
+  }
+  const worker = new DreamWorker({ repository, curatorProvider, enabled: true })
+  assert.deepEqual(await worker.runOnce('gpt'), {
+    status: 'failed', job_id: 81, code: 'MEMORY_DREAM_DIARY_FORBIDDEN',
+  })
+  assert.deepEqual(calls, [['fail', 81, 'MEMORY_DREAM_DIARY_FORBIDDEN']])
 })
 
 test('Dream output limits reject oversized or authority-shaped results', () => {

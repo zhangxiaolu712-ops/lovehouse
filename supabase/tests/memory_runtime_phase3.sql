@@ -46,7 +46,7 @@ begin
   result := public.memory_runtime_remember_gpt(
     v_owner_id,
     gpt_request,
-    '{"content":"runtime rose memory","memory_type":"feeling","tags":["rose","runtime"],"importance":4,"retention":"long"}'::jsonb
+    '{"content":"runtime rose memory","memory_type":"diary","tags":["rose","runtime"],"importance":4,"retention":"long","author":"gpt"}'::jsonb
   );
   if not (result->>'ok')::boolean or (result->>'replayed')::boolean then
     raise exception 'GPT remember did not create a new memory';
@@ -56,18 +56,18 @@ begin
   result := public.memory_runtime_remember_claude(
     v_owner_id,
     claude_request,
-    '{"content":"runtime rose memory for Claude","memory_type":"diary","tags":["rose"],"importance":3}'::jsonb
+    '{"content":"runtime rose memory for Claude","memory_type":"diary","tags":["rose"],"importance":3,"author":"claude"}'::jsonb
   );
   claude_id := (result->'memory'->>'id')::bigint;
 
   if not exists (
     select 1 from public.memory_entries
     where id = gpt_id and owner_id = v_owner_id and space_key = 'gpt'
-      and created_by_actor = 'gpt' and source_type = 'mcp_runtime'
+      and created_by_actor = 'gpt' and source_type = 'mcp_runtime' and author = 'gpt'
   ) or not exists (
     select 1 from public.memory_entries
     where id = claude_id and owner_id = v_owner_id and space_key = 'claude'
-      and created_by_actor = 'claude' and source_type = 'mcp_runtime'
+      and created_by_actor = 'claude' and source_type = 'mcp_runtime' and author = 'claude'
   ) then
     raise exception 'Fixed actor private write boundary failed';
   end if;
@@ -93,7 +93,7 @@ begin
   result := public.memory_runtime_remember_gpt(
     v_owner_id,
     gpt_request,
-    '{"tags":["rose","runtime"],"retention":"long","importance":4,"memory_type":"feeling","content":"runtime rose memory"}'::jsonb
+    '{"tags":["rose","runtime"],"retention":"long","importance":4,"memory_type":"diary","content":"runtime rose memory","author":"gpt"}'::jsonb
   );
   if not (result->>'replayed')::boolean
     or (result->'memory'->>'id')::bigint <> gpt_id
@@ -160,6 +160,15 @@ begin
   ) then
     raise exception 'Revision history, provenance or audit is incomplete';
   end if;
+  if not exists (
+    select 1 from public.memory_entries
+    where id = gpt_id and memory_type = 'diary' and author = 'gpt'
+  ) or not exists (
+    select 1 from public.memory_revisions
+    where id = gpt_revision_2 and memory_id = gpt_id and author = 'gpt'
+  ) then
+    raise exception 'Diary revision did not inherit its fixed actor author';
+  end if;
 
   -- Cross-private revise fails without creating a revision.
   before_count := (select count(*) from public.memory_revisions where memory_id = claude_id);
@@ -188,7 +197,7 @@ begin
     where id = candidate_id and space_key = 'shared' and shared_status = 'candidate'
       and source_memory_id = gpt_id and source_revision_id = gpt_revision_2
       and source_revision_hash = public.memory_compute_revision_hash(gpt_revision_2)
-      and content = 'runtime rose memory revised'
+      and content = 'runtime rose memory revised' and author = 'gpt'
   ) then
     raise exception 'Shared candidate was not bound to the exact current revision';
   end if;
@@ -200,8 +209,10 @@ begin
   result := public.memory_runtime_get_claude(
     v_owner_id, '30000000-0000-4000-8000-000000000008', candidate_id
   );
-  if (result->'memory'->>'id')::bigint <> candidate_id then
-    raise exception 'Approved Shared was not readable by Claude';
+  if (result->'memory'->>'id')::bigint <> candidate_id
+    or result->'memory'->>'author' <> 'gpt'
+  then
+    raise exception 'Approved Shared was not readable by Claude with its source author';
   end if;
 
   -- A later private revision never drifts the approved Shared snapshot.
@@ -215,7 +226,8 @@ begin
   if not exists (
     select 1 from public.memory_entries
     where id = candidate_id and source_revision_id = gpt_revision_2
-      and content = 'runtime rose memory revised'
+      and source_revision_hash = public.memory_compute_revision_hash(gpt_revision_2)
+      and content = 'runtime rose memory revised' and author = 'gpt'
   ) then
     raise exception 'Approved Shared snapshot drifted with its private source';
   end if;

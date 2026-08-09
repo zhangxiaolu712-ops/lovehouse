@@ -85,7 +85,7 @@ export function createMcpToolDefinitions(actor) {
     },
     {
       name: 'save_memory',
-      description: '主动保存一条私有记忆。归属、actor、审计和幂等均由服务端处理。',
+      description: `主动保存一条自己的私有记忆。memory_type=diary 表示你以第一人称记录自己的经历、判断、感受和变化，不是对小婷的观察报告，也不替她写日记。日记作者由服务端固定为 ${actor}；归属、actor、审计和幂等同样由服务端处理。`,
       inputSchema: {
         ...closedObject(memoryFields),
         required: ['content'],
