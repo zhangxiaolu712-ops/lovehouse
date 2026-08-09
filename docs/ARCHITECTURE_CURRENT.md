@@ -357,4 +357,4 @@ MemoryService 管理同一套规则
 - SQL 从候选集合入口排除对方 private、unapproved Shared 与 Legacy Pending；MemoryService 再做 AccessPolicy 复核。
 - 语义故障只有在 fallback audit 成功后才调用 Phase 3 keyword recall；权限/审计故障 fail closed。
 - query embedding 的 profile/model/dimensions 必须与 versioned ranking profile 的绑定完全一致；fallback 仅允许网络/超时、408/429/5xx 与无效向量/维度，配置、鉴权、权限及 identity mismatch 均 fail closed。
-- Phase 4B（Anchor、Dream Queue、Curator provider）未实现。
+- Phase 4B 在独立 Draft 分支实现默认关闭的 bounded Dream Queue、exact-revision candidate provenance、内部 Anchor 历史和可替换 Curator provider；它不增加 MCP/recall 参数，且只能产生 pending candidate，不能修改 canonical memory/revision。

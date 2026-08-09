@@ -102,6 +102,60 @@ test('embedding lifecycle uses only fixed actor RPCs', async () => {
   assert.equal(calls.every(call => !('actor' in call[2]) && !('space_key' in call[2])), true)
 })
 
+test('Anchor capability stays behind fixed actor internal RPCs', async () => {
+  const calls = []
+  const repository = new SupabaseMemoryRepository({
+    ownerId,
+    rest: async (...args) => {
+      calls.push(args)
+      return args[1].includes('list')
+        ? { ok: true, items: [{ id: 1, actor: 'gpt' }] }
+        : { ok: true, anchor: { id: 1, actor: 'gpt' } }
+    },
+  })
+  await repository.setAnchor(9, true, 'core memory', { actor: 'gpt', requestId })
+  await repository.listAnchors({ actor: 'gpt' })
+  assert.deepEqual(calls.map(call => call[1]), [
+    'rpc/memory_behavior_set_anchor_gpt',
+    'rpc/memory_behavior_list_anchors_gpt',
+  ])
+  assert.equal(calls.every(call => !('actor' in call[2]) && !('space_key' in call[2])), true)
+})
+
+test('Dream queue uses fixed actor RPCs and server Curator identity only', async () => {
+  const calls = []
+  const repository = new SupabaseMemoryRepository({
+    ownerId,
+    rest: async (...args) => {
+      calls.push(args)
+      if (args[1].includes('claim')) return { ok: true, job: { id: 7, sources: [] } }
+      if (args[1].includes('enqueue')) return { ok: true, job: { id: 7 } }
+      return { ok: true, candidate_ids: [31] }
+    },
+  })
+  const context = {
+    actor: 'claude', requestId,
+    providerKey: 'deepseek-compatible', model: 'deepseek-curator',
+  }
+  await repository.enqueueDream({
+    actor: 'claude', requestId, perspective: 'claude private perspective', limit: 999,
+  })
+  await repository.claimDream(context)
+  await repository.completeDream(7, [{ content: 'pending candidate' }], context)
+  await repository.failDream(7, 'MEMORY_DREAM_TEST_FAILURE', context)
+
+  assert.deepEqual(calls.map(call => call[1]), [
+    'rpc/memory_behavior_enqueue_dream_claude',
+    'rpc/memory_behavior_claim_dream_claude',
+    'rpc/memory_behavior_complete_dream_claude',
+    'rpc/memory_behavior_fail_dream_claude',
+  ])
+  assert.equal(calls[0][2].p_limit, 4)
+  assert.equal(calls[1][2].p_curator_provider, 'deepseek-compatible')
+  assert.equal(calls[1][2].p_curator_model, 'deepseek-curator')
+  assert.equal(calls.every(call => !('actor' in call[2]) && !('space_key' in call[2])), true)
+})
+
 test('repository remembers only through the fixed transactional RPC', async () => {
   const calls = []
   const repository = new SupabaseMemoryRepository({
