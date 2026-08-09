@@ -8,14 +8,17 @@ on:
       - "supabase/migrations/20260808215808_memory_runtime_phase3.sql"
       - "supabase/migrations/20260808230911_memory_behavior_phase4a.sql"
       - "supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql"
+      - "supabase/migrations/20260809024511_ai_startup_memory_box_v1.sql"
       - "supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql"
       - "supabase/rollback/20260808215808_memory_runtime_phase3_rollback.sql"
       - "supabase/rollback/20260808230911_memory_behavior_phase4a_rollback.sql"
       - "supabase/rollback/20260809004549_memory_behavior_phase4b_dream_foundation_rollback.sql"
+      - "supabase/rollback/20260809024511_ai_startup_memory_box_v1_rollback.sql"
       - "supabase/tests/memory_system_phase2.sql"
       - "supabase/tests/memory_runtime_phase3.sql"
       - "supabase/tests/memory_behavior_phase4a.sql"
       - "supabase/tests/memory_behavior_phase4b.sql"
+      - "supabase/tests/ai_startup_memory_box_v1.sql"
       - ".github/workflows/memory-behavior-phase4b.yml"
   workflow_dispatch:
 
@@ -55,13 +58,26 @@ jobs:
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4a.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4b.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809024511_ai_startup_memory_box_v1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/ai_startup_memory_box_v1.sql
           supabase db lint --workdir .memory-phase4b-ci --local --schema public \
             --level warning --fail-on error
+
+      - name: Memory Box rollback and reinstall
+        shell: bash
+        run: |
+          DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260809024511_ai_startup_memory_box_v1_rollback.sql
+          test "$(psql "$DB" -Atc "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'memory_runtime_%memory_box%';")" = "0"
+          test "$(psql "$DB" -Atc "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname='memory_behavior_enqueue_dream_gpt';")" = "1"
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809024511_ai_startup_memory_box_v1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/ai_startup_memory_box_v1.sql
 
       - name: Phase 4B rollback and reinstall
         shell: bash
         run: |
           DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260809024511_ai_startup_memory_box_v1_rollback.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260809004549_memory_behavior_phase4b_dream_foundation_rollback.sql
           test "$(psql "$DB" -Atc "select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('memory_anchor_records','memory_dream_jobs','memory_dream_job_sources','memory_ingest_candidate_sources');")" = "0"
           test "$(psql "$DB" -Atc "select count(*) from pg_attribute where attrelid='public.memory_ingest_candidates'::regclass and attname='dream_job_id' and not attisdropped;")" = "0"
@@ -69,11 +85,14 @@ jobs:
           test "$(psql "$DB" -Atc "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname='memory_behavior_recall_gpt';")" = "1"
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4b.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809024511_ai_startup_memory_box_v1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/ai_startup_memory_box_v1.sql
 
       - name: Full rollback and clean reinstall
         shell: bash
         run: |
           DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260809024511_ai_startup_memory_box_v1_rollback.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260809004549_memory_behavior_phase4b_dream_foundation_rollback.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260808230911_memory_behavior_phase4a_rollback.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260808215808_memory_runtime_phase3_rollback.sql
@@ -87,6 +106,8 @@ jobs:
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4a.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4b.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809024511_ai_startup_memory_box_v1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/ai_startup_memory_box_v1.sql
 
       - name: Bridge regression
         working-directory: bridge

@@ -5,6 +5,7 @@ export const MCP_TOOL_ROUTES = Object.freeze({
   send_livingroom_message: 'livingroom.write',
   get_livingroom_context: 'livingroom.context',
   get_starter_pack: 'memory.starterPack',
+  open_memory_box: 'memory.memoryBox',
   save_memory: 'memory.write',
   recall: 'memory.recall',
   load_memories: 'memory.list',
@@ -73,6 +74,13 @@ export function createMcpToolDefinitions(actor) {
       description: '新对话开始时先调用。返回一眼可读完的 House Rules、自己的私有记忆与已批准 Shared Memory；无需预先了解 LoveHouse 历史，也不会返回另一 AI 的私有记忆或 Legacy Pending。',
       inputSchema: closedObject({
         limit: { type: 'integer', minimum: 1, maximum: 20 },
+      }),
+    },
+    {
+      name: 'open_memory_box',
+      description: 'AI 在新对话读完 get_starter_pack 后可调用：随机带回少量有权读取的旧记忆，用来重新认识过去的自己、共享经历和旧判断。这不是相关性搜索；拿到后可以接受旧理解、质疑它、用 revise_memory 修订自己的私有记忆，或暂时不处理。',
+      inputSchema: closedObject({
+        limit: { type: 'integer', minimum: 1, maximum: 4, default: 3 },
       }),
     },
     {
@@ -215,6 +223,9 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
 
     if (name === 'get_starter_pack') {
       return JSON.stringify(await memoryService.starterPack(actor, args, trustedContext))
+    }
+    if (name === 'open_memory_box') {
+      return JSON.stringify(await memoryService.memoryBox(actor, args, trustedContext))
     }
     if (name === 'save_memory') {
       const saved = await memoryService.write(actor, args, trustedContext)

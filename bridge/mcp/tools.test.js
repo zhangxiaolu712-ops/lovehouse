@@ -28,14 +28,15 @@ test('MCP schemas expose no authority, owner, revision, hash, space or Shared ap
   }
 })
 
-test('all nine compatibility tools remain and all twelve tools have an explicit adapter route', () => {
+test('all nine compatibility tools remain and all thirteen tools have an explicit adapter route', () => {
   const toolNames = createMcpToolDefinitions(MEMORY_ACTORS.GPT).map(tool => tool.name)
-  assert.equal(toolNames.length, 12)
+  assert.equal(toolNames.length, 13)
   assert.deepEqual(Object.keys(MCP_TOOL_ROUTES), toolNames)
   assert.deepEqual(
-    Object.values(MCP_TOOL_ROUTES).slice(3, 9),
+    Object.values(MCP_TOOL_ROUTES).slice(3, 10),
     [
       'memory.starterPack',
+      'memory.memoryBox',
       'memory.write',
       'memory.recall',
       'memory.list',
@@ -45,13 +46,14 @@ test('all nine compatibility tools remain and all twelve tools have an explicit 
   )
 })
 
-test('all twelve adapter routes reach only MemoryService or livingroom REST', async () => {
+test('all thirteen adapter routes reach only MemoryService or livingroom REST', async () => {
   const calls = []
   const memoryService = {
     async write() { calls.push('memory.write'); return { id: 1 } },
     async recall() { calls.push('memory.recall'); return [] },
     async list() { calls.push('memory.list'); return [] },
     async starterPack() { calls.push('memory.starterPack'); return {} },
+    async memoryBox() { calls.push('memory.memoryBox'); return {} },
     async get() { calls.push('memory.get'); return null },
     async revise() { calls.push('memory.revise'); return {} },
     async proposeShared() { calls.push('memory.proposeShared'); return {} },
@@ -71,6 +73,7 @@ test('all twelve adapter routes reach only MemoryService or livingroom REST', as
   await handler('send_livingroom_message', { message: 'hello' })
   await handler('get_livingroom_context', {})
   await handler('get_starter_pack', {})
+  await handler('open_memory_box', {})
   await handler('save_memory', { content: 'one' })
   await handler('recall', { query: 'two' })
   await handler('load_memories', {})
@@ -85,6 +88,7 @@ test('all twelve adapter routes reach only MemoryService or livingroom REST', as
     'livingroom.write',
     'livingroom.context',
     'memory.starterPack',
+    'memory.memoryBox',
     'memory.write',
     'memory.recall',
     'memory.list',
@@ -110,6 +114,20 @@ test('starter pack describes the complete session-start contract to a new AI', (
     assert.match(tool.description, /无需预先了解 LoveHouse 历史/)
     assert.match(tool.description, /不会返回另一 AI 的私有记忆或 Legacy Pending/)
   }
+})
+
+test('Memory Box tool is understandable to a memoryless AI and exposes only a small limit', () => {
+  const tool = createMcpToolDefinitions(MEMORY_ACTORS.GPT)
+    .find(candidate => candidate.name === 'open_memory_box')
+  assert.deepEqual(Object.keys(tool.inputSchema.properties), ['limit'])
+  assert.equal(tool.inputSchema.properties.limit.default, 3)
+  assert.equal(tool.inputSchema.properties.limit.minimum, 1)
+  assert.equal(tool.inputSchema.properties.limit.maximum, 4)
+  assert.match(tool.description, /get_starter_pack/)
+  assert.match(tool.description, /不是相关性搜索/)
+  assert.match(tool.description, /接受旧理解、质疑它/)
+  assert.match(tool.description, /revise_memory/)
+  assert.match(tool.description, /暂时不处理/)
 })
 
 test('GPT and Claude receive House Rules through the actual starter-pack MCP adapter', async () => {
@@ -173,6 +191,7 @@ test('GPT compatibility tools call one MemoryService with fixed GPT actor', asyn
     async recall(...args) { calls.push(['recall', ...args]); return [] },
     async list(...args) { calls.push(['list', ...args]); return [] },
     async starterPack(...args) { calls.push(['starterPack', ...args]); return {} },
+    async memoryBox(...args) { calls.push(['memoryBox', ...args]); return {} },
     async get(...args) { calls.push(['get', ...args]); return null },
     async revise(...args) { calls.push(['revise', ...args]); return {} },
     async proposeShared(...args) { calls.push(['proposeShared', ...args]); return {} },
@@ -188,8 +207,10 @@ test('GPT compatibility tools call one MemoryService with fixed GPT actor', asyn
   await handler('recall', { query: 'three' })
   await handler('search_memories', { keyword: 'four' })
   await handler('load_memories', { level: '固定' })
+  await handler('open_memory_box', { limit: 4 })
 
   assert.deepEqual(calls.map(call => call[1]), [
+    MEMORY_ACTORS.GPT,
     MEMORY_ACTORS.GPT,
     MEMORY_ACTORS.GPT,
     MEMORY_ACTORS.GPT,

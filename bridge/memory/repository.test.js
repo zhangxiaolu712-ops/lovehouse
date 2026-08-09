@@ -35,6 +35,31 @@ test('repository uses the fixed GPT runtime recall door instead of raw table rea
   assert.doesNotMatch(calls[0][1], /brain|memories/)
 })
 
+test('Memory Box uses a fixed actor RPC with only bounded non-authority input', async () => {
+  const calls = []
+  const repository = new SupabaseMemoryRepository({
+    ownerId,
+    rest: async (...args) => {
+      calls.push(args)
+      return { ok: true, actor: 'gpt', mode: 'random_history', items: [{ memory_id: 1 }] }
+    },
+  })
+
+  const result = await repository.memoryBox({ scope: gptScope, limit: 999, requestId })
+
+  assert.deepEqual(result, {
+    actor: 'gpt', mode: 'random_history', items: [{ memory_id: 1 }],
+  })
+  assert.deepEqual(calls[0], ['POST', 'rpc/memory_runtime_memory_box_gpt', {
+    p_owner_id: ownerId,
+    p_request_id: requestId,
+    p_limit: 4,
+  }])
+  assert.equal('actor' in calls[0][2], false)
+  assert.equal('space_key' in calls[0][2], false)
+  assert.equal('revision_id' in calls[0][2], false)
+})
+
 test('hybrid recall uses a fixed actor behavior door and server-only ranking inputs', async () => {
   const calls = []
   const repository = new SupabaseMemoryRepository({
