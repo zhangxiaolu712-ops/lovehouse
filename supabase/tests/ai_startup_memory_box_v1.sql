@@ -168,15 +168,15 @@ begin
   end if;
 
   if not exists (
-    select 1 from public.memory_audit_log
-    where owner_id = v_owner and actor = 'gpt' and action = 'memory_box'
-      and request_id = '61000000-0000-4000-8000-000000000008'
-      and result = 'allowed' and result_count = 3
+    select 1 from public.memory_audit_log audit
+    where audit.owner_id = v_owner and audit.actor = 'gpt' and audit.action = 'memory_box'
+      and audit.request_id = '61000000-0000-4000-8000-000000000008'
+      and audit.result = 'allowed' and audit.result_count = 3
   ) or not exists (
-    select 1 from public.memory_audit_log
-    where owner_id = v_owner and actor = 'claude' and action = 'memory_box'
-      and request_id = '61000000-0000-4000-8000-000000000009'
-      and result = 'allowed' and result_count = 2
+    select 1 from public.memory_audit_log audit
+    where audit.owner_id = v_owner and audit.actor = 'claude' and audit.action = 'memory_box'
+      and audit.request_id = '61000000-0000-4000-8000-000000000009'
+      and audit.result = 'allowed' and audit.result_count = 2
   ) then
     raise exception 'Memory Box read audit was not persisted';
   end if;
