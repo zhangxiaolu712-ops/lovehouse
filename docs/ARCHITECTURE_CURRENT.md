@@ -349,3 +349,12 @@ MemoryService 管理同一套规则
 - Shared 推荐在可信事务内解析当前 private revision 并形成不可漂移 candidate；Owner approve/reject/revoke 仍走 Phase 2 独立认证门。
 - Legacy Pending 在普通 SQL 查询条件中即被排除；不迁正文、不默认 Shared。
 - 本分支只提供 migration、Bridge Runtime、测试与免费临时 Supabase CI；生产环境仍保持 V2/V3 未应用、开关关闭。详见 `docs/MEMORY_SYSTEM_PHASE3_RUNTIME.md`。
+## 2026-08-09 · Memory System Phase 4A（Draft，未部署）
+
+- Phase 3 已作为统一 Runtime 基线合并；Phase 4A 在独立 Draft 分支增加 derived embeddings 与 hybrid recall。
+- `memory_entries` 仍是唯一 canonical store；`memory_embeddings` 只保存 exact revision 的派生索引。
+- AI-facing recall 工具不变，Bridge 内部固定 actor、embedding provider、ranking profile，再调用固定 actor RPC。
+- SQL 从候选集合入口排除对方 private、unapproved Shared 与 Legacy Pending；MemoryService 再做 AccessPolicy 复核。
+- 语义故障只有在 fallback audit 成功后才调用 Phase 3 keyword recall；权限/审计故障 fail closed。
+- query embedding 的 profile/model/dimensions 必须与 versioned ranking profile 的绑定完全一致；fallback 仅允许网络/超时、408/429/5xx 与无效向量/维度，配置、鉴权、权限及 identity mismatch 均 fail closed。
+- Phase 4B（Anchor、Dream Queue、Curator provider）未实现。

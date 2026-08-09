@@ -35,6 +35,73 @@ test('repository uses the fixed GPT runtime recall door instead of raw table rea
   assert.doesNotMatch(calls[0][1], /brain|memories/)
 })
 
+test('hybrid recall uses a fixed actor behavior door and server-only ranking inputs', async () => {
+  const calls = []
+  const repository = new SupabaseMemoryRepository({
+    ownerId,
+    rest: async (...args) => {
+      calls.push(args)
+      return { ok: true, items: [] }
+    },
+  })
+  await repository.hybridSearch({
+    scope: gptScope,
+    query: '玫瑰',
+    queryEmbedding: [0.1, 0.2, 0.3],
+    queryEmbeddingProfile: 'semantic-test-v1',
+    queryEmbeddingModel: 'test/model-v1',
+    rankingProfile: 'ranking_v1',
+    requestId,
+  })
+
+  assert.equal(calls[0][1], 'rpc/memory_behavior_recall_gpt')
+  assert.equal(calls[0][2].p_ranking_profile, 'ranking_v1')
+  assert.deepEqual(calls[0][2].p_query_embedding, [0.1, 0.2, 0.3])
+  assert.equal(calls[0][2].p_query_embedding_profile, 'semantic-test-v1')
+  assert.equal(calls[0][2].p_query_embedding_model, 'test/model-v1')
+  assert.equal('actor' in calls[0][2], false)
+  assert.equal('space_key' in calls[0][2], false)
+})
+
+test('repository rejects malformed server embeddings before calling Supabase', async () => {
+  let calls = 0
+  const repository = new SupabaseMemoryRepository({ ownerId, rest: async () => { calls += 1 } })
+  await assert.rejects(
+    repository.hybridSearch({
+      scope: gptScope,
+      query: 'rose',
+      queryEmbedding: [0.1, Number.NaN],
+      queryEmbeddingProfile: 'semantic-test-v1',
+      queryEmbeddingModel: 'test-model',
+      requestId,
+    }),
+    error => error.code === 'INVALID_MEMORY_QUERY_EMBEDDING'
+  )
+  assert.equal(calls, 0)
+})
+
+test('embedding lifecycle uses only fixed actor RPCs', async () => {
+  const calls = []
+  const repository = new SupabaseMemoryRepository({
+    ownerId,
+    rest: async (...args) => {
+      calls.push(args)
+      return args[1].includes('claim') ? { ok: true, items: [] } : { ok: true }
+    },
+  })
+  await repository.claimEmbeddings({ actor: 'claude', limit: 99, requestId })
+  await repository.completeEmbedding(7, [0.2, 0.8], { actor: 'claude', requestId })
+  await repository.failEmbedding(8, 'UPSTREAM_TIMEOUT', { actor: 'claude', requestId })
+
+  assert.deepEqual(calls.map(call => call[1]), [
+    'rpc/memory_behavior_claim_embeddings_claude',
+    'rpc/memory_behavior_complete_embedding_claude',
+    'rpc/memory_behavior_fail_embedding_claude',
+  ])
+  assert.equal(calls[0][2].p_limit, 8)
+  assert.equal(calls.every(call => !('actor' in call[2]) && !('space_key' in call[2])), true)
+})
+
 test('repository remembers only through the fixed transactional RPC', async () => {
   const calls = []
   const repository = new SupabaseMemoryRepository({

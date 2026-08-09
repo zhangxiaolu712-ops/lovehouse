@@ -8,6 +8,41 @@ function sanitizeSearchTerm(value) {
   return String(value || '').trim().replace(/[,*()]/g, ' ').slice(0, 500)
 }
 
+function sanitizeProfile(value, fallback) {
+  const profile = String(value || fallback || '').trim()
+  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(profile)) {
+    const error = new Error('A server-selected memory behavior profile is required')
+    error.code = 'INVALID_MEMORY_BEHAVIOR_PROFILE'
+    throw error
+  }
+  return profile
+}
+
+function sanitizeEmbeddingIdentity(value, label) {
+  const identity = String(value || '').trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(identity)) {
+    const error = new Error(`A server-selected ${label} is required`)
+    error.code = 'INVALID_MEMORY_EMBEDDING_IDENTITY'
+    throw error
+  }
+  return identity
+}
+
+function sanitizeVector(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2_000) {
+    const error = new Error('A bounded server-generated query embedding is required')
+    error.code = 'INVALID_MEMORY_QUERY_EMBEDDING'
+    throw error
+  }
+  const vector = value.map(Number)
+  if (!vector.every(Number.isFinite)) {
+    const error = new Error('Query embedding contains a non-finite value')
+    error.code = 'INVALID_MEMORY_QUERY_EMBEDDING'
+    throw error
+  }
+  return vector
+}
+
 function actorFromScope(scope) {
   if (
     !['gpt', 'claude'].includes(scope?.privateSpace)
@@ -155,6 +190,86 @@ export class SupabaseMemoryRepository {
       p_tags: tags,
     }))
     return envelope.items || []
+  }
+
+  async hybridSearch({
+    scope,
+    query,
+    queryEmbedding,
+    queryEmbeddingProfile,
+    queryEmbeddingModel,
+    rankingProfile = 'ranking_v1',
+    limit = 5,
+    cursorId = null,
+    tags = [],
+    requestId,
+  }) {
+    const actor = actorFromScope(scope)
+    const safeLimit = clampLimit(limit, 5, 10)
+    const term = sanitizeSearchTerm(query)
+    const vector = sanitizeVector(queryEmbedding)
+    const embeddingProfile = sanitizeEmbeddingIdentity(queryEmbeddingProfile, 'embedding profile')
+    const embeddingModel = sanitizeEmbeddingIdentity(queryEmbeddingModel, 'embedding model')
+    const profile = sanitizeProfile(rankingProfile, 'ranking_v1')
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_recall_${actor}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_query: term,
+        p_query_embedding: vector,
+        p_query_embedding_profile: embeddingProfile,
+        p_query_embedding_model: embeddingModel,
+        p_ranking_profile: profile,
+        p_limit: safeLimit,
+        p_cursor_id: cursorId,
+        p_tags: tags,
+      }
+    ))
+    return envelope.items || []
+  }
+
+  async claimEmbeddings({ actor, limit = 4, requestId }) {
+    if (!['gpt', 'claude'].includes(actor)) throw new Error('A fixed memory actor is required')
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_claim_embeddings_${actor}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_limit: clampLimit(limit, 4, 8),
+      }
+    ))
+    return envelope.items || []
+  }
+
+  async completeEmbedding(id, vector, { actor, requestId }) {
+    if (!['gpt', 'claude'].includes(actor)) throw new Error('A fixed memory actor is required')
+    return this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_complete_embedding_${actor}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_embedding_id: id,
+        p_embedding: sanitizeVector(vector),
+      }
+    ))
+  }
+
+  async failEmbedding(id, reasonCode, { actor, requestId }) {
+    if (!['gpt', 'claude'].includes(actor)) throw new Error('A fixed memory actor is required')
+    return this.unwrapEnvelope(await this.rest(
+      'POST',
+      `rpc/memory_behavior_fail_embedding_${actor}`,
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_embedding_id: id,
+        p_reason_code: String(reasonCode || 'MEMORY_EMBEDDING_FAILED').slice(0, 100),
+      }
+    ))
   }
 
   async revise(id, patch, reason, { actor, requestId }) {

@@ -6,6 +6,8 @@ import { installClaudeOAuth } from './oauth.js'
 import {
   createSupabaseRest,
   createRuntimeMemoryRepository,
+  EmbeddingIndexer,
+  HttpEmbeddingProvider,
   MEMORY_ACTORS,
   MemoryService,
   SupabaseMemoryRepository,
@@ -51,6 +53,14 @@ const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
 const MCP_BASE = process.env.MCP_BASE_URL || `${OAUTH_BASE}/api`
 const MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
 const MEMORY_SYSTEM_ENABLED = process.env.MEMORY_SYSTEM_ENABLED === 'true'
+const MEMORY_SEMANTIC_ENABLED = MEMORY_SYSTEM_ENABLED
+  && process.env.MEMORY_SEMANTIC_ENABLED === 'true'
+const MEMORY_RANKING_PROFILE = process.env.MEMORY_RANKING_PROFILE || 'ranking_v1'
+const MEMORY_EMBEDDING_PROFILE = process.env.MEMORY_EMBEDDING_PROFILE || 'semantic-1536-v1'
+const MEMORY_EMBEDDING_DIMENSIONS = Number.parseInt(process.env.MEMORY_EMBEDDING_DIMENSIONS, 10) || 1536
+const MEMORY_EMBEDDING_API_URL = process.env.MEMORY_EMBEDDING_API_URL || ''
+const MEMORY_EMBEDDING_API_KEY = process.env.MEMORY_EMBEDDING_API_KEY || ''
+const MEMORY_EMBEDDING_MODEL = process.env.MEMORY_EMBEDDING_MODEL || ''
 const SYSTEM_PROMPT = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
 
 const rateMap = new Map()
@@ -138,6 +148,13 @@ const memoryRepository = createRuntimeMemoryRepository({
   enabled: MEMORY_SYSTEM_ENABLED,
   canonicalRepository: canonicalMemoryRepository,
 })
+const embeddingProvider = new HttpEmbeddingProvider({
+  url: MEMORY_EMBEDDING_API_URL,
+  apiKey: MEMORY_EMBEDDING_API_KEY,
+  model: MEMORY_EMBEDDING_MODEL,
+  profile: MEMORY_EMBEDDING_PROFILE,
+  dimensions: MEMORY_EMBEDDING_DIMENSIONS,
+})
 // Writes stay disabled until an append-only persistent audit sink exists.
 const memoryService = new MemoryService({
   repository: memoryRepository,
@@ -145,7 +162,38 @@ const memoryService = new MemoryService({
     ? new SupabaseMemoryAuditSink({ rest: supabaseRest, ownerId: OWNER_USER_ID })
     : undefined,
   writeEnabled: MEMORY_SYSTEM_ENABLED,
+  semanticRecallEnabled: MEMORY_SEMANTIC_ENABLED,
+  embeddingProvider,
+  rankingProfile: MEMORY_RANKING_PROFILE,
 })
+
+const embeddingProviderConfigured = Boolean(
+  MEMORY_EMBEDDING_API_URL && MEMORY_EMBEDDING_MODEL
+)
+if (MEMORY_SEMANTIC_ENABLED && embeddingProviderConfigured) {
+  const embeddingIndexer = new EmbeddingIndexer({
+    repository: canonicalMemoryRepository,
+    provider: embeddingProvider,
+  })
+  let indexing = false
+  const runEmbeddingIndexing = async () => {
+    if (indexing) return
+    indexing = true
+    try {
+      for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+        await embeddingIndexer.runOnce(actor)
+      }
+    } catch (error) {
+      console.error('[memory embedding indexer]', error.message)
+    } finally {
+      indexing = false
+    }
+  }
+  const initialEmbeddingIndex = setTimeout(runEmbeddingIndexing, 1_000)
+  initialEmbeddingIndex.unref?.()
+  const embeddingIndexInterval = setInterval(runEmbeddingIndexing, 60_000)
+  embeddingIndexInterval.unref?.()
+}
 
 app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
@@ -257,6 +305,9 @@ app.get('/health', (_req, res) => {
     status: 'ok',
     memory_system: 'foundation',
     memory_system_enabled: MEMORY_SYSTEM_ENABLED,
+    memory_semantic_enabled: MEMORY_SEMANTIC_ENABLED,
+    memory_embedding_provider_configured: embeddingProviderConfigured,
+    memory_ranking_profile: MEMORY_RANKING_PROFILE,
     memory_writes_enabled: memoryService.writeEnabled,
     database_migration: MEMORY_SYSTEM_ENABLED ? 'expected' : 'not_applied',
   })
