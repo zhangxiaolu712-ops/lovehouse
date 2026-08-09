@@ -4,6 +4,7 @@ import { memoryTypeFromInput, SHARED_STATES } from './model.js'
 import { MemoryAccessPolicy } from './accessPolicy.js'
 import { NullMemoryAuditSink } from './audit.js'
 import { semanticFallbackAllowed } from './embedding.js'
+import { bundledHouseRulesProvider, STARTER_PACK_SCHEMA_VERSION } from './houseRules.js'
 
 function stringOrNull(value, maximum = 500) {
   if (typeof value !== 'string') return null
@@ -95,10 +96,12 @@ export class MemoryService {
     semanticRecallEnabled = false,
     embeddingProvider = null,
     rankingProfile = 'ranking_v1',
+    houseRulesProvider = bundledHouseRulesProvider,
     clock = () => new Date(),
   }) {
     if (!repository) throw new Error('MemoryRepository is required')
     if (typeof auditSink?.record !== 'function') throw new Error('Memory audit sink is required')
+    if (typeof houseRulesProvider?.getRules !== 'function') throw new Error('House Rules provider is required')
     this.repository = repository
     this.accessPolicy = accessPolicy
     this.auditSink = auditSink
@@ -108,6 +111,7 @@ export class MemoryService {
     this.semanticRecallEnabled = semanticRecallEnabled === true
     this.embeddingProvider = embeddingProvider
     this.rankingProfile = rankingProfile
+    this.houseRulesProvider = houseRulesProvider
     this.clock = clock
   }
 
@@ -307,9 +311,14 @@ export class MemoryService {
   }
 
   async starterPack(actor, input = {}, context = {}) {
+    // House Rules are loaded before memories so a broken or missing rule source
+    // cannot silently return an incomplete session-start contract.
+    const houseRules = await this.houseRulesProvider.getRules()
     const memories = await this.list(actor, { limit: input.limit || 10 }, context)
     return {
+      schema_version: STARTER_PACK_SCHEMA_VERSION,
       actor,
+      house_rules: houseRules,
       private_memories: memories.filter(memory => memory.space_key === actor),
       shared_memories: memories.filter(memory => (
         memory.space_key === 'shared'

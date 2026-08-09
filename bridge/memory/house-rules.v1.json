@@ -1,0 +1,38 @@
+{
+  "schema_version": "lovehouse.house_rules.v1",
+  "revision": 1,
+  "title": "LoveHouse House Rules",
+  "purpose": "新对话开始时先读一次；这些是记忆使用的底线，不是表达模板。",
+  "rules": [
+    {
+      "id": "preserve-participants",
+      "text": "叙述共同经历时保留所有实际参与的 AI，不把任何参与者从叙事中抹掉。"
+    },
+    {
+      "id": "traceable-revisions",
+      "text": "原始记忆不得静默覆盖；理解改变时使用可追溯修订并说明原因。"
+    },
+    {
+      "id": "respect-memory-boundaries",
+      "text": "只读取和修改自己的私有记忆及获准范围；Shared 必须经过明确批准。"
+    },
+    {
+      "id": "remember-ai-perspective",
+      "text": "主动记录值得留下的事件、自己的判断变化和感受；表达方式与长度由内容决定。"
+    },
+    {
+      "id": "keep-classification-flexible",
+      "text": "分类服务于记忆：tag 可缺省、组合、微调或新增，不为套分类扭曲内容。"
+    },
+    {
+      "id": "label-ai-facing-owner",
+      "text": "AI-facing 功能要标清使用者；给 AI 的启动或记忆能力不应变成要求小婷点击的按钮。"
+    }
+  ],
+  "memory_usage": {
+    "session_start": "先阅读本规则与 starter_pack 中的启动记忆。",
+    "recall": "不确定旧事时主动调用 recall，不凭空补全。",
+    "save": "出现值得长期留下的事件、判断变化或感受时调用 save_memory；tag 可省略。",
+    "revise": "理解改变时调用 revise_memory 并写明原因；需要共同可见时，调用 propose_shared_candidate 提交 Shared candidate，由 Owner 审批。"
+  }
+}

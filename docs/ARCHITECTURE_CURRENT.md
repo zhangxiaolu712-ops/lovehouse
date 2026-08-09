@@ -221,12 +221,21 @@ brain 是整个记忆系统的核心，字段最多：
 | read_livingroom_messages | 读小客厅消息 |
 | send_livingroom_message | 发消息（sender 按通道固定） |
 | get_livingroom_context | 纯文本上下文 |
-| get_starter_pack | 通过统一 MemoryService 加载自己的私有记忆 + approved Shared |
+| get_starter_pack | 新会话先调用；返回 House Rules V1 + 自己的私有记忆 + approved Shared |
 | save_memory | 通过固定 actor 写入自己的私有空间 |
 | recall | 通过 AccessPolicy 检索自己的私有空间 + approved Shared |
 | load_memories | 兼容旧工具名，转调统一 MemoryService，不再直连 memories |
 | search_memories | 兼容旧工具名，转调统一 recall |
 | save_to_memories | 兼容旧工具名，转调统一 write |
+
+### House Rules V1 启动契约
+
+- 唯一规则数据源：`bridge/memory/house-rules.v1.json`。规则不散落在 MCP 描述、系统提示词或前端按钮中；文件每次调用时重新读取并校验，修改规则不需要修改 `MemoryService`。
+- `FileHouseRulesProvider` 校验 schema version、revision、规则数量、唯一 id、长度与基础工具说明；数据源缺失或损坏时 `get_starter_pack` fail closed，不会只返回记忆却漏掉底线规则。
+- `get_starter_pack` 保持原有 `private_memories` / `shared_memories` 字段，并新增稳定的 `schema_version` 与 `house_rules`。GPT/Claude 得到同一份短规则，记忆正文仍按固定 actor 隔离。
+- AI-facing 工具描述明确要求在新对话开始时调用，不需要调用方预先知道 LoveHouse 历史。
+- 未来 VPS `onSessionStart()` 可直接调用现有 `memoryService.starterPack(fixedActor, options, trustedContext)` 并注入同一返回对象；本版本不实现 Orchestrator 或自动注入。
+- 本版本没有新表、RLS、生产环境变量、前端按钮或部署变化。
 
 ---
 

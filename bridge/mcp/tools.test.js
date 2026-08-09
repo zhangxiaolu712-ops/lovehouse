@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { MEMORY_ACTORS } from '../memory/index.js'
+import {
+  HouseRulesConfigurationError,
+  MEMORY_ACTORS,
+  MemoryService,
+} from '../memory/index.js'
 import {
   createMcpToolDefinitions,
   createMcpToolHandler,
@@ -96,6 +100,70 @@ test('all MCP tool schemas reject unknown arguments', () => {
   for (const tool of createMcpToolDefinitions(MEMORY_ACTORS.GPT)) {
     assert.equal(tool.inputSchema.additionalProperties, false, tool.name)
   }
+})
+
+test('starter pack describes the complete session-start contract to a new AI', () => {
+  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+    const tool = createMcpToolDefinitions(actor).find(candidate => candidate.name === 'get_starter_pack')
+    assert.match(tool.description, /新对话开始时先调用/)
+    assert.match(tool.description, /House Rules/)
+    assert.match(tool.description, /无需预先了解 LoveHouse 历史/)
+    assert.match(tool.description, /不会返回另一 AI 的私有记忆或 Legacy Pending/)
+  }
+})
+
+test('GPT and Claude receive House Rules through the actual starter-pack MCP adapter', async () => {
+  const rows = [
+    { id: 1, space_key: 'gpt', content: 'gpt private' },
+    { id: 2, space_key: 'claude', content: 'claude private' },
+    { id: 3, space_key: 'shared', shared_status: 'approved', content: 'approved shared' },
+  ]
+  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+    const memoryService = new MemoryService({
+      repository: { async list() { return rows } },
+      auditSink: { async record() {} },
+    })
+    const handler = createMcpToolHandler({ actor, memoryService, livingroomRest: async () => [] })
+    const pack = JSON.parse(await handler('get_starter_pack', {}))
+    assert.equal(pack.actor, actor)
+    assert.equal(pack.house_rules.schema_version, 'lovehouse.house_rules.v1')
+    assert.deepEqual(pack.private_memories.map(memory => memory.space_key), [actor])
+    assert.deepEqual(pack.shared_memories.map(memory => memory.id), [3])
+  }
+})
+
+test('House Rules failure is isolated to get_starter_pack and other MCP tools remain usable', async () => {
+  const repositoryCalls = []
+  const memoryService = new MemoryService({
+    repository: {
+      async list() {
+        repositoryCalls.push('list')
+        return []
+      },
+      async search() {
+        repositoryCalls.push('search')
+        return []
+      },
+    },
+    houseRulesProvider: {
+      async getRules() {
+        throw new HouseRulesConfigurationError('missing')
+      },
+    },
+    auditSink: { async record() {} },
+  })
+  const handler = createMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryService,
+    livingroomRest: async () => [],
+  })
+
+  await assert.rejects(
+    handler('get_starter_pack', {}),
+    error => error.code === 'HOUSE_RULES_CONFIGURATION_INVALID'
+  )
+  assert.deepEqual(JSON.parse(await handler('recall', { query: 'still available' })), [])
+  assert.deepEqual(repositoryCalls, ['search'])
 })
 
 test('GPT compatibility tools call one MemoryService with fixed GPT actor', async () => {
