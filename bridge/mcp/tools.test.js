@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { MEMORY_ACTORS, MemoryService } from '../memory/index.js'
+import {
+  HouseRulesConfigurationError,
+  MEMORY_ACTORS,
+  MemoryService,
+} from '../memory/index.js'
 import {
   createMcpToolDefinitions,
   createMcpToolHandler,
@@ -126,6 +130,40 @@ test('GPT and Claude receive House Rules through the actual starter-pack MCP ada
     assert.deepEqual(pack.private_memories.map(memory => memory.space_key), [actor])
     assert.deepEqual(pack.shared_memories.map(memory => memory.id), [3])
   }
+})
+
+test('House Rules failure is isolated to get_starter_pack and other MCP tools remain usable', async () => {
+  const repositoryCalls = []
+  const memoryService = new MemoryService({
+    repository: {
+      async list() {
+        repositoryCalls.push('list')
+        return []
+      },
+      async search() {
+        repositoryCalls.push('search')
+        return []
+      },
+    },
+    houseRulesProvider: {
+      async getRules() {
+        throw new HouseRulesConfigurationError('missing')
+      },
+    },
+    auditSink: { async record() {} },
+  })
+  const handler = createMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryService,
+    livingroomRest: async () => [],
+  })
+
+  await assert.rejects(
+    handler('get_starter_pack', {}),
+    error => error.code === 'HOUSE_RULES_CONFIGURATION_INVALID'
+  )
+  assert.deepEqual(JSON.parse(await handler('recall', { query: 'still available' })), [])
+  assert.deepEqual(repositoryCalls, ['search'])
 })
 
 test('GPT compatibility tools call one MemoryService with fixed GPT actor', async () => {

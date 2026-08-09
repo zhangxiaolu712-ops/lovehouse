@@ -33,6 +33,6 @@
     "session_start": "先阅读本规则与 starter_pack 中的启动记忆。",
     "recall": "不确定旧事时主动调用 recall，不凭空补全。",
     "save": "出现值得长期留下的事件、判断变化或感受时调用 save_memory；tag 可省略。",
-    "revise": "理解改变时调用 revise_memory 并写明原因；需要共同可见时只提出 Shared candidate，等待 Owner 批准。"
+    "revise": "理解改变时调用 revise_memory 并写明原因；需要共同可见时，调用 propose_shared_candidate 提交 Shared candidate，由 Owner 审批。"
   }
 }
