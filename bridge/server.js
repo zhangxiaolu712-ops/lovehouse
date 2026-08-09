@@ -6,7 +6,9 @@ import { installClaudeOAuth } from './oauth.js'
 import {
   createSupabaseRest,
   createRuntimeMemoryRepository,
+  DreamWorker,
   EmbeddingIndexer,
+  HttpDreamCuratorProvider,
   HttpEmbeddingProvider,
   MEMORY_ACTORS,
   MemoryService,
@@ -61,6 +63,16 @@ const MEMORY_EMBEDDING_DIMENSIONS = Number.parseInt(process.env.MEMORY_EMBEDDING
 const MEMORY_EMBEDDING_API_URL = process.env.MEMORY_EMBEDDING_API_URL || ''
 const MEMORY_EMBEDDING_API_KEY = process.env.MEMORY_EMBEDDING_API_KEY || ''
 const MEMORY_EMBEDDING_MODEL = process.env.MEMORY_EMBEDDING_MODEL || ''
+const MEMORY_DREAM_ENABLED = MEMORY_SYSTEM_ENABLED
+  && process.env.MEMORY_DREAM_ENABLED === 'true'
+const MEMORY_DREAM_CURATOR_PROVIDER = process.env.MEMORY_DREAM_CURATOR_PROVIDER || ''
+const MEMORY_DREAM_CURATOR_URL = process.env.MEMORY_DREAM_CURATOR_URL || ''
+const MEMORY_DREAM_CURATOR_API_KEY = process.env.MEMORY_DREAM_CURATOR_API_KEY || ''
+const MEMORY_DREAM_CURATOR_MODEL = process.env.MEMORY_DREAM_CURATOR_MODEL || ''
+const MEMORY_DREAM_INTERVAL_MS = Math.min(
+  Math.max(Number.parseInt(process.env.MEMORY_DREAM_INTERVAL_MS, 10) || 300_000, 60_000),
+  3_600_000
+)
 const SYSTEM_PROMPT = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
 
 const rateMap = new Map()
@@ -195,6 +207,41 @@ if (MEMORY_SEMANTIC_ENABLED && embeddingProviderConfigured) {
   embeddingIndexInterval.unref?.()
 }
 
+const dreamCuratorProvider = new HttpDreamCuratorProvider({
+  providerKey: MEMORY_DREAM_CURATOR_PROVIDER,
+  url: MEMORY_DREAM_CURATOR_URL,
+  apiKey: MEMORY_DREAM_CURATOR_API_KEY,
+  model: MEMORY_DREAM_CURATOR_MODEL,
+})
+const dreamCuratorConfigured = Boolean(
+  MEMORY_DREAM_CURATOR_PROVIDER && MEMORY_DREAM_CURATOR_URL && MEMORY_DREAM_CURATOR_MODEL
+)
+if (MEMORY_DREAM_ENABLED && dreamCuratorConfigured) {
+  const dreamWorker = new DreamWorker({
+    repository: canonicalMemoryRepository,
+    curatorProvider: dreamCuratorProvider,
+    enabled: true,
+  })
+  let dreaming = false
+  const runDreamCycle = async () => {
+    if (dreaming) return
+    dreaming = true
+    try {
+      for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+        await dreamWorker.runOnce(actor)
+      }
+    } catch (error) {
+      console.error('[memory dream worker]', error.message)
+    } finally {
+      dreaming = false
+    }
+  }
+  const initialDreamCycle = setTimeout(runDreamCycle, 5_000)
+  initialDreamCycle.unref?.()
+  const dreamCycleInterval = setInterval(runDreamCycle, MEMORY_DREAM_INTERVAL_MS)
+  dreamCycleInterval.unref?.()
+}
+
 app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
     return res.status(400).json({ error: 'message required' })
@@ -307,6 +354,9 @@ app.get('/health', (_req, res) => {
     memory_system_enabled: MEMORY_SYSTEM_ENABLED,
     memory_semantic_enabled: MEMORY_SEMANTIC_ENABLED,
     memory_embedding_provider_configured: embeddingProviderConfigured,
+    memory_dream_enabled: MEMORY_DREAM_ENABLED,
+    memory_dream_curator_configured: dreamCuratorConfigured,
+    memory_dream_curator_provider: MEMORY_DREAM_CURATOR_PROVIDER || null,
     memory_ranking_profile: MEMORY_RANKING_PROFILE,
     memory_writes_enabled: memoryService.writeEnabled,
     database_migration: MEMORY_SYSTEM_ENABLED ? 'expected' : 'not_applied',

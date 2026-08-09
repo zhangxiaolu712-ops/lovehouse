@@ -1,0 +1,105 @@
+name: Memory Behavior Phase 4B (free disposable Supabase)
+
+on:
+  pull_request:
+    paths:
+      - "bridge/**"
+      - "supabase/migrations/20260808191311_create_unified_memory_system_v2.sql"
+      - "supabase/migrations/20260808215808_memory_runtime_phase3.sql"
+      - "supabase/migrations/20260808230911_memory_behavior_phase4a.sql"
+      - "supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql"
+      - "supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql"
+      - "supabase/rollback/20260808215808_memory_runtime_phase3_rollback.sql"
+      - "supabase/rollback/20260808230911_memory_behavior_phase4a_rollback.sql"
+      - "supabase/rollback/20260809004549_memory_behavior_phase4b_dream_foundation_rollback.sql"
+      - "supabase/tests/memory_system_phase2.sql"
+      - "supabase/tests/memory_runtime_phase3.sql"
+      - "supabase/tests/memory_behavior_phase4a.sql"
+      - "supabase/tests/memory_behavior_phase4b.sql"
+      - ".github/workflows/memory-behavior-phase4b.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  phase4b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1
+        with:
+          version: 2.113.0
+
+      - name: Prepare free disposable local Supabase
+        shell: bash
+        run: |
+          mkdir -p .memory-phase4b-ci
+          supabase init --workdir .memory-phase4b-ci --yes
+          supabase start --workdir .memory-phase4b-ci \
+            --exclude studio,imgproxy,storage-api,realtime,mailpit,edge-runtime,logflare,vector,supavisor
+
+      - name: Fresh install and Phase 2/3/4A/4B regression
+        shell: bash
+        run: |
+          DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808191311_create_unified_memory_system_v2.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_system_phase2.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808215808_memory_runtime_phase3.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_runtime_phase3.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808230911_memory_behavior_phase4a.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4a.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4b.sql
+          supabase db lint --workdir .memory-phase4b-ci --local --schema public \
+            --level warning --fail-on error
+
+      - name: Phase 4B rollback and reinstall
+        shell: bash
+        run: |
+          DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260809004549_memory_behavior_phase4b_dream_foundation_rollback.sql
+          test "$(psql "$DB" -Atc "select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('memory_anchor_records','memory_dream_jobs','memory_dream_job_sources','memory_ingest_candidate_sources');")" = "0"
+          test "$(psql "$DB" -Atc "select count(*) from pg_attribute where attrelid='public.memory_ingest_candidates'::regclass and attname='dream_job_id' and not attisdropped;")" = "0"
+          test "$(psql "$DB" -Atc "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'memory_behavior_%dream%';")" = "0"
+          test "$(psql "$DB" -Atc "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname='memory_behavior_recall_gpt';")" = "1"
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4b.sql
+
+      - name: Full rollback and clean reinstall
+        shell: bash
+        run: |
+          DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260809004549_memory_behavior_phase4b_dream_foundation_rollback.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260808230911_memory_behavior_phase4a_rollback.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260808215808_memory_runtime_phase3_rollback.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260808191311_create_unified_memory_system_v2_rollback.sql
+          test "$(psql "$DB" -Atc "select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'memory_%';")" = "0"
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808191311_create_unified_memory_system_v2.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_system_phase2.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808215808_memory_runtime_phase3.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_runtime_phase3.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260808230911_memory_behavior_phase4a.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4a.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260809004549_memory_behavior_phase4b_dream_foundation.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_behavior_phase4b.sql
+
+      - name: Bridge regression
+        working-directory: bridge
+        run: |
+          npm install --ignore-scripts --no-package-lock --no-audit --no-fund
+          npm test
+
+      - name: Frontend regression
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Stop and delete the disposable stack
+        if: always()
+        run: supabase stop --workdir .memory-phase4b-ci --no-backup
