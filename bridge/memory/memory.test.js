@@ -143,7 +143,7 @@ test('semantic recall uses hybrid ranking without changing the AI-facing input',
     embeddingProvider: {
       async embed(query) {
         assert.equal(query, '没有原词的意思')
-        return { vector: [0.1, 0.9], profile: 'semantic-test-v1', dimensions: 2 }
+        return { vector: [0.1, 0.9], profile: 'semantic-test-v1', model: 'test-model', dimensions: 2 }
       },
     },
     rankingProfile: 'ranking_v1',
@@ -152,6 +152,8 @@ test('semantic recall uses hybrid ranking without changing the AI-facing input',
   const rows = await service.recall('gpt', { query: '没有原词的意思', limit: 5 })
   assert.deepEqual(rows.map(row => row.id), [1])
   assert.deepEqual(calls[0].queryEmbedding, [0.1, 0.9])
+  assert.equal(calls[0].queryEmbeddingProfile, 'semantic-test-v1')
+  assert.equal(calls[0].queryEmbeddingModel, 'test-model')
   assert.equal(calls[0].rankingProfile, 'ranking_v1')
 })
 
@@ -166,8 +168,7 @@ test('semantic provider failure is persistently audited before keyword fallback'
     },
   }
   const error = new Error('provider offline')
-  error.code = 'MEMORY_EMBEDDING_UNAVAILABLE'
-  error.semanticFallbackAllowed = true
+  error.code = 'MEMORY_EMBEDDING_NETWORK_ERROR'
   const service = new MemoryService({
     repository,
     auditSink: { persistent: true, async record(event) { events.push(event) } },
@@ -179,14 +180,14 @@ test('semantic provider failure is persistently audited before keyword fallback'
   assert.deepEqual(rows.map(row => row.id), [1])
   assert.equal(keywordCalls, 1)
   assert.equal(events[0].action, 'recall_semantic_fallback')
-  assert.equal(events[0].reason_code, 'MEMORY_EMBEDDING_UNAVAILABLE')
+  assert.equal(events[0].reason_code, 'MEMORY_EMBEDDING_NETWORK_ERROR')
   assert.equal(JSON.stringify(events).includes('keyword result'), false)
 })
 
 test('fallback audit failure keeps keyword recall fail closed', async () => {
   let keywordCalls = 0
   const error = new Error('provider offline')
-  error.semanticFallbackAllowed = true
+  error.code = 'MEMORY_EMBEDDING_TIMEOUT'
   const service = new MemoryService({
     repository: {
       transactionalAudit: true,
@@ -216,7 +217,7 @@ test('security failures never use keyword fallback', async () => {
     auditSink: { persistent: true, async record() {} },
     semanticRecallEnabled: true,
     embeddingProvider: {
-      async embed() { return { vector: [0.1, 0.9], profile: 'semantic-test-v1', dimensions: 2 } },
+      async embed() { return { vector: [0.1, 0.9], profile: 'semantic-test-v1', model: 'test-model', dimensions: 2 } },
     },
   })
   await assert.rejects(
@@ -224,6 +225,45 @@ test('security failures never use keyword fallback', async () => {
     error => error.code === 'MEMORY_ACCESS_DENIED'
   )
   assert.equal(keywordCalls, 0)
+})
+
+test('config, ranking and embedding identity errors cannot use keyword fallback', async () => {
+  for (const code of [
+    'MEMORY_EMBEDDING_NOT_CONFIGURED',
+    'MEMORY_EMBEDDING_AUTHORIZATION_FAILED',
+    'MEMORY_EMBEDDING_CLIENT_ERROR',
+    'MEMORY_RANKING_PROFILE_INVALID',
+    'MEMORY_EMBEDDING_IDENTITY_MISMATCH',
+  ]) {
+    let keywordCalls = 0
+    const service = new MemoryService({
+      repository: {
+        transactionalAudit: true,
+        async hybridSearch() { const error = new Error(code); error.code = code; throw error },
+        async search() { keywordCalls += 1; return [] },
+      },
+      auditSink: { persistent: true, async record() {} },
+      semanticRecallEnabled: true,
+      embeddingProvider: {
+        async embed() {
+          if (code.startsWith('MEMORY_EMBEDDING_')
+            && code !== 'MEMORY_EMBEDDING_IDENTITY_MISMATCH') {
+            const error = new Error(code)
+            error.code = code
+            throw error
+          }
+          return {
+            vector: [0.1, 0.9], profile: 'wrong-profile', model: 'wrong-model', dimensions: 2,
+          }
+        },
+      },
+    })
+    await assert.rejects(
+      service.recall('gpt', { query: 'private' }),
+      error => error.code === code
+    )
+    assert.equal(keywordCalls, 0, code)
+  }
 })
 
 test('GPT cannot read Claude private memory by id', async () => {

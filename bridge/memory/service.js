@@ -233,13 +233,14 @@ export class MemoryService {
           if (typeof this.embeddingProvider?.embed !== 'function') {
             const error = new Error('Embedding provider is unavailable')
             error.code = 'MEMORY_EMBEDDING_NOT_CONFIGURED'
-            error.semanticFallbackAllowed = true
             throw error
           }
           const generated = await this.embeddingProvider.embed(search.query)
           rows = await this.repository.hybridSearch({
             ...search,
             queryEmbedding: generated.vector,
+            queryEmbeddingProfile: generated.profile,
+            queryEmbeddingModel: generated.model,
             rankingProfile: this.rankingProfile,
           })
         } catch (error) {

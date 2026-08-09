@@ -48,6 +48,8 @@ test('hybrid recall uses a fixed actor behavior door and server-only ranking inp
     scope: gptScope,
     query: '玫瑰',
     queryEmbedding: [0.1, 0.2, 0.3],
+    queryEmbeddingProfile: 'semantic-test-v1',
+    queryEmbeddingModel: 'test/model-v1',
     rankingProfile: 'ranking_v1',
     requestId,
   })
@@ -55,6 +57,8 @@ test('hybrid recall uses a fixed actor behavior door and server-only ranking inp
   assert.equal(calls[0][1], 'rpc/memory_behavior_recall_gpt')
   assert.equal(calls[0][2].p_ranking_profile, 'ranking_v1')
   assert.deepEqual(calls[0][2].p_query_embedding, [0.1, 0.2, 0.3])
+  assert.equal(calls[0][2].p_query_embedding_profile, 'semantic-test-v1')
+  assert.equal(calls[0][2].p_query_embedding_model, 'test/model-v1')
   assert.equal('actor' in calls[0][2], false)
   assert.equal('space_key' in calls[0][2], false)
 })
@@ -67,6 +71,8 @@ test('repository rejects malformed server embeddings before calling Supabase', a
       scope: gptScope,
       query: 'rose',
       queryEmbedding: [0.1, Number.NaN],
+      queryEmbeddingProfile: 'semantic-test-v1',
+      queryEmbeddingModel: 'test-model',
       requestId,
     }),
     error => error.code === 'INVALID_MEMORY_QUERY_EMBEDDING'

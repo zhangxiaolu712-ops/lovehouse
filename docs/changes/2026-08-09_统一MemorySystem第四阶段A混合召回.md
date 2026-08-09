@@ -22,3 +22,9 @@
 ## 下一步
 
 保持 Draft，等待 GPT/工程二审与免费 CI 全绿。任何生产启用或 Phase 4B 都必须另开工单与分支。
+
+## #27 二审补充修订
+
+- query embedding 的 profile/model identity 由 Bridge 内部传递，并由数据库与 `ranking_v1` 的固定绑定进行比较；同维度异源向量禁止互比。
+- semantic fallback 改为显式白名单：网络/超时、408/429/5xx、无效向量/维度可降级；400/401/403、ranking/config、权限与 identity mismatch 均 fail closed。
+- AI-facing recall 参数没有变化，Phase 4B 仍未施工。

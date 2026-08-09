@@ -8,9 +8,17 @@ export class EmbeddingProviderError extends Error {
     super(message, options)
     this.name = 'EmbeddingProviderError'
     this.code = code
-    this.semanticFallbackAllowed = true
   }
 }
+
+const SEMANTIC_FALLBACK_CODES = new Set([
+  'MEMORY_EMBEDDING_TIMEOUT',
+  'MEMORY_EMBEDDING_NETWORK_ERROR',
+  'MEMORY_EMBEDDING_RATE_LIMITED',
+  'MEMORY_EMBEDDING_UPSTREAM_5XX',
+  'MEMORY_EMBEDDING_VECTOR_INVALID',
+  'MEMORY_VECTOR_INVALID',
+])
 
 function validVector(value, dimensions) {
   return Array.isArray(value)
@@ -58,24 +66,60 @@ export class HttpEmbeddingProvider {
     try {
       const headers = { 'Content-Type': 'application/json' }
       if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
-      const response = await this.fetchImpl(this.url, {
-        method: 'POST',
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: this.model,
-          input: input.trim().slice(0, MAX_EMBEDDING_INPUT_CHARS),
-          dimensions: this.dimensions,
-          encoding_format: 'float',
-        }),
-      })
-      if (!response.ok) {
+      let response
+      try {
+        response = await this.fetchImpl(this.url, {
+          method: 'POST',
+          headers,
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: this.model,
+            input: input.trim().slice(0, MAX_EMBEDDING_INPUT_CHARS),
+            dimensions: this.dimensions,
+            encoding_format: 'float',
+          }),
+        })
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new EmbeddingProviderError('Embedding provider timed out', 'MEMORY_EMBEDDING_TIMEOUT', { cause: error })
+        }
         throw new EmbeddingProviderError(
-          `Embedding provider returned ${response.status}`,
-          response.status === 429 ? 'MEMORY_EMBEDDING_RATE_LIMITED' : 'MEMORY_EMBEDDING_UPSTREAM_ERROR'
+          'Embedding provider request failed',
+          'MEMORY_EMBEDDING_NETWORK_ERROR',
+          { cause: error }
         )
       }
-      const payload = await response.json()
+      if (!response.ok) {
+        let code = 'MEMORY_EMBEDDING_CLIENT_ERROR'
+        if (response.status === 408) code = 'MEMORY_EMBEDDING_TIMEOUT'
+        else if (response.status === 429) code = 'MEMORY_EMBEDDING_RATE_LIMITED'
+        else if (response.status >= 500) code = 'MEMORY_EMBEDDING_UPSTREAM_5XX'
+        else if ([401, 403].includes(response.status)) code = 'MEMORY_EMBEDDING_AUTHORIZATION_FAILED'
+        throw new EmbeddingProviderError(
+          `Embedding provider returned ${response.status}`,
+          code
+        )
+      }
+      let payload
+      try {
+        payload = await response.json()
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new EmbeddingProviderError('Embedding provider timed out', 'MEMORY_EMBEDDING_TIMEOUT', { cause: error })
+        }
+        if (error instanceof SyntaxError) {
+          throw new EmbeddingProviderError(
+            'Embedding provider returned an invalid response',
+            'MEMORY_EMBEDDING_RESPONSE_INVALID',
+            { cause: error }
+          )
+        }
+        throw new EmbeddingProviderError(
+          'Embedding provider response failed',
+          'MEMORY_EMBEDDING_NETWORK_ERROR',
+          { cause: error }
+        )
+      }
       const vector = payload?.data?.[0]?.embedding
       if (!validVector(vector, this.dimensions)) {
         throw new EmbeddingProviderError(
@@ -83,13 +127,12 @@ export class HttpEmbeddingProvider {
           'MEMORY_EMBEDDING_VECTOR_INVALID'
         )
       }
-      return { vector, profile: this.profile, dimensions: this.dimensions }
-    } catch (error) {
-      if (error instanceof EmbeddingProviderError) throw error
-      if (error?.name === 'AbortError') {
-        throw new EmbeddingProviderError('Embedding provider timed out', 'MEMORY_EMBEDDING_TIMEOUT', { cause: error })
+      return {
+        vector,
+        profile: this.profile,
+        model: this.model,
+        dimensions: this.dimensions,
       }
-      throw new EmbeddingProviderError('Embedding provider request failed', 'MEMORY_EMBEDDING_UNAVAILABLE', { cause: error })
     } finally {
       clearTimeout(timeout)
     }
@@ -97,8 +140,7 @@ export class HttpEmbeddingProvider {
 }
 
 export function semanticFallbackAllowed(error) {
-  return error?.semanticFallbackAllowed === true
-    || ['MEMORY_VECTOR_UNAVAILABLE', 'MEMORY_VECTOR_INVALID'].includes(error?.code)
+  return SEMANTIC_FALLBACK_CODES.has(error?.code)
 }
 
 export class EmbeddingIndexer {
@@ -122,6 +164,7 @@ export class EmbeddingIndexer {
         const generated = await this.provider.embed(item.input)
         if (
           generated.profile !== item.embedding_profile
+          || generated.model !== item.embedding_model
           || generated.dimensions !== item.dimensions
         ) {
           throw new EmbeddingProviderError(

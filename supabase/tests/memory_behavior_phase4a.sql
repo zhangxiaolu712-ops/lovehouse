@@ -123,8 +123,51 @@ begin
   -- A semantic-only query finds GPT private and approved Shared, while Claude
   -- private and Legacy never enter the SQL eligible relation.
   result := public.memory_behavior_recall_gpt(
+    v_owner, '41000000-0000-4000-8000-000000000010',
+    'same dimensions wrong profile', vector_a,
+    'semantic-other-1536-v1', 'text-embedding-3-small',
+    'ranking_v1', 10, null, array['phase4a']
+  );
+  if result->>'error_code' <> 'MEMORY_EMBEDDING_IDENTITY_MISMATCH'
+    or not (result->>'audit_persisted')::boolean then
+    raise exception 'Same-dimension foreign embedding profile was accepted';
+  end if;
+  result := public.memory_behavior_recall_gpt(
+    v_owner, '41000000-0000-4000-8000-000000000011',
+    'same dimensions wrong model', vector_a,
+    'semantic-1536-v1', 'foreign-embedding-model',
+    'ranking_v1', 10, null, array['phase4a']
+  );
+  if result->>'error_code' <> 'MEMORY_EMBEDDING_IDENTITY_MISMATCH'
+    or not (result->>'audit_persisted')::boolean then
+    raise exception 'Same-dimension foreign embedding model was accepted';
+  end if;
+  result := public.memory_behavior_recall_gpt(
+    v_owner, '41000000-0000-4000-8000-000000000012',
+    'unknown ranking profile', vector_a,
+    'semantic-1536-v1', 'text-embedding-3-small',
+    'ranking-does-not-exist', 10, null, array['phase4a']
+  );
+  if result->>'error_code' <> 'MEMORY_RANKING_PROFILE_INVALID'
+    or not (result->>'audit_persisted')::boolean then
+    raise exception 'Unknown ranking profile did not fail closed';
+  end if;
+  result := public.memory_behavior_recall_gpt(
+    v_owner, '41000000-0000-4000-8000-000000000013',
+    'invalid query vector dimensions', array[1::real],
+    'semantic-1536-v1', 'text-embedding-3-small',
+    'ranking_v1', 10, null, array['phase4a']
+  );
+  if result->>'error_code' <> 'MEMORY_VECTOR_INVALID'
+    or not (result->>'audit_persisted')::boolean then
+    raise exception 'Invalid vector dimensions were not classified for audited fallback';
+  end if;
+
+  result := public.memory_behavior_recall_gpt(
     v_owner, '41000000-0000-4000-8000-000000000007',
-    'words absent from every memory', vector_a, 'ranking_v1', 10, null, array['phase4a']
+    'words absent from every memory', vector_a,
+    'semantic-1536-v1', 'text-embedding-3-small',
+    'ranking_v1', 10, null, array['phase4a']
   );
   if not exists (
     select 1 from pg_catalog.jsonb_array_elements(result->'items') x(value)
@@ -164,7 +207,9 @@ begin
   end if;
   result := public.memory_behavior_recall_gpt(
     v_owner, '41000000-0000-4000-8000-000000000009',
-    'semantic only again', vector_a, 'ranking_v1', 10, null, array['phase4a']
+    'semantic only again', vector_a,
+    'semantic-1536-v1', 'text-embedding-3-small',
+    'ranking_v1', 10, null, array['phase4a']
   );
   if exists (
     select 1 from pg_catalog.jsonb_array_elements(result->'items') x(value)
@@ -197,15 +242,15 @@ begin
   end if;
   if not has_function_privilege(
     'service_role',
-    'public.memory_behavior_recall_gpt(uuid,uuid,text,real[],text,integer,bigint,text[])',
+    'public.memory_behavior_recall_gpt(uuid,uuid,text,real[],text,text,text,integer,bigint,text[])',
     'EXECUTE'
   ) or has_function_privilege(
     'authenticated',
-    'public.memory_behavior_recall_gpt(uuid,uuid,text,real[],text,integer,bigint,text[])',
+    'public.memory_behavior_recall_gpt(uuid,uuid,text,real[],text,text,text,integer,bigint,text[])',
     'EXECUTE'
   ) or has_function_privilege(
     'service_role',
-    'public.memory_behavior_internal_recall(text,uuid,uuid,text,real[],text,integer,bigint,text[])',
+    'public.memory_behavior_internal_recall(text,uuid,uuid,text,real[],text,text,text,integer,bigint,text[])',
     'EXECUTE'
   ) then
     raise exception 'Fixed actor hybrid RPC privilege boundary is incorrect';

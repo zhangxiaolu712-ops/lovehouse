@@ -9,6 +9,7 @@ create extension if not exists vector with schema extensions;
 create table public.memory_ranking_profiles (
   profile_key text primary key check (profile_key ~ '^ranking_v[0-9]+$'),
   embedding_profile_key text not null check (length(btrim(embedding_profile_key)) between 1 and 100),
+  embedding_model_key text not null check (length(btrim(embedding_model_key)) between 1 and 100),
   embedding_dimensions integer not null check (embedding_dimensions between 1 and 2000),
   rrf_k integer not null check (rrf_k between 1 and 1000),
   keyword_weight double precision not null check (keyword_weight between 0 and 1),
@@ -25,11 +26,11 @@ create table public.memory_ranking_profiles (
 );
 
 insert into public.memory_ranking_profiles (
-  profile_key, embedding_profile_key, embedding_dimensions, rrf_k,
+  profile_key, embedding_profile_key, embedding_model_key, embedding_dimensions, rrf_k,
   keyword_weight, semantic_weight, importance_weight, recency_weight,
   decay_weight, semantic_threshold, candidate_multiplier
 ) values (
-  'ranking_v1', 'semantic-1536-v1', 1536, 60,
+  'ranking_v1', 'semantic-1536-v1', 'text-embedding-3-small', 1536, 60,
   0.31, 0.31, 0.18, 0.12, 0.08, 0.20, 4
 );
 
@@ -55,6 +56,7 @@ create table public.memory_embeddings (
   revision_id bigint not null,
   revision_hash text not null check (revision_hash ~ '^[0-9a-f]{64}$'),
   embedding_profile_key text not null check (length(btrim(embedding_profile_key)) between 1 and 100),
+  embedding_model_key text not null check (length(btrim(embedding_model_key)) between 1 and 100),
   dimensions integer not null check (dimensions between 1 and 2000),
   input_hash text not null check (input_hash ~ '^[0-9a-f]{64}$'),
   embedding extensions.vector,
@@ -71,7 +73,7 @@ create table public.memory_embeddings (
     references public.memory_revisions (id, memory_id, owner_id)
     on delete restrict,
   constraint memory_embeddings_unique_revision_profile
-    unique (owner_id, memory_id, revision_id, embedding_profile_key),
+    unique (owner_id, memory_id, revision_id, embedding_profile_key, embedding_model_key),
   constraint memory_embeddings_lifecycle check (
     (status = 'pending' and embedding is null and processing_actor is null and lease_expires_at is null)
     or (status = 'processing' and embedding is null and processing_actor is not null and lease_expires_at is not null)
@@ -88,7 +90,10 @@ create index memory_embeddings_work_queue_idx
 create index memory_embeddings_semantic_1536_hnsw_idx
   on public.memory_embeddings
   using hnsw ((embedding::extensions.vector(1536)) extensions.vector_cosine_ops)
-  where status = 'ready' and embedding_profile_key = 'semantic-1536-v1' and dimensions = 1536;
+  where status = 'ready'
+    and embedding_profile_key = 'semantic-1536-v1'
+    and embedding_model_key = 'text-embedding-3-small'
+    and dimensions = 1536;
 
 create or replace function public.memory_behavior_embedding_input(
   p_title text,
@@ -149,18 +154,18 @@ begin
 
   embedding_input := public.memory_behavior_embedding_input(new.title, new.memory_type, new.tags, new.content);
   for profile in
-    select distinct embedding_profile_key, embedding_dimensions
+    select distinct embedding_profile_key, embedding_model_key, embedding_dimensions
     from public.memory_ranking_profiles
   loop
     insert into public.memory_embeddings (
       owner_id, memory_id, revision_id, revision_hash,
-      embedding_profile_key, dimensions, input_hash
+      embedding_profile_key, embedding_model_key, dimensions, input_hash
     ) values (
       new.owner_id, new.memory_id, new.id,
       public.memory_compute_revision_hash(new.id),
-      profile.embedding_profile_key, profile.embedding_dimensions,
+      profile.embedding_profile_key, profile.embedding_model_key, profile.embedding_dimensions,
       pg_catalog.encode(extensions.digest(embedding_input, 'sha256'), 'hex')
-    ) on conflict (owner_id, memory_id, revision_id, embedding_profile_key) do nothing;
+    ) on conflict (owner_id, memory_id, revision_id, embedding_profile_key, embedding_model_key) do nothing;
   end loop;
   return new;
 end;
@@ -192,18 +197,18 @@ begin
   );
 
   for profile in
-    select distinct embedding_profile_key, embedding_dimensions
+    select distinct embedding_profile_key, embedding_model_key, embedding_dimensions
     from public.memory_ranking_profiles
   loop
     insert into public.memory_embeddings (
       owner_id, memory_id, revision_id, revision_hash,
-      embedding_profile_key, dimensions, input_hash
+      embedding_profile_key, embedding_model_key, dimensions, input_hash
     ) values (
       new.owner_id, new.id, revision.id,
       public.memory_compute_revision_hash(revision.id),
-      profile.embedding_profile_key, profile.embedding_dimensions,
+      profile.embedding_profile_key, profile.embedding_model_key, profile.embedding_dimensions,
       pg_catalog.encode(extensions.digest(embedding_input, 'sha256'), 'hex')
-    ) on conflict (owner_id, memory_id, revision_id, embedding_profile_key) do nothing;
+    ) on conflict (owner_id, memory_id, revision_id, embedding_profile_key, embedding_model_key) do nothing;
   end loop;
   return new;
 end;
@@ -220,11 +225,11 @@ create trigger memory_entries_enqueue_approved_shared
 -- Legacy Pending and unapproved Shared are deliberately absent.
 insert into public.memory_embeddings (
   owner_id, memory_id, revision_id, revision_hash,
-  embedding_profile_key, dimensions, input_hash
+  embedding_profile_key, embedding_model_key, dimensions, input_hash
 )
 select
   e.owner_id, e.id, r.id, public.memory_compute_revision_hash(r.id),
-  p.embedding_profile_key, p.embedding_dimensions,
+  p.embedding_profile_key, p.embedding_model_key, p.embedding_dimensions,
   pg_catalog.encode(extensions.digest(
     public.memory_behavior_embedding_input(r.title, r.memory_type, r.tags, r.content),
     'sha256'
@@ -233,12 +238,12 @@ from public.memory_entries e
 join public.memory_revisions r
   on r.owner_id = e.owner_id and r.memory_id = e.id and r.revision_number = e.revision_number
 cross join (
-  select distinct embedding_profile_key, embedding_dimensions
+  select distinct embedding_profile_key, embedding_model_key, embedding_dimensions
   from public.memory_ranking_profiles
 ) p
 where e.space_key in ('gpt', 'claude')
    or (e.space_key = 'shared' and e.shared_status = 'approved')
-on conflict (owner_id, memory_id, revision_id, embedding_profile_key) do nothing;
+on conflict (owner_id, memory_id, revision_id, embedding_profile_key, embedding_model_key) do nothing;
 
 create or replace function public.memory_behavior_internal_audit(
   p_owner_id uuid,
@@ -324,6 +329,7 @@ begin
     'revision_id', c.revision_id,
     'revision_hash', c.revision_hash,
     'embedding_profile', c.embedding_profile_key,
+    'embedding_model', c.embedding_model_key,
     'dimensions', c.dimensions,
     'input_hash', c.input_hash,
     'input', public.memory_behavior_embedding_input(r.title, r.memory_type, r.tags, r.content)
@@ -397,7 +403,10 @@ begin
   perform public.memory_behavior_internal_audit(
     p_owner_id, p_actor, 'embedding_complete', target.memory_id, null,
     'allowed', null, p_request_id, 1, '{}'::text[],
-    pg_catalog.jsonb_build_object('embedding_profile', target.embedding_profile_key)
+    pg_catalog.jsonb_build_object(
+      'embedding_profile', target.embedding_profile_key,
+      'embedding_model', target.embedding_model_key
+    )
   );
   return pg_catalog.jsonb_build_object('ok', true, 'embedding_id', target.id);
 end;
@@ -453,6 +462,8 @@ create or replace function public.memory_behavior_internal_recall(
   p_request_id uuid,
   p_query text,
   p_query_embedding real[],
+  p_query_embedding_profile text,
+  p_query_embedding_model text,
   p_ranking_profile text,
   p_limit integer,
   p_cursor_id bigint,
@@ -477,7 +488,46 @@ begin
     raise exception 'Invalid fixed actor' using errcode = '42501';
   end if;
   select * into profile from public.memory_ranking_profiles where profile_key = p_ranking_profile;
-  if not found or normalized_query = '' or pg_catalog.cardinality(p_query_embedding) is distinct from profile.embedding_dimensions
+  if not found then
+    perform public.memory_behavior_internal_audit(
+      p_owner_id, p_actor, 'hybrid_recall', null, null, 'denied',
+      'MEMORY_RANKING_PROFILE_INVALID', p_request_id, 0, '{}'::text[],
+      pg_catalog.jsonb_build_object('ranking_profile', p_ranking_profile)
+    );
+    return pg_catalog.jsonb_build_object(
+      'ok', false, 'error_code', 'MEMORY_RANKING_PROFILE_INVALID',
+      'message', 'Ranking profile is not configured', 'audit_persisted', true
+    );
+  end if;
+  if normalized_query = '' then
+    perform public.memory_behavior_internal_audit(
+      p_owner_id, p_actor, 'hybrid_recall', null, null, 'denied',
+      'INVALID_MEMORY_QUERY', p_request_id, 0, '{}'::text[],
+      pg_catalog.jsonb_build_object('ranking_profile', profile.profile_key)
+    );
+    return pg_catalog.jsonb_build_object(
+      'ok', false, 'error_code', 'INVALID_MEMORY_QUERY',
+      'message', 'query is required', 'audit_persisted', true
+    );
+  end if;
+  if p_query_embedding_profile is distinct from profile.embedding_profile_key
+    or p_query_embedding_model is distinct from profile.embedding_model_key then
+    perform public.memory_behavior_internal_audit(
+      p_owner_id, p_actor, 'hybrid_recall', null, null, 'denied',
+      'MEMORY_EMBEDDING_IDENTITY_MISMATCH', p_request_id, 0, '{}'::text[],
+      pg_catalog.jsonb_build_object(
+        'ranking_profile', profile.profile_key,
+        'expected_embedding_profile', profile.embedding_profile_key,
+        'expected_embedding_model', profile.embedding_model_key
+      )
+    );
+    return pg_catalog.jsonb_build_object(
+      'ok', false, 'error_code', 'MEMORY_EMBEDDING_IDENTITY_MISMATCH',
+      'message', 'Query embedding identity does not match the ranking profile',
+      'audit_persisted', true
+    );
+  end if;
+  if pg_catalog.cardinality(p_query_embedding) is distinct from profile.embedding_dimensions
     or exists (
       select 1 from pg_catalog.unnest(p_query_embedding) as vector_values(component)
       where component::text in ('NaN', 'Infinity', '-Infinity')
@@ -485,11 +535,11 @@ begin
     perform public.memory_behavior_internal_audit(
       p_owner_id, p_actor, 'hybrid_recall', null, null, 'denied',
       'MEMORY_VECTOR_INVALID', p_request_id, 0, '{}'::text[],
-      pg_catalog.jsonb_build_object('ranking_profile', p_ranking_profile)
+      pg_catalog.jsonb_build_object('ranking_profile', profile.profile_key)
     );
     return pg_catalog.jsonb_build_object(
       'ok', false, 'error_code', 'MEMORY_VECTOR_INVALID',
-      'message', 'Query, ranking profile, or embedding is invalid',
+      'message', 'Query embedding dimensions or values are invalid',
       'audit_persisted', true
     );
   end if;
@@ -503,6 +553,7 @@ begin
     left join public.memory_embeddings me
       on me.owner_id = e.owner_id and me.memory_id = e.id and me.revision_id = r.id
       and me.embedding_profile_key = profile.embedding_profile_key
+      and me.embedding_model_key = profile.embedding_model_key
       and me.dimensions = profile.embedding_dimensions and me.status = 'ready'
     where e.owner_id = p_owner_id
       and (e.space_key = p_actor or (e.space_key = 'shared' and e.shared_status = 'approved'))
@@ -583,7 +634,8 @@ begin
     p_request_id, pg_catalog.jsonb_array_length(items), spaces,
     pg_catalog.jsonb_build_object(
       'mode', 'hybrid', 'ranking_profile', profile.profile_key,
-      'embedding_profile', profile.embedding_profile_key
+      'embedding_profile', profile.embedding_profile_key,
+      'embedding_model', profile.embedding_model_key
     )
   );
   return pg_catalog.jsonb_build_object('ok', true, 'items', items);
@@ -594,21 +646,25 @@ $$;
 -- revision or ranking weights through an AI-facing tool.
 create or replace function public.memory_behavior_recall_gpt(
   p_owner_id uuid, p_request_id uuid, p_query text, p_query_embedding real[],
+  p_query_embedding_profile text, p_query_embedding_model text,
   p_ranking_profile text, p_limit integer, p_cursor_id bigint, p_tags text[]
 )
 returns jsonb language sql security definer set search_path = '' as $$
   select public.memory_behavior_internal_recall(
     'gpt', p_owner_id, p_request_id, p_query, p_query_embedding,
+    p_query_embedding_profile, p_query_embedding_model,
     p_ranking_profile, p_limit, p_cursor_id, p_tags
   )
 $$;
 create or replace function public.memory_behavior_recall_claude(
   p_owner_id uuid, p_request_id uuid, p_query text, p_query_embedding real[],
+  p_query_embedding_profile text, p_query_embedding_model text,
   p_ranking_profile text, p_limit integer, p_cursor_id bigint, p_tags text[]
 )
 returns jsonb language sql security definer set search_path = '' as $$
   select public.memory_behavior_internal_recall(
     'claude', p_owner_id, p_request_id, p_query, p_query_embedding,
+    p_query_embedding_profile, p_query_embedding_model,
     p_ranking_profile, p_limit, p_cursor_id, p_tags
   )
 $$;
@@ -674,10 +730,10 @@ revoke execute on function public.memory_behavior_internal_audit(uuid, text, tex
 revoke execute on function public.memory_behavior_internal_claim_embeddings(text, uuid, uuid, integer) from public, anon, authenticated, service_role;
 revoke execute on function public.memory_behavior_internal_complete_embedding(text, uuid, uuid, bigint, real[]) from public, anon, authenticated, service_role;
 revoke execute on function public.memory_behavior_internal_fail_embedding(text, uuid, uuid, bigint, text) from public, anon, authenticated, service_role;
-revoke execute on function public.memory_behavior_internal_recall(text, uuid, uuid, text, real[], text, integer, bigint, text[]) from public, anon, authenticated, service_role;
+revoke execute on function public.memory_behavior_internal_recall(text, uuid, uuid, text, real[], text, text, text, integer, bigint, text[]) from public, anon, authenticated, service_role;
 
-revoke execute on function public.memory_behavior_recall_gpt(uuid, uuid, text, real[], text, integer, bigint, text[]) from public, anon, authenticated, service_role;
-revoke execute on function public.memory_behavior_recall_claude(uuid, uuid, text, real[], text, integer, bigint, text[]) from public, anon, authenticated, service_role;
+revoke execute on function public.memory_behavior_recall_gpt(uuid, uuid, text, real[], text, text, text, integer, bigint, text[]) from public, anon, authenticated, service_role;
+revoke execute on function public.memory_behavior_recall_claude(uuid, uuid, text, real[], text, text, text, integer, bigint, text[]) from public, anon, authenticated, service_role;
 revoke execute on function public.memory_behavior_claim_embeddings_gpt(uuid, uuid, integer) from public, anon, authenticated, service_role;
 revoke execute on function public.memory_behavior_claim_embeddings_claude(uuid, uuid, integer) from public, anon, authenticated, service_role;
 revoke execute on function public.memory_behavior_complete_embedding_gpt(uuid, uuid, bigint, real[]) from public, anon, authenticated, service_role;
@@ -685,8 +741,8 @@ revoke execute on function public.memory_behavior_complete_embedding_claude(uuid
 revoke execute on function public.memory_behavior_fail_embedding_gpt(uuid, uuid, bigint, text) from public, anon, authenticated, service_role;
 revoke execute on function public.memory_behavior_fail_embedding_claude(uuid, uuid, bigint, text) from public, anon, authenticated, service_role;
 
-grant execute on function public.memory_behavior_recall_gpt(uuid, uuid, text, real[], text, integer, bigint, text[]) to service_role;
-grant execute on function public.memory_behavior_recall_claude(uuid, uuid, text, real[], text, integer, bigint, text[]) to service_role;
+grant execute on function public.memory_behavior_recall_gpt(uuid, uuid, text, real[], text, text, text, integer, bigint, text[]) to service_role;
+grant execute on function public.memory_behavior_recall_claude(uuid, uuid, text, real[], text, text, text, integer, bigint, text[]) to service_role;
 grant execute on function public.memory_behavior_claim_embeddings_gpt(uuid, uuid, integer) to service_role;
 grant execute on function public.memory_behavior_claim_embeddings_claude(uuid, uuid, integer) to service_role;
 grant execute on function public.memory_behavior_complete_embedding_gpt(uuid, uuid, bigint, real[]) to service_role;
@@ -698,7 +754,7 @@ comment on table public.memory_ranking_profiles is
   'Immutable, versioned experimental ranking parameters. New behavior requires a new profile row.';
 comment on table public.memory_embeddings is
   'Derived vectors for exact canonical revisions. Never a second memory store.';
-comment on function public.memory_behavior_internal_recall(text, uuid, uuid, text, real[], text, integer, bigint, text[]) is
+comment on function public.memory_behavior_internal_recall(text, uuid, uuid, text, real[], text, text, text, integer, bigint, text[]) is
   'SQL-level hybrid recall over actor private plus approved Shared only; Legacy is absent from the eligible relation.';
 
 commit;

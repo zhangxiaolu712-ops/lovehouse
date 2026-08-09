@@ -356,4 +356,5 @@ MemoryService 管理同一套规则
 - AI-facing recall 工具不变，Bridge 内部固定 actor、embedding provider、ranking profile，再调用固定 actor RPC。
 - SQL 从候选集合入口排除对方 private、unapproved Shared 与 Legacy Pending；MemoryService 再做 AccessPolicy 复核。
 - 语义故障只有在 fallback audit 成功后才调用 Phase 3 keyword recall；权限/审计故障 fail closed。
+- query embedding 的 profile/model/dimensions 必须与 versioned ranking profile 的绑定完全一致；fallback 仅允许网络/超时、408/429/5xx 与无效向量/维度，配置、鉴权、权限及 identity mismatch 均 fail closed。
 - Phase 4B（Anchor、Dream Queue、Curator provider）未实现。

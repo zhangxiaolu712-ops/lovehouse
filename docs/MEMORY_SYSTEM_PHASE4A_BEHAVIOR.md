@@ -38,13 +38,13 @@ Phase 4A 只实现四项能力：
 
 ### `memory_ranking_profiles`
 
-- `ranking_v1` 保存 RRF、关键词/语义/importance/recency/decay 权重、语义阈值和候选倍数。
+- `ranking_v1` 保存 RRF、关键词/语义/importance/recency/decay 权重、语义阈值、候选倍数，并固定绑定 `embedding_profile_key + embedding_model_key + dimensions`。
 - profile 行由 trigger 禁止更新和删除；调整实验参数必须新增 `ranking_v2` 等新版本。
 - Bridge 只传服务端配置的 profile key，AI 不传权重或 embedding 参数。
 
 ### `memory_embeddings`
 
-- vector 绑定 `owner_id + memory_id + revision_id + embedding_profile_key`，不绑定“当前可变正文”。
+- vector 绑定 `owner_id + memory_id + revision_id + embedding_profile_key + embedding_model_key`，不绑定“当前可变正文”。
 - revision trigger 仅为 GPT/Claude private 当前 revision 排队；approved Shared 状态 trigger 为稳定 Shared 快照排队。
 - Legacy Pending 与 unapproved Shared 在入队阶段就被排除。
 - 旧 revision 的 vector 可以保留供审计/重建，但 Hybrid SQL 只 join 当前 revision，因此不会参与召回。
@@ -70,7 +70,8 @@ Phase 4A 只实现四项能力：
 - actor 不存在于 AI tool schema，也不能通过 body/query/header/namespace/space 选择。
 - SQL 的 `eligible MATERIALIZED` 从第一步只包含 actor private 与 approved Shared；Legacy 不是“查出后过滤”。
 - MemoryService 仍执行 AccessPolicy 最终复核。
-- provider 超时、限流、不可用、无效 vector 可降级；跨空间、安全拒绝与审计故障不能降级。
+- Hybrid RPC 同时校验 query embedding 的 profile、model、dimensions 与 ranking profile 完全一致；同维度但不同 profile/model 也拒绝比较。
+- 仅网络/超时、HTTP 408/429/5xx、无效 vector/维度可在审计后降级；HTTP 400/401/403、ranking/config、profile/model identity、跨空间、安全拒绝与审计故障全部 fail closed。
 
 ## 配置（默认全部关闭）
 
