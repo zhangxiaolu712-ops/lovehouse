@@ -112,6 +112,29 @@ export function normalizeDreamOutputs(value) {
   })
 }
 
+function assertDiaryRevisionSources(outputs, sources) {
+  const sourceByOrdinal = new Map(
+    (Array.isArray(sources) ? sources : [])
+      .map(source => [Number.parseInt(source?.ordinal, 10), source])
+  )
+  for (const output of outputs) {
+    if (output.proposal_kind !== 'revision_suggestion') continue
+    const canonicalMemoryType = memoryTypeFromInput({
+      memory_type: output.memory_type.toLowerCase(),
+      tag: output.memory_type,
+    })
+    if (canonicalMemoryType !== 'diary') continue
+    const targetSource = sourceByOrdinal.get(output.target_source_ordinal)
+    if (targetSource?.memory_type !== 'diary') {
+      throw new DreamCuratorError(
+        'Dream diary revisions require an existing diary source revision',
+        'MEMORY_DREAM_DIARY_SOURCE_INVALID'
+      )
+    }
+  }
+  return outputs
+}
+
 /**
  * OpenAI-compatible HTTP implementation of the Curator provider contract.
  * GPT, DeepSeek or another provider can be selected through configuration;
@@ -248,7 +271,10 @@ export class DreamWorker {
     try {
       // Every replaceable provider crosses the same deterministic boundary.
       // Provider-specific prompts or adapters are never the authority layer.
-      const outputs = normalizeDreamOutputs(await this.curatorProvider.curate(job))
+      const outputs = assertDiaryRevisionSources(
+        normalizeDreamOutputs(await this.curatorProvider.curate(job)),
+        job.sources
+      )
       const result = await this.repository.completeDream(job.id, outputs, {
         actor,
         requestId: crypto.randomUUID(),

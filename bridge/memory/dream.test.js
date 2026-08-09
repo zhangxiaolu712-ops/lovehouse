@@ -149,7 +149,7 @@ test('HTTP Curator receives bounded exact-source narrative and returns candidate
   assert.match(body.messages[0].content, /Never invent a first-person diary/)
 })
 
-test('Dream cannot create a new AI diary but may suggest a traceable diary revision', () => {
+test('Dream cannot create a new AI diary candidate', () => {
   for (const [proposalKind, memoryType] of [
     ['derived_memory', 'diary'],
     ['derived_memory', '日记'],
@@ -166,16 +166,76 @@ test('Dream cannot create a new AI diary but may suggest a traceable diary revis
     )
   }
 
-  const suggestion = normalizeDreamOutputs([{
-    proposal_kind: 'revision_suggestion',
-    target_source_ordinal: 1,
-    source_ordinals: [1],
-    content: 'A traceable suggestion for the existing diary author to review.',
-    memory_type: 'diary',
-  }])[0]
-  assert.equal(suggestion.proposal_kind, 'revision_suggestion')
-  assert.equal(suggestion.memory_type, 'diary')
-  assert.equal(suggestion.target_source_ordinal, 1)
+})
+
+test('Dream rejects a diary revision suggestion targeting a non-diary exact source', async () => {
+  const calls = []
+  const repository = {
+    async enqueueDream() {},
+    async claimDream() {
+      return {
+        id: 82,
+        actor: 'gpt',
+        perspective: 'gpt perspective',
+        sources: [exactSource({ memory_type: 'feeling' })],
+      }
+    },
+    async completeDream() { calls.push('complete') },
+    async failDream(id, code) { calls.push(['fail', id, code]) },
+  }
+  const curatorProvider = {
+    providerKey: 'replaceable-provider',
+    model: 'curator-model',
+    async curate() {
+      return [{
+        proposal_kind: 'revision_suggestion',
+        target_source_ordinal: 1,
+        source_ordinals: [1],
+        content: 'This feeling must not be converted into a diary by Dream.',
+        memory_type: 'diary',
+      }]
+    },
+  }
+  const worker = new DreamWorker({ repository, curatorProvider, enabled: true })
+  assert.deepEqual(await worker.runOnce('gpt'), {
+    status: 'failed', job_id: 82, code: 'MEMORY_DREAM_DIARY_SOURCE_INVALID',
+  })
+  assert.deepEqual(calls, [['fail', 82, 'MEMORY_DREAM_DIARY_SOURCE_INVALID']])
+})
+
+test('Dream allows a traceable diary revision suggestion for an existing diary source', async () => {
+  const source = exactSource({ memory_type: 'diary' })
+  const repository = {
+    async enqueueDream() {},
+    async claimDream() {
+      return { id: 83, actor: 'gpt', perspective: 'gpt perspective', sources: [source] }
+    },
+    async completeDream(id, outputs) {
+      assert.equal(id, 83)
+      assert.equal(outputs[0].proposal_kind, 'revision_suggestion')
+      assert.equal(outputs[0].memory_type, 'diary')
+      assert.equal(outputs[0].target_source_ordinal, source.ordinal)
+      return { candidate_ids: [93] }
+    },
+    async failDream() { throw new Error('failure path was not expected') },
+  }
+  const curatorProvider = {
+    providerKey: 'replaceable-provider',
+    model: 'curator-model',
+    async curate() {
+      return [{
+        proposal_kind: 'revision_suggestion',
+        target_source_ordinal: source.ordinal,
+        source_ordinals: [source.ordinal],
+        content: 'A traceable suggestion for the existing diary author to review.',
+        memory_type: 'diary',
+      }]
+    },
+  }
+  const worker = new DreamWorker({ repository, curatorProvider, enabled: true })
+  assert.deepEqual(await worker.runOnce('gpt'), {
+    status: 'completed', job_id: 83, candidate_ids: [93],
+  })
 })
 
 test('Dream Worker applies the diary boundary to every replaceable provider', async () => {
