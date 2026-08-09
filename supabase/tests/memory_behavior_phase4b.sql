@@ -356,7 +356,7 @@ begin
     other_owner, '52000000-0000-4000-8000-000000000018',
     'Other owner has no sources', 4
   );
-  if result->'job' is not null then
+  if result->>'job' is not null then
     raise exception 'Dream queue crossed owner boundaries';
   end if;
   if has_table_privilege('service_role', 'public.memory_dream_jobs', 'SELECT')
