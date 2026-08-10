@@ -201,7 +201,7 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
       let path = `livingroom?order=created_at.desc&limit=${limit}`
       if (since) path += `&created_at=gt.${encodeURIComponent(since)}`
       const rows = await livingroomRest('GET', path)
-      return JSON.stringify((rows || []).reverse())
+      return JSON.stringify((Array.isArray(rows) ? rows : []).reverse())
     }
 
     if (name === 'send_livingroom_message') {
@@ -217,7 +217,7 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
     if (name === 'get_livingroom_context') {
       const limit = parseLimit(args.limit, 20, 100)
       const rows = await livingroomRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
-      return (rows || []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
+      return (Array.isArray(rows) ? rows : []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
         || '(no messages yet)'
     }
 
