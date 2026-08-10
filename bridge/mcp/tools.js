@@ -1,4 +1,5 @@
 import { MEMORY_ACTORS } from '../memory/index.js'
+import { isLivingroomRest } from '../livingroom.js'
 
 export const MCP_TOOL_ROUTES = Object.freeze({
   read_livingroom_messages: 'livingroom.read',
@@ -191,7 +192,9 @@ function parseSince(value) {
 export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
   if (!Object.values(MEMORY_ACTORS).includes(actor)) throw new Error('A fixed MCP actor is required')
   if (!memoryService) throw new Error('MemoryService is required')
-  if (typeof livingroomRest !== 'function') throw new Error('Livingroom REST function is required')
+  if (!isLivingroomRest(livingroomRest)) {
+    throw new Error('A fenced livingroom REST function is required')
+  }
   const sender = actor === MEMORY_ACTORS.GPT ? 'GPT' : 'CC'
 
   return async function callMcpTool(name, args = {}, trustedContext = {}) {
@@ -201,7 +204,7 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
       let path = `livingroom?order=created_at.desc&limit=${limit}`
       if (since) path += `&created_at=gt.${encodeURIComponent(since)}`
       const rows = await livingroomRest('GET', path)
-      return JSON.stringify((Array.isArray(rows) ? rows : []).reverse())
+      return JSON.stringify(rows.slice().reverse())
     }
 
     if (name === 'send_livingroom_message') {
@@ -211,14 +214,13 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
         sender,
         message: args.message.trim(),
       })
-      return JSON.stringify(rows?.[0] || { ok: true })
+      return JSON.stringify(rows[0])
     }
 
     if (name === 'get_livingroom_context') {
       const limit = parseLimit(args.limit, 20, 100)
       const rows = await livingroomRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
-      return (Array.isArray(rows) ? rows : []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
-        || '(no messages yet)'
+      return rows.slice().reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
     }
 
     if (name === 'get_starter_pack') {

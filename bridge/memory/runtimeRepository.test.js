@@ -8,6 +8,7 @@ import {
   DisabledMemoryRepository,
   MemorySystemDisabledError,
 } from './runtimeRepository.js'
+import { createLivingroomRest } from '../livingroom.js'
 import { createMcpToolHandler } from '../mcp/tools.js'
 
 test('disabled runtime repository fails closed for every operation without touching canonical storage', async () => {
@@ -56,7 +57,9 @@ test('all ten memory MCP tools fail closed while Memory System is disabled', asy
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryService,
-    livingroomRest: async () => { livingroomCalls += 1; return [] },
+    livingroomRest: createLivingroomRest({
+      rest: async () => { livingroomCalls += 1; return [] },
+    }),
   })
   const calls = [
     ['get_starter_pack', {}],

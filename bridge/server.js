@@ -22,6 +22,7 @@ import {
 } from './memory/index.js'
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
+import { createLivingroomRest } from './livingroom.js'
 import { safeEqual } from './security.js'
 
 const app = express()
@@ -154,20 +155,7 @@ const supabaseRest = createSupabaseRest({
   url: SUPABASE_URL,
   serverKey: SUPABASE_SERVER_KEY,
 })
-
-function createFencedRest(rest, table, methods) {
-  const allowed = new Set(methods)
-  return function fencedRest(method, path, body) {
-    if (!allowed.has(method)) {
-      throw new Error(`${method} not allowed on ${table} fence`)
-    }
-    if (path !== table && !path.startsWith(`${table}?`)) {
-      throw new Error(`"${path.split('?')[0]}" not allowed through ${table} fence`)
-    }
-    return rest(method, path, body)
-  }
-}
-const livingroomRest = createFencedRest(supabaseRest, 'livingroom', ['GET', 'POST'])
+const livingroomRest = createLivingroomRest({ rest: supabaseRest })
 const canonicalMemoryRepository = new SupabaseMemoryRepository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
@@ -312,7 +300,7 @@ app.get('/livingroom', verifyLivingroom, async (req, res) => {
       path += `&created_at=gt.${encodeURIComponent(since.toISOString())}`
     }
     const rows = await livingroomRest('GET', path)
-    return res.json((Array.isArray(rows) ? rows : []).reverse())
+    return res.json(rows.slice().reverse())
   } catch (error) {
     return res.status(500).json({ error: error.message })
   }
@@ -328,7 +316,7 @@ app.post('/livingroom', verifyLivingroom, async (req, res) => {
       sender: req.sender,
       message: req.body.message.trim(),
     })
-    return res.json(rows?.[0] || { ok: true })
+    return res.json(rows[0])
   } catch (error) {
     return res.status(500).json({ error: error.message })
   }
@@ -338,8 +326,8 @@ app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 1), 100)
     const rows = await livingroomRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
-    const context = (Array.isArray(rows) ? rows : []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
-    return res.json({ context, count: rows?.length || 0 })
+    const context = rows.slice().reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
+    return res.json({ context, count: rows.length })
   } catch (error) {
     return res.status(500).json({ error: error.message })
   }
