@@ -20,6 +20,7 @@ import BrainPage from '../modules/brain/BrainPage'
 import StatsPage from '../modules/stats/StatsPage'
 import StatusPage from '../modules/settings/StatusPage'
 import LivingroomPage from '../modules/livingroom/LivingroomPage'
+import AutobiographyPage from '../modules/autobiography/AutobiographyPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
@@ -63,6 +64,7 @@ export const router = createHashRouter([
       { path: 'settings', element: <ThemePage /> },
       { path: 'settings/status', element: <StatusPage /> },
       { path: 'livingroom', element: <LivingroomPage /> },
+      { path: 'autobiography', element: <AutobiographyPage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },
