@@ -1,8 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+import { createLivingroomRest } from '../livingroom.js'
 import { MEMORY_ACTORS } from '../memory/index.js'
 import { createMcpChannel } from './channel.js'
+
+const emptyLivingroomFence = () => createLivingroomRest({ rest: async () => [] })
 
 function recordingMemoryService(calls) {
   return {
@@ -22,7 +25,7 @@ for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     const channel = createMcpChannel({
       actor: expectedActor,
       memoryService: recordingMemoryService(calls),
-      livingroomRest: async () => [],
+      livingroomRest: emptyLivingroomFence(),
     })
     const forgedActor = expectedActor === MEMORY_ACTORS.GPT
       ? MEMORY_ACTORS.CLAUDE
@@ -55,7 +58,7 @@ for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     const channel = createMcpChannel({
       actor: expectedActor,
       memoryService: recordingMemoryService(calls),
-      livingroomRest: async () => [],
+      livingroomRest: emptyLivingroomFence(),
     })
     await channel.callTool('recall', { query: 'rose' }, { requestId: 'trusted-id' })
     assert.deepEqual(calls[0][3], { requestId: 'trusted-id' })

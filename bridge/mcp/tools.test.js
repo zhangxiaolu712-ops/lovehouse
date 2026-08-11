@@ -6,11 +6,14 @@ import {
   MEMORY_ACTORS,
   MemoryService,
 } from '../memory/index.js'
+import { createLivingroomRest } from '../livingroom.js'
 import {
   createMcpToolDefinitions,
   createMcpToolHandler,
   MCP_TOOL_ROUTES,
 } from './tools.js'
+
+const livingroomFence = rest => createLivingroomRest({ rest })
 
 test('MCP schemas expose no author, authority, owner, revision, hash, space or Shared approval selector', () => {
   for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
@@ -61,12 +64,12 @@ test('all thirteen adapter routes reach only MemoryService or livingroom REST', 
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryService,
-    livingroomRest: async (method, path) => {
+    livingroomRest: livingroomFence(async (method, path) => {
       calls.push(method === 'POST'
         ? 'livingroom.write'
         : path.includes('limit=20') ? 'livingroom.context' : 'livingroom.read')
-      return []
-    },
+      return method === 'POST' ? [{ id: 1 }] : []
+    }),
   })
 
   await handler('read_livingroom_messages', {})
@@ -152,7 +155,11 @@ test('GPT and Claude receive House Rules through the actual starter-pack MCP ada
       repository: { async list() { return rows } },
       auditSink: { async record() {} },
     })
-    const handler = createMcpToolHandler({ actor, memoryService, livingroomRest: async () => [] })
+    const handler = createMcpToolHandler({
+      actor,
+      memoryService,
+      livingroomRest: livingroomFence(async () => []),
+    })
     const pack = JSON.parse(await handler('get_starter_pack', {}))
     assert.equal(pack.actor, actor)
     assert.equal(pack.house_rules.schema_version, 'lovehouse.house_rules.v1')
@@ -184,7 +191,7 @@ test('House Rules failure is isolated to get_starter_pack and other MCP tools re
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryService,
-    livingroomRest: async () => [],
+    livingroomRest: livingroomFence(async () => []),
   })
 
   await assert.rejects(
@@ -210,7 +217,7 @@ test('GPT compatibility tools call one MemoryService with fixed GPT actor', asyn
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryService,
-    livingroomRest: async () => [],
+    livingroomRest: livingroomFence(async () => []),
   })
 
   await handler('save_memory', { content: 'one' })
@@ -229,21 +236,86 @@ test('GPT compatibility tools call one MemoryService with fixed GPT actor', asyn
     MEMORY_ACTORS.GPT,
   ])
 })
-test('Claude livingroom sender is fixed by the adapter', async () => {
-  const restCalls = []
+test('GPT and Claude livingroom senders are fixed by their adapters', async () => {
+  for (const [actor, expectedSender, forgedSender] of [
+    [MEMORY_ACTORS.GPT, 'GPT', 'CC'],
+    [MEMORY_ACTORS.CLAUDE, 'CC', 'GPT'],
+  ]) {
+    const restCalls = []
+    const handler = createMcpToolHandler({
+      actor,
+      memoryService: {},
+      livingroomRest: livingroomFence(async (...args) => {
+        restCalls.push(args)
+        return [{ id: 1 }]
+      }),
+    })
+
+    await handler('send_livingroom_message', { message: 'hello', sender: forgedSender })
+    assert.deepEqual(restCalls[0], [
+      'POST',
+      'livingroom',
+      { sender: expectedSender, message: 'hello' },
+    ])
+  }
+})
+
+test('MCP livingroom tools reject raw REST functions that bypass the fence', () => {
+  assert.throws(
+    () => createMcpToolHandler({
+      actor: MEMORY_ACTORS.GPT,
+      memoryService: {},
+      livingroomRest: async () => [],
+    }),
+    /fenced livingroom REST/
+  )
+})
+
+test('MCP livingroom tools surface upstream errors instead of returning empty or success fallbacks', async () => {
+  const livingroomRest = livingroomFence(async () => ({
+    status: 401,
+    error: { message: 'unauthorized' },
+  }))
   const handler = createMcpToolHandler({
-    actor: MEMORY_ACTORS.CLAUDE,
+    actor: MEMORY_ACTORS.GPT,
     memoryService: {},
-    livingroomRest: async (...args) => {
-      restCalls.push(args)
-      return [{ id: 1 }]
-    },
+    livingroomRest,
   })
 
-  await handler('send_livingroom_message', { message: 'hello', sender: 'GPT' })
-  assert.deepEqual(restCalls[0], [
-    'POST',
-    'livingroom',
-    { sender: 'CC', message: 'hello' },
-  ])
+  for (const [name, args] of [
+    ['read_livingroom_messages', {}],
+    ['send_livingroom_message', { message: 'hello' }],
+    ['get_livingroom_context', {}],
+  ]) {
+    await assert.rejects(
+      handler(name, args),
+      error => error.code === 'LIVINGROOM_UPSTREAM_ERROR'
+        && error.status === 401
+        && /unauthorized/.test(error.message)
+    )
+  }
+})
+
+test('MCP livingroom tools distinguish a real empty room from an upstream failure', async () => {
+  const handler = createMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryService: {},
+    livingroomRest: livingroomFence(async () => []),
+  })
+
+  assert.equal(await handler('read_livingroom_messages', {}), '[]')
+  assert.equal(await handler('get_livingroom_context', {}), '')
+})
+
+test('MCP livingroom send rejects an empty insert response instead of returning fake ok', async () => {
+  const handler = createMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryService: {},
+    livingroomRest: livingroomFence(async () => []),
+  })
+
+  await assert.rejects(
+    handler('send_livingroom_message', { message: 'hello' }),
+    error => error.code === 'LIVINGROOM_WRITE_NOT_CONFIRMED'
+  )
 })

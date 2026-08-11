@@ -51,7 +51,7 @@ VPS (139.180.146.26)
 | 表 | 行数 | RLS | 前端模块 | Bridge/MCP | 说明 |
 |----|------|-----|----------|------------|------|
 | **brain** | 343 | on | brainService.js | 第一阶段后不再由 MCP 直连 | 现有漪记忆结构与未来 Legacy Pending 来源 |
-| **livingroom** | 29 | **off** | LivingroomPage.jsx | read/send/context MCP tools | 三人小客厅（小婷/CC/GPT） |
+| **livingroom** | 60 | **on** | LivingroomPage.jsx | read/send/context MCP tools | 三人小客厅（小婷/CC/GPT） |
 | **diary** | 60 | on | diaryService.js | get_starter_pack | 日记（部分已迁入 brain） |
 | **notes** | 96 | on | notesService.js | get_starter_pack | 小纸条留言板 |
 | **quotes** | 84 | on | quotesService.js | — | 语录墙 |
@@ -82,9 +82,10 @@ VPS (139.180.146.26)
 
 ### 安全提醒
 
-- 2026-08-08 实测生产库仍存在阻断项：`livingroom` 未启用 RLS；Dreaming 四表使用 `allow_all`；`brain` 虽启用 RLS，但主人没有可用策略。
-- 修复分支已准备 `20260809000704_secure_bridge_and_memory_tables.sql`：六张表只允许主人账号直接访问，Bridge 使用只存在于 VPS 的服务端密钥访问。
-- **迁移尚未应用到生产库**。必须先部署并验证 Bridge 服务端密钥，再执行迁移，避免小客厅和记忆工具被一起锁住。
+- 2026-08-11 本工单只读复核：`livingroom` 已启用 RLS，保留 `lovehouse_owner_only` authenticated policy；`anon` 没有该表权限，现有 60 条消息仍在。
+- GPT/Claude 不通过 anon 直连该表。认证后的 MCP 工具必须进入 Bridge 的 branded `createLivingroomRest` fence，再使用仅存在于服务端环境的 Supabase secret/service-role 凭证。
+- fence 只允许 `livingroom` GET/POST，并校验上游必须返回行数组；401/错误对象、无确认写入会显式失败，不能退化成空房间或假成功。
+- 本工单未重审或修改其他表的 RLS/policy；其状态以各自 Gate 记录为准。
 - `toy_commands` 不在本次修复范围内，迁移明确不修改它。
 
 ### 统一 Memory System V2（仅 Draft，未进入上述生产表）
@@ -213,6 +214,8 @@ brain 是整个记忆系统的核心，字段最多：
 | GET/POST | /oauth/authorize | — | 授权页面/授权码 |
 | POST | /oauth/token | — | Token 签发 |
 | GET | /health | — | 健康检查 |
+
+小客厅的 Owner JWT、GPT API Key 与 Claude OAuth 均先在 Bridge 完成认证。认证后的三项小客厅能力通过服务端专用 Supabase key 访问数据库，并经过 `createLivingroomRest` 限制为 `livingroom` 的读取和新增；该通道不能选择或访问其他 P0 表。服务端 key 不进入前端构建。
 
 ### MCP 工具（GPT + Claude 共享 13 个）
 
