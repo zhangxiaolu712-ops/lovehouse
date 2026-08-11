@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy to GitHub Pages + Cloudflare
 
 on:
   push:
@@ -40,3 +40,12 @@ jobs:
 
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Deploy to Cloudflare Workers
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
