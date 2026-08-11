@@ -32,7 +32,9 @@ PR #38 已修复 Worker entry-point/config，但其合并仍触发旧 workflow �
 - `npm run build`：通过（仅保留既有 chunk-size warning）。
 - `wrangler@4.120.1 deploy --config wrangler.json --dry-run`：通过；读取 9 个静态资产并在上传前退出，未部署。
 - 事件矩阵断言：通过；PR 仅 build、Pages 仅 push、Cloudflare 仅 `workflow_dispatch` + `main`，并继续尊重关闭开关。
-- Draft PR 的实际 build-only Actions 结果待创建 PR 后记录。
+- Draft PR #40 的 Actions run `31486599959`：`build` 成功，`deploy-pages` 与 `deploy-cloudflare` 均按门禁跳过。
+- Cloudflare Git 集成仅生成 commit/branch preview；preview 根路径返回 200，`/api/health` 能经 Worker 入口到达 Bridge 并按未认证请求返回 403。
+- Cloudflare 面板核对：生产 active version 仍为 `f05b6bf4`、100% 流量，未被本分支预览替换。
 - `workflow_dispatch` 只能在本 workflow 进入默认分支后做真实 Actions 验证；当前分支不会部署生产。
 
 ## 风险与回滚
@@ -43,6 +45,6 @@ PR #38 已修复 Worker entry-point/config，但其合并仍触发旧 workflow �
 
 ## 下一步
 
-- 提交窄 Draft PR，先审阅 workflow diff，不部署。
+- 审阅窄 Draft PR #40 的 workflow diff，不部署。
 - 合并后先验证 `main` push 只执行 build/Pages；再单独确认是否从 `main` 手动发布 Cloudflare。
 - 工单 01 验收前不开始工单 02。
