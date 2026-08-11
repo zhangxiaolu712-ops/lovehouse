@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { useTheme } from '../../core/theme'
 import LineIcon from '../../shared/LineIcon'
 
@@ -9,6 +10,7 @@ export default function ThemePage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <div className="page-title page-title-with-icon"><LineIcon name="theme" />主题系统</div>
         <span className="tag"><LineIcon name="home" size={14} />空间中心</span>
       </div>

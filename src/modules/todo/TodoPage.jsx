@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
+import LineIcon from '../../shared/LineIcon'
 import { getTodos, addTodo, toggleTodo, deleteTodo } from './todoService'
 
 export default function TodoPage() {
@@ -39,6 +41,7 @@ export default function TodoPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title">待办事项</h1>
         <span className="tag">{undone.length} 项待完成</span>
       </div>

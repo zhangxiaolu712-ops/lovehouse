@@ -661,6 +661,17 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.page-back {
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 4px;
+  margin-right: 8px;
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .page-title {
   font-size: 20px;
   font-weight: 600;

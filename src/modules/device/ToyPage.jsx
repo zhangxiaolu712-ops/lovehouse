@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
+import { Link } from 'react-router'
+import LineIcon from '../../shared/LineIcon'
 import { supabase } from '../../core/supabase'
 
 const PRESETS = [
@@ -80,6 +82,7 @@ export default function ToyPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title">🧸 Toy</h1>
         <span className="tag">
           {lastSent ? `✅ ${lastSent.toLocaleTimeString('zh-CN')}` : '⚪ 待命'}
