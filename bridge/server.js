@@ -4,6 +4,7 @@ import express from 'express'
 import { installClaudeOAuth } from './oauth.js'
 import {
   sendMessage as claudeSend,
+  abortActive,
   resetSession,
   getStats as getClaudeStats,
 } from './claudeProcess.js'
@@ -274,7 +275,7 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   res.setHeader('Connection', 'keep-alive')
 
   let closed = false
-  res.on('close', () => { closed = true })
+  res.on('close', () => { closed = true; abortActive() })
 
   claudeSend(message, systemPrompt, {
     onText(delta) {
