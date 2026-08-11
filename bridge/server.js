@@ -4,9 +4,10 @@ import express from 'express'
 import { installClaudeOAuth } from './oauth.js'
 import {
   sendMessage as claudeSend,
-  abortActive,
+  abortWindow,
   resetSession,
   getStats as getClaudeStats,
+  isValidWindowId,
 } from './claudeProcess.js'
 import {
   createSupabaseRest,
@@ -255,7 +256,11 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
     return res.status(400).json({ error: 'message required' })
   }
-  if (req.body.newSession) resetSession()
+  const windowId = req.body.window_id
+  if (!isValidWindowId(windowId)) {
+    return res.status(400).json({ error: 'valid window_id required' })
+  }
+  if (req.body.newSession) resetSession(windowId)
 
   const message = req.body.message.trim()
   const systemPrompt = req.body.system || SYSTEM_PROMPT
@@ -265,17 +270,27 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   res.setHeader('Connection', 'keep-alive')
 
   let closed = false
-  res.on('close', () => { closed = true; abortActive() })
+  res.on('close', () => { closed = true; abortWindow(windowId) })
 
-  claudeSend(message, systemPrompt, {
+  claudeSend(windowId, message, systemPrompt, {
+    onSession(session) {
+      if (!closed) res.write(`data: ${JSON.stringify({ session })}\n\n`)
+    },
     onText(delta) {
       if (!closed) res.write(`data: ${JSON.stringify({ text: delta })}\n\n`)
     },
     onThinking(delta) {
       if (!closed) res.write(`data: ${JSON.stringify({ thinking: delta })}\n\n`)
     },
-    onDone() {
-      if (!closed) { res.write('data: [DONE]\n\n'); res.end() }
+    onDone(result) {
+      if (!closed) {
+        res.write(`data: ${JSON.stringify({
+          session_id: result.session_id,
+          usage: result.usage,
+        })}\n\n`)
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }
     },
     onError(err) {
       if (!closed) {
@@ -284,12 +299,16 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
         res.end()
       }
     },
-  })
+  }, { knownSessionId: req.body.known_session_id })
 })
 
-app.post('/reset', verifyOwnerBearer, (_req, res) => {
-  resetSession()
-  res.json({ ok: true })
+app.post('/reset', verifyOwnerBearer, (req, res) => {
+  const windowId = req.body.window_id
+  if (!isValidWindowId(windowId)) {
+    return res.status(400).json({ error: 'valid window_id required' })
+  }
+  const reset = resetSession(windowId)
+  return res.json({ ok: true, window_id: windowId, reset })
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {
