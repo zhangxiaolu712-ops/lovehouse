@@ -36,6 +36,7 @@ function authorizationFailurePage(message) {
 export function installClaudeOAuth(app, {
   oauthBase,
   resource,
+  resourceMetadataUrl,
   supabaseUrl,
   supabaseAnonKey,
   ownerUserId,
@@ -43,6 +44,19 @@ export function installClaudeOAuth(app, {
   checkRate,
   tokenTtlSeconds = 30 * 24 * 60 * 60,
 }) {
+  if (!tokenSecret || tokenSecret.length < 32) {
+    throw new Error('OAUTH_TOKEN_SECRET must contain at least 32 characters')
+  }
+  let metadataUrl
+  try {
+    metadataUrl = new URL(resourceMetadataUrl)
+  } catch {
+    throw new Error('MCP_RESOURCE_METADATA_URL must be a valid HTTPS URL')
+  }
+  if (metadataUrl.protocol !== 'https:' || metadataUrl.hash || metadataUrl.username || metadataUrl.password) {
+    throw new Error('MCP_RESOURCE_METADATA_URL must be a valid HTTPS URL')
+  }
+  const protectedResourceMetadataUrl = metadataUrl.toString()
   const clients = new Map()
   const codes = new Map()
 
@@ -260,15 +274,14 @@ export function installClaudeOAuth(app, {
   })
 
   return function verifyOAuthToken(req, res, next) {
-    const metadata = `${oauthBase}/.well-known/oauth-protected-resource/mcp/claude`
     const auth = req.headers.authorization
     if (!auth?.startsWith('Bearer ')) {
-      res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${metadata}"`)
+      res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${protectedResourceMetadataUrl}", scope="mcp:tools"`)
       return res.status(401).json({ error: 'unauthorized' })
     }
     const payload = verifyAccessToken(auth.slice(7), tokenSecret, resource)
     if (!payload || payload.sub !== ownerUserId) {
-      res.setHeader('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${metadata}"`)
+      res.setHeader('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${protectedResourceMetadataUrl}", scope="mcp:tools"`)
       return res.status(401).json({ error: 'invalid_token' })
     }
     if (!checkRate(`claude-mcp:${payload.client_id}`)) {
