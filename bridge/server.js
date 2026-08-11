@@ -18,6 +18,7 @@ import {
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { safeEqual } from './security.js'
+import { addMessage, buildPrompt, clear as clearChatContext } from './chatContext.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -260,20 +261,32 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
     return res.status(400).json({ error: 'message required' })
   }
+  if (req.body.newSession) clearChatContext()
+
+  const message = req.body.message.trim()
+  const prompt = buildPrompt(message)
+  addMessage('user', message)
+
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
 
+  let fullResponse = ''
   const claude = spawn('/usr/bin/claude', [
-    '-p', req.body.message,
+    '-p', prompt,
     '--output-format', 'text',
     '--system-prompt', req.body.system || SYSTEM_PROMPT,
   ])
   claude.stdout.on('data', chunk => {
-    res.write(`data: ${JSON.stringify({ text: chunk.toString() })}\n\n`)
+    const text = chunk.toString()
+    fullResponse += text
+    res.write(`data: ${JSON.stringify({ text })}\n\n`)
   })
   claude.stderr.on('data', chunk => console.error('[claude stderr]', chunk.toString()))
   claude.on('close', code => {
+    if (code === 0 && fullResponse.trim()) {
+      addMessage('assistant', fullResponse.trim())
+    }
     if (code !== 0) res.write(`data: ${JSON.stringify({ error: `claude exited ${code}` })}\n\n`)
     res.write('data: [DONE]\n\n')
     res.end()
@@ -281,7 +294,10 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   res.on('close', () => claude.kill())
 })
 
-app.post('/reset', verifyOwnerBearer, (_req, res) => res.json({ ok: true }))
+app.post('/reset', verifyOwnerBearer, (_req, res) => {
+  clearChatContext()
+  res.json({ ok: true })
+})
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {
   try {
