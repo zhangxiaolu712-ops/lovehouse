@@ -1,6 +1,14 @@
 import crypto from 'crypto'
 import { spawn } from 'child_process'
 
+import {
+  assertClaudeToolPolicyMatchesBridge,
+  buildClaudeChildEnv,
+  buildClaudePolicyArgs,
+  inspectClaudeMcpInit,
+  resolveClaudeMcpUrl,
+} from './claudePolicy.js'
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const SESSION_MISSING_PATTERN = /(?:no conversation found|session(?: id)?.*(?:not found|does not exist|missing|invalid)|failed to (?:load|resume).*(?:session|conversation)|unable to resume)/i
 
@@ -38,6 +46,14 @@ function parseStreamEvent(event, state) {
   if (!event || typeof event !== 'object') return
   if (typeof event.session_id === 'string') state.reportedSessionId = event.session_id
 
+  const mcpInit = inspectClaudeMcpInit(event)
+  if (mcpInit) {
+    state.mcpInitialized = true
+    state.mcpReady = mcpInit.ready
+    if (!mcpInit.ready) state.mcpFailure = mcpInit.error
+    return
+  }
+
   if (event.type === 'assistant' && event.message?.usage) {
     state.assistantUsage = event.message.usage
   }
@@ -50,10 +66,10 @@ function parseStreamEvent(event, state) {
   const delta = event.event.delta
   if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
     state.fullText += delta.text
-    state.callbacks.onText?.(delta.text)
+    if (state.mcpReady) state.callbacks.onText?.(delta.text)
   }
   if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-    state.callbacks.onThinking?.(delta.thinking)
+    if (state.mcpReady) state.callbacks.onThinking?.(delta.thinking)
   }
 }
 
@@ -82,7 +98,12 @@ export function createClaudeSessionManager({
   createSessionId = () => crypto.randomUUID(),
   claudePath = '/usr/bin/claude',
   logger = console,
+  sourceEnv = process.env,
+  mcpUrl = resolveClaudeMcpUrl(sourceEnv),
 } = {}) {
+  assertClaudeToolPolicyMatchesBridge()
+  const childEnv = buildClaudeChildEnv(sourceEnv)
+  const policyArgs = buildClaudePolicyArgs({ mcpUrl })
   const windows = new Map()
 
   function getOrCreateWindow(windowId) {
@@ -108,6 +129,7 @@ export function createClaudeSessionManager({
       '--include-partial-messages',
       '--verbose',
       '--system-prompt', systemPrompt,
+      ...policyArgs,
     ]
     if (resume) args.push('--resume', windowState.sessionId)
     else args.push('--session-id', windowState.sessionId)
@@ -119,7 +141,7 @@ export function createClaudeSessionManager({
       ...(fallback ? { fallback_reason: fallback.reason } : {}),
     })
 
-    const proc = spawnProcess(claudePath, args)
+    const proc = spawnProcess(claudePath, args, { env: childEnv })
     windowState.active = proc
     windowState.lastActive = Date.now()
     const attempt = {
@@ -131,10 +153,19 @@ export function createClaudeSessionManager({
       reportedSessionId: null,
       assistantUsage: null,
       parseErrors: 0,
+      mcpInitialized: false,
+      mcpReady: false,
+      mcpFailure: null,
       finished: false,
     }
 
-    proc.stdout.on('data', chunk => consumeJsonLines(attempt, chunk.toString()))
+    proc.stdout.on('data', chunk => {
+      consumeJsonLines(attempt, chunk.toString())
+      if (attempt.mcpFailure && !attempt.finished) {
+        finish(null, new Error(attempt.mcpFailure))
+        proc.kill()
+      }
+    })
     proc.stderr.on('data', chunk => { attempt.stderr += chunk.toString() })
 
     const finish = (code, spawnError = null) => {
@@ -170,6 +201,10 @@ export function createClaudeSessionManager({
           || attempt.stderr.trim()
           || `claude exited ${code}`
         callbacks.onError?.(detail)
+        return
+      }
+      if (!attempt.mcpInitialized || !attempt.mcpReady) {
+        callbacks.onError?.('LoveHouse MCP initialization was not confirmed')
         return
       }
       if (attempt.parseErrors && !attempt.result) {
