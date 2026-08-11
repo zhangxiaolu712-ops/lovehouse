@@ -55,6 +55,7 @@ export default function MemoryPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title page-title-with-icon"><LineIcon name="memory" />碎碎念 · 记忆碎片</h1>
         <Link to="/memory/search" className="tag" style={{ textDecoration: 'none' }}>🔍 搜索</Link>
       </div>

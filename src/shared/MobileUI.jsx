@@ -24,9 +24,10 @@ export function MobileIconButton({ to, icon = 'back', label, onClick }) {
   )
 }
 
-export function MobilePageHeader({ title, icon, subtitle, backTo = null, action }) {
+export function MobilePageHeader({ title, icon, subtitle, backTo = '/', action }) {
   return (
     <header className="mobile-page-header">
+      {backTo && <MobileIconButton to={backTo} icon="back" label="返回首页" />}
       <div className="mobile-page-heading">
         <h1 className="mobile-page-title">
           {icon && <LineIcon name={icon} size={24} />}
@@ -36,7 +37,6 @@ export function MobilePageHeader({ title, icon, subtitle, backTo = null, action 
       </div>
       <div className="mobile-page-actions">
         {action}
-        {backTo && <MobileIconButton to={backTo} icon="back" label="返回首页" />}
       </div>
     </header>
   )

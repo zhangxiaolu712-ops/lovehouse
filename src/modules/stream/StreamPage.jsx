@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
 import { getStreams, addStream, deleteStream } from './streamService'
 
@@ -43,6 +44,7 @@ export default function StreamPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title page-title-with-icon"><LineIcon name="lock" />私密记录</h1>
         <span className="tag">点开才能看清</span>
       </div>

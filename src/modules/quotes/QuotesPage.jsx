@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
+import LineIcon from '../../shared/LineIcon'
 import { getQuotes, addQuote, deleteQuote } from './quotesService'
 
 export default function QuotesPage() {
@@ -32,6 +34,7 @@ export default function QuotesPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title">语录墙</h1>
         <span className="tag">{quotes.length} 条</span>
       </div>

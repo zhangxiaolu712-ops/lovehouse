@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
-import { useSearchParams } from 'react-router'
 import { supabase } from '../../core/supabase'
 
 // 各数据源的检索配置：表名、内容字段、展示信息
@@ -79,6 +79,7 @@ export default function SearchPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title page-title-with-icon"><LineIcon name="search" />搜索浏览器</h1>
         <span className="tag">全屋检索</span>
       </div>

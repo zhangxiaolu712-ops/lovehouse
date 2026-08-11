@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
+import LineIcon from '../../shared/LineIcon'
 import {
   getBrainEntries, getBrainStats, addBrainEntry, deleteBrainEntry,
   awakenEntry, fadeEntry, getRandomEntry, searchBrain,
@@ -262,6 +263,9 @@ export default function BrainPage() {
 
   return (
     <div style={{ paddingBottom: 20 }}>
+      <div style={{ marginBottom: 8 }}>
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
+      </div>
       {/* Header: poem + stats */}
       <div style={styles.header}>
         <p style={styles.poem}>{poem}</p>

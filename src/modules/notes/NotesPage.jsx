@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
 import { getNotes, addNote, deleteNote } from './notesService'
 
@@ -43,6 +44,7 @@ export default function NotesPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title page-title-with-icon"><LineIcon name="mail" />小纸条留言板</h1>
         <span className="tag">{notes.length} 张</span>
       </div>

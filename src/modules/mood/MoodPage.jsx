@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
+import LineIcon from '../../shared/LineIcon'
 import { getMoodLogs, addMoodLog, deleteMoodLog } from './moodService'
 
 const MOOD_OPTIONS = [
@@ -43,6 +45,7 @@ export default function MoodPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title">心情日志</h1>
       </div>
 

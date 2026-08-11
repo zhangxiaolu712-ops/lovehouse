@@ -279,7 +279,7 @@ app.get('/livingroom', verifyLivingroom, async (req, res) => {
       path += `&created_at=gt.${encodeURIComponent(since.toISOString())}`
     }
     const rows = await supabaseRest('GET', path)
-    return res.json((rows || []).reverse())
+    return res.json((Array.isArray(rows) ? rows : []).reverse())
   } catch (error) {
     return res.status(500).json({ error: error.message })
   }
@@ -305,7 +305,7 @@ app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 1), 100)
     const rows = await supabaseRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
-    const context = (rows || []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
+    const context = (Array.isArray(rows) ? rows : []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
     return res.json({ context, count: rows?.length || 0 })
   } catch (error) {
     return res.status(500).json({ error: error.message })

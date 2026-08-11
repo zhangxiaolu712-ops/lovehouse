@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
+import LineIcon from '../../shared/LineIcon'
 import { getDiaries, addDiary, deleteDiary } from './diaryService'
 
 const MOODS = ['😊 开心', '😌 平静', '😢 难过', '😤 生气', '🥱 疲惫', '🥰 甜蜜', '🤔 思考']
@@ -39,6 +41,7 @@ export default function DiaryPage() {
   return (
     <div>
       <div className="page-header">
+        <Link to="/" className="page-back"><LineIcon name="back" size={20} /></Link>
         <h1 className="page-title">日记本</h1>
         <button className="btn" onClick={() => setShowForm(!showForm)}>{showForm ? '收起' : '写日记'}</button>
       </div>
