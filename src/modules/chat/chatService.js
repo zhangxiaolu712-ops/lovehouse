@@ -1,9 +1,16 @@
+import { supabase } from '../../core/supabase'
+
 const CONFIG_KEY = 'lovehouse_chat_config'
 const HISTORY_KEY = 'lovehouse_chat_history'
 const SESSION_KEY = 'lovehouse_chat_session'
 
 const DEFAULT_BRIDGE = '/api'
 const DEFAULT_SYSTEM = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
+
+async function getAuthToken() {
+  const { data } = await supabase.auth.getSession()
+  return data?.session?.access_token || ''
+}
 
 function readJson(key, fallback = {}) {
   try { return JSON.parse(localStorage.getItem(key)) || fallback }
@@ -30,7 +37,12 @@ export function clearChat() {
   localStorage.setItem('lovehouse_chat_new', '1')
   const config = getChatConfig()
   if (config.mode === 'bridge' && config.bridgeUrl) {
-    fetch(`${config.bridgeUrl}/reset`, { method: 'POST' }).catch(() => {})
+    getAuthToken().then(token =>
+      fetch(`${config.bridgeUrl}/reset`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+    ).catch(() => {})
   }
 }
 
@@ -50,7 +62,7 @@ function buildContent(msg) {
 }
 
 async function streamBridge(messages, config, cb) {
-  const { onText, onDone, onError } = cb
+  const { onThinking, onText, onDone, onError } = cb
   const lastUser = [...messages].reverse().find(m => m.role === 'user')
   if (!lastUser) { onError?.('没有消息'); return }
 
@@ -58,9 +70,13 @@ async function streamBridge(messages, config, cb) {
   if (isNew) localStorage.removeItem('lovehouse_chat_new')
 
   try {
+    const token = await getAuthToken()
+    const headers = { 'Content-Type': 'application/json' }
+    if (token) headers.Authorization = `Bearer ${token}`
+
     const res = await fetch(`${config.bridgeUrl}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         message: lastUser.content || '',
         system: config.system || DEFAULT_SYSTEM,
@@ -74,7 +90,7 @@ async function streamBridge(messages, config, cb) {
 
     const reader = res.body.getReader()
     const dec = new TextDecoder()
-    let buf = '', text = ''
+    let buf = '', text = '', thinking = ''
 
     for (;;) {
       const { done, value } = await reader.read()
@@ -93,11 +109,15 @@ async function streamBridge(messages, config, cb) {
             text += evt.text
             onText?.(text)
           }
+          if (evt.thinking) {
+            thinking += evt.thinking
+            onThinking?.(thinking)
+          }
         } catch {}
       }
     }
 
-    onDone?.({ content: text })
+    onDone?.({ content: text, thinking: thinking || undefined })
   } catch (err) {
     onError?.(err.message)
   }

@@ -1,8 +1,13 @@
-import { spawn } from 'child_process'
 import cors from 'cors'
 import express from 'express'
 
 import { installClaudeOAuth } from './oauth.js'
+import {
+  sendMessage as claudeSend,
+  abortActive,
+  resetSession,
+  getStats as getClaudeStats,
+} from './claudeProcess.js'
 import {
   createSupabaseRest,
   createRuntimeMemoryRepository,
@@ -149,6 +154,20 @@ const supabaseRest = createSupabaseRest({
   url: SUPABASE_URL,
   serverKey: SUPABASE_SERVER_KEY,
 })
+
+function createFencedRest(rest, table, methods) {
+  const allowed = new Set(methods)
+  return function fencedRest(method, path, body) {
+    if (!allowed.has(method)) {
+      throw new Error(`${method} not allowed on ${table} fence`)
+    }
+    if (path !== table && !path.startsWith(`${table}?`)) {
+      throw new Error(`"${path.split('?')[0]}" not allowed through ${table} fence`)
+    }
+    return rest(method, path, body)
+  }
+}
+const livingroomRest = createFencedRest(supabaseRest, 'livingroom', ['GET', 'POST'])
 const canonicalMemoryRepository = new SupabaseMemoryRepository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
@@ -246,28 +265,42 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
     return res.status(400).json({ error: 'message required' })
   }
+  if (req.body.newSession) resetSession()
+
+  const message = req.body.message.trim()
+  const systemPrompt = req.body.system || SYSTEM_PROMPT
+
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
 
-  const claude = spawn('/usr/bin/claude', [
-    '-p', req.body.message,
-    '--output-format', 'text',
-    '--system-prompt', req.body.system || SYSTEM_PROMPT,
-  ])
-  claude.stdout.on('data', chunk => {
-    res.write(`data: ${JSON.stringify({ text: chunk.toString() })}\n\n`)
+  let closed = false
+  res.on('close', () => { closed = true; abortActive() })
+
+  claudeSend(message, systemPrompt, {
+    onText(delta) {
+      if (!closed) res.write(`data: ${JSON.stringify({ text: delta })}\n\n`)
+    },
+    onThinking(delta) {
+      if (!closed) res.write(`data: ${JSON.stringify({ thinking: delta })}\n\n`)
+    },
+    onDone() {
+      if (!closed) { res.write('data: [DONE]\n\n'); res.end() }
+    },
+    onError(err) {
+      if (!closed) {
+        res.write(`data: ${JSON.stringify({ error: err })}\n\n`)
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }
+    },
   })
-  claude.stderr.on('data', chunk => console.error('[claude stderr]', chunk.toString()))
-  claude.on('close', code => {
-    if (code !== 0) res.write(`data: ${JSON.stringify({ error: `claude exited ${code}` })}\n\n`)
-    res.write('data: [DONE]\n\n')
-    res.end()
-  })
-  res.on('close', () => claude.kill())
 })
 
-app.post('/reset', verifyOwnerBearer, (_req, res) => res.json({ ok: true }))
+app.post('/reset', verifyOwnerBearer, (_req, res) => {
+  resetSession()
+  res.json({ ok: true })
+})
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {
   try {
@@ -278,7 +311,7 @@ app.get('/livingroom', verifyLivingroom, async (req, res) => {
       if (Number.isNaN(since.valueOf())) return res.status(400).json({ error: 'invalid since timestamp' })
       path += `&created_at=gt.${encodeURIComponent(since.toISOString())}`
     }
-    const rows = await supabaseRest('GET', path)
+    const rows = await livingroomRest('GET', path)
     return res.json((Array.isArray(rows) ? rows : []).reverse())
   } catch (error) {
     return res.status(500).json({ error: error.message })
@@ -291,7 +324,7 @@ app.post('/livingroom', verifyLivingroom, async (req, res) => {
       return res.status(400).json({ error: 'message required' })
     }
     if (req.body.message.length > 10_000) return res.status(400).json({ error: 'message is too long' })
-    const rows = await supabaseRest('POST', 'livingroom', {
+    const rows = await livingroomRest('POST', 'livingroom', {
       sender: req.sender,
       message: req.body.message.trim(),
     })
@@ -304,7 +337,7 @@ app.post('/livingroom', verifyLivingroom, async (req, res) => {
 app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 1), 100)
-    const rows = await supabaseRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
+    const rows = await livingroomRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
     const context = (Array.isArray(rows) ? rows : []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
     return res.json({ context, count: rows?.length || 0 })
   } catch (error) {
@@ -315,12 +348,12 @@ app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
 const gptChannel = createMcpChannel({
   actor: MEMORY_ACTORS.GPT,
   memoryService,
-  livingroomRest: supabaseRest,
+  livingroomRest,
 })
 const claudeChannel = createMcpChannel({
   actor: MEMORY_ACTORS.CLAUDE,
   memoryService,
-  livingroomRest: supabaseRest,
+  livingroomRest,
 })
 
 function verifyMcpKey(req) {
@@ -350,6 +383,7 @@ installMcpTransports(app, {
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
+    claude_process: getClaudeStats(),
     memory_system: 'foundation',
     memory_system_enabled: MEMORY_SYSTEM_ENABLED,
     memory_semantic_enabled: MEMORY_SEMANTIC_ENABLED,
