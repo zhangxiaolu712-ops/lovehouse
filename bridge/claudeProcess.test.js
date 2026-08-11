@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
 import { createClaudeSessionManager, isValidWindowId } from './claudeProcess.js'
+import { CLAUDE_ALLOWED_TOOLS } from './claudePolicy.js'
 
 const WINDOW_A = '11111111-1111-4111-8111-111111111111'
 const WINDOW_B = '22222222-2222-4222-8222-222222222222'
@@ -27,7 +28,28 @@ function emitJson(proc, event) {
   proc.stdout.emit('data', Buffer.from(`${JSON.stringify(event)}\n`))
 }
 
-function complete(proc, { sessionId, text = 'reply', usage = { input_tokens: 12 }, cost = 0.001 } = {}) {
+function emitMcpInit(proc, {
+  sessionId,
+  status = 'connected',
+  tools = CLAUDE_ALLOWED_TOOLS,
+} = {}) {
+  emitJson(proc, {
+    type: 'system',
+    subtype: 'init',
+    session_id: sessionId,
+    mcp_servers: [{ name: 'lovehouse', status }],
+    tools,
+  })
+}
+
+function complete(proc, {
+  sessionId,
+  text = 'reply',
+  usage = { input_tokens: 12 },
+  cost = 0.001,
+  initialize = true,
+} = {}) {
+  if (initialize) emitMcpInit(proc, { sessionId })
   emitJson(proc, {
     type: 'stream_event',
     session_id: sessionId,
@@ -46,18 +68,20 @@ function complete(proc, { sessionId, text = 'reply', usage = { input_tokens: 12 
   proc.emit('close', 0)
 }
 
-function harness(sessionIds = [SESSION_A, SESSION_B, SESSION_C]) {
+function harness(sessionIds = [SESSION_A, SESSION_B, SESSION_C], sourceEnv = {}) {
   const spawned = []
   const logs = []
   const ids = [...sessionIds]
   const manager = createClaudeSessionManager({
     createSessionId: () => ids.shift(),
-    spawnProcess(path, args) {
+    spawnProcess(path, args, options) {
       const proc = new FakeProcess()
-      spawned.push({ path, args, proc })
+      spawned.push({ path, args, options, proc })
       return proc
     },
     logger: { error(message) { logs.push(message) } },
+    sourceEnv,
+    mcpUrl: 'https://bridge.example.test/api/mcp/claude',
   })
   return { manager, spawned, logs }
 }
@@ -98,6 +122,138 @@ test('first turn binds --session-id and later turns use only --resume', () => {
   assert.equal(done[1].session_id, SESSION_A)
   assert.equal(done[1].usage.input_tokens, 12)
   assert.equal(done[1].usage.total_cost_usd, 0.001)
+})
+
+test('launch policy disables built-ins, isolates settings and passes only a narrow environment', () => {
+  const { manager, spawned } = harness([SESSION_A], {
+    HOME: '/root',
+    PATH: '/usr/bin',
+    CLAUDE_CODE_OAUTH_TOKEN: 'claude-auth',
+    ANTHROPIC_API_KEY: 'must-not-leak',
+    SUPABASE_SECRET_KEY: 'must-not-leak',
+    LIVINGROOM_KEY: 'must-not-leak',
+    OAUTH_TOKEN_SECRET: 'must-not-leak',
+    PM2_HOME: '/root/.pm2',
+  })
+  manager.sendMessage(WINDOW_A, 'hello', 'system', {})
+
+  const { args, options } = spawned[0]
+  assert.equal(args.at(args.indexOf('--tools') + 1), '')
+  assert.equal(args.at(args.indexOf('--permission-mode') + 1), 'dontAsk')
+  assert.equal(args.at(args.indexOf('--setting-sources') + 1), '')
+  assert.equal(args.at(args.indexOf('--settings') + 1), '{}')
+  assert.equal(args.includes('--strict-mcp-config'), true)
+  assert.equal(args.includes('--disable-slash-commands'), true)
+  assert.equal(args.includes('--dangerously-skip-permissions'), false)
+  assert.deepEqual(
+    args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--permission-mode')),
+    CLAUDE_ALLOWED_TOOLS
+  )
+  assert.deepEqual(options.env, {
+    HOME: '/root',
+    PATH: '/usr/bin',
+  })
+  const mcpConfig = JSON.parse(args.at(args.indexOf('--mcp-config') + 1))
+  assert.deepEqual(mcpConfig, {
+    mcpServers: {
+      lovehouse: { type: 'http', url: 'https://bridge.example.test/api/mcp/claude' },
+    },
+  })
+})
+
+test('MCP load failure is explicit and no model text escapes as a false success', () => {
+  const { manager, spawned } = harness()
+  const text = []
+  const errors = []
+  const done = []
+  manager.sendMessage(WINDOW_A, 'hello', 'system', {
+    onText: delta => text.push(delta),
+    onError: error => errors.push(error),
+    onDone: result => done.push(result),
+  })
+
+  emitMcpInit(spawned[0].proc, { sessionId: SESSION_A, status: 'failed', tools: [] })
+  emitJson(spawned[0].proc, {
+    type: 'stream_event',
+    session_id: SESSION_A,
+    event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'fake answer' } },
+  })
+
+  assert.deepEqual(text, [])
+  assert.deepEqual(done, [])
+  assert.deepEqual(errors, ['LoveHouse MCP failed to initialize (failed)'])
+  assert.equal(spawned[0].proc.killed, true)
+  assert.deepEqual(manager.getStats(), { windows: 1, busy: 0, turns: 0, fallbacks: 0 })
+})
+
+test('missing or changed MCP tools fail closed', () => {
+  const missing = harness()
+  const missingErrors = []
+  missing.manager.sendMessage(WINDOW_A, 'hello', 'system', { onError: error => missingErrors.push(error) })
+  emitMcpInit(missing.spawned[0].proc, {
+    sessionId: SESSION_A,
+    tools: CLAUDE_ALLOWED_TOOLS.slice(1),
+  })
+  assert.deepEqual(missingErrors, ['LoveHouse MCP tool allowlist did not match Claude initialization'])
+
+  const unreported = harness()
+  const unreportedErrors = []
+  unreported.manager.sendMessage(WINDOW_A, 'hello', 'system', { onError: error => unreportedErrors.push(error) })
+  emitJson(unreported.spawned[0].proc, {
+    type: 'system', subtype: 'init', session_id: SESSION_A, mcp_servers: [], tools: [],
+  })
+  assert.deepEqual(unreportedErrors, ['LoveHouse MCP was not reported by Claude'])
+})
+
+test('a successful exit without MCP initialization is still an explicit failure', () => {
+  const { manager, spawned } = harness()
+  const errors = []
+  const done = []
+  manager.sendMessage(WINDOW_A, 'hello', 'system', {
+    onError: error => errors.push(error),
+    onDone: result => done.push(result),
+  })
+  complete(spawned[0].proc, { sessionId: SESSION_A, initialize: false })
+
+  assert.deepEqual(done, [])
+  assert.deepEqual(errors, ['LoveHouse MCP initialization was not confirmed'])
+})
+
+test('tool lifecycle can continue to an answer and resumed turns retain the same policy', () => {
+  const { manager, spawned } = harness()
+  const text = []
+  const done = []
+  const callbacks = {
+    onText: delta => text.push(delta),
+    onDone: result => done.push(result),
+  }
+  manager.sendMessage(WINDOW_A, 'read the room', 'system', callbacks)
+  emitMcpInit(spawned[0].proc, { sessionId: SESSION_A })
+  emitJson(spawned[0].proc, {
+    type: 'assistant',
+    session_id: SESSION_A,
+    message: { content: [{ type: 'tool_use', name: CLAUDE_ALLOWED_TOOLS[0], input: { limit: 3 } }] },
+  })
+  emitJson(spawned[0].proc, {
+    type: 'user',
+    session_id: SESSION_A,
+    message: { content: [{ type: 'tool_result', content: '[{"id":77}]' }] },
+  })
+  complete(spawned[0].proc, { sessionId: SESSION_A, text: '看到了 #77', initialize: false })
+
+  manager.sendMessage(WINDOW_A, 'read again', 'system', callbacks)
+  complete(spawned[1].proc, { sessionId: SESSION_A, text: '工具仍可用' })
+
+  assert.deepEqual(text, ['看到了 #77', '工具仍可用'])
+  assert.equal(done.length, 2)
+  assert.equal(spawned[1].args.at(spawned[1].args.indexOf('--resume') + 1), SESSION_A)
+  assert.deepEqual(
+    spawned[1].args.slice(
+      spawned[1].args.indexOf('--allowedTools') + 1,
+      spawned[1].args.indexOf('--permission-mode')
+    ),
+    CLAUDE_ALLOWED_TOOLS
+  )
 })
 
 test('concurrent windows isolate active processes, busy state and reset', () => {
@@ -188,6 +344,7 @@ test('stream parser forwards thinking and falls back to final result text when p
     onText: delta => text.push(delta),
     onDone: result => done.push(result),
   })
+  emitMcpInit(spawned[0].proc, { sessionId: SESSION_A })
   emitJson(spawned[0].proc, {
     type: 'stream_event',
     session_id: SESSION_A,

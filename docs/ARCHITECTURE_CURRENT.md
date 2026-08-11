@@ -218,6 +218,10 @@ brain 是整个记忆系统的核心，字段最多：
 
 Claude 聊天会话由 Bridge 进程内的 `window_id → session_id` 映射管理。前端为每个标签页在 `sessionStorage` 生成独立 `window_id`；首轮使用 Claude CLI `--session-id` 明确创建并绑定原生会话，后续只使用 `--resume <session_id>`，不使用 `--continue`，也不再拼接全局最近 30 条聊天记录。并发窗口各自维护运行中进程，`/reset` 和断开连接只影响当前窗口。仅当原生 session 明确不存在或 Bridge 重启后失去窗口绑定时才创建新 session，并通过 SSE `session` 事件和服务端日志明确告知前端 fallback 原因；其他上游错误保持错误，不伪装成新会话。`/health` 只暴露窗口数、忙碌数、轮次与 fallback 次数等聚合状态，不暴露 session id。
 
+Claude CLI 每轮只显式加载一个名为 `lovehouse` 的远程 MCP，并以 `--strict-mcp-config` 排除环境中的其他 MCP。内建工具通过 `--tools ""` 全部关闭；`dontAsk` 模式只预先允许下表 13 个 `mcp__lovehouse__*` 工具，同时关闭 slash commands 和 user/project/local settings sources。Bridge 启动时显式构造子进程环境，仅保留 HOME/PATH/locale/临时目录及 Claude 配置目录等运行必需项，不把 Supabase、Livingroom、OAuth signing secret、PM2 或 Claude API token 环境变量传入模型进程。Claude 自身认证与 MCP OAuth 凭证留在 VPS 的 Claude 配置目录，不进入 argv、Git 或浏览器。
+
+每次首轮和 resume 都必须先收到 Claude `system/init`：`lovehouse` 状态必须为 `connected`，且报告的工具集合必须与 13 项固定白名单精确一致。缺少 init、MCP 失败或工具集合漂移都会终止该轮并通过 SSE 明确报错；在门禁通过前，模型文本不会转发到前端。因此 Claude CLI 即使在 MCP 失败后仍以成功状态生成普通回答，也不能被 Bridge 伪装成正常聊天。
+
 小客厅的 Owner JWT、GPT API Key 与 Claude OAuth 均先在 Bridge 完成认证。认证后的三项小客厅能力通过服务端专用 Supabase key 访问数据库，并经过 `createLivingroomRest` 限制为 `livingroom` 的读取和新增；该通道不能选择或访问其他 P0 表。服务端 key 不进入前端构建。
 
 Claude MCP 的无令牌响应必须以 `401` 和 `WWW-Authenticate` 指向可公网读取的受保护资源元数据。元数据中的 `resource` 与 Claude 中填写的 MCP URL 必须完全一致；Bridge 启动时还会拒绝缺失或少于 32 字符的 `OAUTH_TOKEN_SECRET`，避免运行一个无法签发有效令牌的假健康 OAuth 服务。
@@ -375,11 +379,12 @@ MemoryService 管理同一套规则
 | OAUTH_TOKEN_SECRET | VPS pm2 env | 签发 MCP 短期访问令牌的随机密钥（至少 32 字符，不入 git） |
 | MCP_RESOURCE_URL | VPS pm2 env | MCP 对外资源地址；使用 Cloudflare 代理时填写代理后的完整地址 |
 | MCP_RESOURCE_METADATA_URL | VPS pm2 env | 受保护资源元数据公网 HTTPS 地址；默认使用 `${MCP_BASE_URL}/.well-known/oauth-protected-resource/mcp/claude` |
+| CLAUDE_MCP_URL | VPS pm2 env（可选） | Claude CLI 显式加载的 LoveHouse MCP HTTPS 地址；未填时依次使用 `MCP_RESOURCE_URL` 或 `OAUTH_BASE_URL + /api/mcp/claude` |
 | MEMORY_SYSTEM_ENABLED | VPS pm2 env | 默认 false；仅在 `memory_entries` migration 已应用且权限测试通过后才能设为 true |
 
-> 工单 02 的 OAuth 发现链修复目前只在 Draft 分支中，尚未部署；只读预检确认生产 PM2 当前未配置 `OAUTH_TOKEN_SECRET`，因此审核通过并安全配置服务端密钥前禁止部署。
+> 工单 02 的 OAuth 发现链修复已合并 GitHub main、尚未部署；只读预检确认生产 PM2 当前未配置 `OAUTH_TOKEN_SECRET`，因此安全配置服务端密钥并取得独立生产授权前禁止部署。
 >
-> 上述新增 Bridge 变量目前只在分支代码中生效，生产 VPS尚未配置。本阶段没有修改任何生产环境变量；Memory System 默认 fail closed。
+> 上述新增 Bridge 变量目前只在 GitHub main 中生效，生产 VPS 尚未配置。本阶段没有修改任何生产环境变量；Memory System 默认 fail closed。
 
 ---
 
