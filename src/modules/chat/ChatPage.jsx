@@ -109,9 +109,26 @@ export default function ChatPage() {
     setThinkStream('')
 
     await streamMessage(updated, config, {
+      onSession: sessionInfo => {
+        const current = getChatSession()
+        saveChatSession({
+          ...current,
+          session_id: sessionInfo.session_id,
+          lastActive: Date.now(),
+          fallbackCount: (current.fallbackCount || 0) + (sessionInfo.fallback ? 1 : 0),
+        })
+        if (sessionInfo.fallback) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: '原来的 Claude 会话无法恢复，已明确创建并绑定一个新会话。',
+            time: Date.now(),
+            notice: true,
+          }])
+        }
+      },
       onThinking: t => setThinkStream(t),
       onText: t => setStream(t),
-      onDone: ({ content, thinking }) => {
+      onDone: ({ content, thinking, session: sessionInfo, usage }) => {
         setMessages(prev => [...prev, {
           role: 'assistant', content, thinking, time: Date.now(),
         }])
@@ -121,9 +138,11 @@ export default function ChatPage() {
         const s = getChatSession()
         saveChatSession({
           ...s,
+          session_id: sessionInfo?.session_id || s.session_id,
           startTime: s.startTime || Date.now(),
           turns: (s.turns || 0) + 1,
           lastActive: Date.now(),
+          lastUsage: usage || s.lastUsage,
         })
       },
       onError: err => {
@@ -287,7 +306,7 @@ export default function ChatPage() {
         <ProfilePanel
           config={config} messages={messages}
           onSetup={() => setPanel('setup')}
-          onClear={() => { clearChat(); setMessages([]); setPanel(null) }}
+          onClear={async () => { await clearChat(); setMessages([]); setPanel(null) }}
           onClose={() => setPanel(null)}
         />
       )}
@@ -337,6 +356,14 @@ function ProfilePanel({ config, messages, onSetup, onClear, onClose }) {
           <div className="ct-prof-row"><span>连接</span><span>{config.mode === 'bridge' ? 'Bridge' : 'API'}</span></div>
           <div className="ct-prof-row"><span>对话轮数</span><span>{turns} 轮</span></div>
           <div className="ct-prof-row"><span>会话起始</span><span>{start}</span></div>
+          {session.session_id && (
+            <div className="ct-prof-row">
+              <span>原生会话</span><span>{session.session_id.slice(0, 8)}</span>
+            </div>
+          )}
+          {session.fallbackCount > 0 && (
+            <div className="ct-prof-row"><span>会话恢复</span><span>已 fallback {session.fallbackCount} 次</span></div>
+          )}
           {session.lastActive && (
             <div className="ct-prof-row">
               <span>最近活跃</span>

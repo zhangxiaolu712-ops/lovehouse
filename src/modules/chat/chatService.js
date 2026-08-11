@@ -3,6 +3,8 @@ import { supabase } from '../../core/supabase'
 const CONFIG_KEY = 'lovehouse_chat_config'
 const HISTORY_KEY = 'lovehouse_chat_history'
 const SESSION_KEY = 'lovehouse_chat_session'
+const WINDOW_KEY = 'lovehouse_chat_window_id'
+const NEW_SESSION_KEY = 'lovehouse_chat_new'
 
 const DEFAULT_BRIDGE = '/api'
 const DEFAULT_SYSTEM = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
@@ -12,37 +14,59 @@ async function getAuthToken() {
   return data?.session?.access_token || ''
 }
 
-function readJson(key, fallback = {}) {
-  try { return JSON.parse(localStorage.getItem(key)) || fallback }
+function readJson(storage, key, fallback = {}) {
+  try { return JSON.parse(storage.getItem(key)) || fallback }
   catch { return fallback }
 }
 
+function fallbackUuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const value = Math.floor(Math.random() * 16)
+    return (character === 'x' ? value : (value & 0x3) | 0x8).toString(16)
+  })
+}
+
+export function getChatWindowId() {
+  let windowId = sessionStorage.getItem(WINDOW_KEY)
+  if (!windowId) {
+    windowId = globalThis.crypto?.randomUUID?.() || fallbackUuid()
+    sessionStorage.setItem(WINDOW_KEY, windowId)
+  }
+  return windowId
+}
+
 export function getChatConfig() {
-  const c = readJson(CONFIG_KEY)
+  const c = readJson(localStorage, CONFIG_KEY)
   if (!c.mode) c.mode = 'bridge'
   if (!c.bridgeUrl) c.bridgeUrl = DEFAULT_BRIDGE
   return c
 }
 export const saveChatConfig = c => localStorage.setItem(CONFIG_KEY, JSON.stringify(c))
 
-export const getChatHistory  = () => readJson(HISTORY_KEY, [])
-export const saveChatHistory = m => localStorage.setItem(HISTORY_KEY, JSON.stringify(m))
+export const getChatHistory  = () => readJson(sessionStorage, HISTORY_KEY, [])
+export const saveChatHistory = m => sessionStorage.setItem(HISTORY_KEY, JSON.stringify(m))
 
-export const getChatSession  = () => readJson(SESSION_KEY)
-export const saveChatSession = s => localStorage.setItem(SESSION_KEY, JSON.stringify(s))
+export const getChatSession  = () => readJson(sessionStorage, SESSION_KEY)
+export const saveChatSession = s => sessionStorage.setItem(SESSION_KEY, JSON.stringify(s))
 
-export function clearChat() {
-  localStorage.removeItem(HISTORY_KEY)
-  localStorage.removeItem(SESSION_KEY)
-  localStorage.setItem('lovehouse_chat_new', '1')
+export async function clearChat() {
+  const windowId = getChatWindowId()
+  sessionStorage.removeItem(HISTORY_KEY)
+  sessionStorage.removeItem(SESSION_KEY)
+  sessionStorage.setItem(NEW_SESSION_KEY, '1')
   const config = getChatConfig()
   if (config.mode === 'bridge' && config.bridgeUrl) {
-    getAuthToken().then(token =>
-      fetch(`${config.bridgeUrl}/reset`, {
+    try {
+      const token = await getAuthToken()
+      await fetch(`${config.bridgeUrl}/reset`, {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ window_id: windowId }),
       })
-    ).catch(() => {})
+    } catch {}
   }
 }
 
@@ -62,12 +86,13 @@ function buildContent(msg) {
 }
 
 async function streamBridge(messages, config, cb) {
-  const { onThinking, onText, onDone, onError } = cb
+  const { onThinking, onText, onSession, onDone, onError } = cb
   const lastUser = [...messages].reverse().find(m => m.role === 'user')
   if (!lastUser) { onError?.('没有消息'); return }
 
-  const isNew = localStorage.getItem('lovehouse_chat_new') === '1'
-  if (isNew) localStorage.removeItem('lovehouse_chat_new')
+  const windowId = getChatWindowId()
+  const isNew = sessionStorage.getItem(NEW_SESSION_KEY) === '1'
+  const knownSessionId = getChatSession().session_id
 
   try {
     const token = await getAuthToken()
@@ -78,6 +103,8 @@ async function streamBridge(messages, config, cb) {
       method: 'POST',
       headers,
       body: JSON.stringify({
+        window_id: windowId,
+        ...(knownSessionId ? { known_session_id: knownSessionId } : {}),
         message: lastUser.content || '',
         system: config.system || DEFAULT_SYSTEM,
         newSession: isNew || messages.filter(m => m.role === 'user').length <= 1,
@@ -87,10 +114,11 @@ async function streamBridge(messages, config, cb) {
     if (!res.ok) {
       throw new Error(`${res.status} ${await res.text().catch(() => '')}`)
     }
+    if (isNew) sessionStorage.removeItem(NEW_SESSION_KEY)
 
     const reader = res.body.getReader()
     const dec = new TextDecoder()
-    let buf = '', text = '', thinking = ''
+    let buf = '', text = '', thinking = '', session = null, usage = null
 
     for (;;) {
       const { done, value } = await reader.read()
@@ -113,11 +141,19 @@ async function streamBridge(messages, config, cb) {
             thinking += evt.thinking
             onThinking?.(thinking)
           }
+          if (evt.session) {
+            session = evt.session
+            onSession?.(session)
+          }
+          if (evt.session_id) {
+            session = { ...(session || {}), session_id: evt.session_id }
+          }
+          if (evt.usage) usage = evt.usage
         } catch {}
       }
     }
 
-    onDone?.({ content: text, thinking: thinking || undefined })
+    onDone?.({ content: text, thinking: thinking || undefined, session, usage })
   } catch (err) {
     onError?.(err.message)
   }

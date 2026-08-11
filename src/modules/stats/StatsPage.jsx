@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
 
 function getChatHistory() {
-  try { return JSON.parse(localStorage.getItem('lovehouse_chat_history')) || [] }
+  try { return JSON.parse(sessionStorage.getItem('lovehouse_chat_history')) || [] }
   catch { return [] }
 }
 
