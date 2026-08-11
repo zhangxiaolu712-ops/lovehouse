@@ -61,6 +61,8 @@ const OAUTH_BASE = process.env.OAUTH_BASE_URL || 'https://tingtunehouse.duckdns.
 const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
 const MCP_BASE = process.env.MCP_BASE_URL || `${OAUTH_BASE}/api`
 const MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
+const MCP_RESOURCE_METADATA = process.env.MCP_RESOURCE_METADATA_URL
+  || `${MCP_BASE.replace(/\/+$/, '')}/.well-known/oauth-protected-resource/mcp/claude`
 const MEMORY_SYSTEM_ENABLED = process.env.MEMORY_SYSTEM_ENABLED === 'true'
 const MEMORY_SEMANTIC_ENABLED = MEMORY_SYSTEM_ENABLED
   && process.env.MEMORY_SEMANTIC_ENABLED === 'true'
@@ -371,6 +373,7 @@ function verifyMcpKey(req) {
 const verifyClaudeOAuth = installClaudeOAuth(app, {
   oauthBase: OAUTH_BASE,
   resource: MCP_RESOURCE,
+  resourceMetadataUrl: MCP_RESOURCE_METADATA,
   supabaseUrl: SUPABASE_URL,
   supabaseAnonKey: SUPABASE_ANON_KEY,
   ownerUserId: OWNER_USER_ID,
