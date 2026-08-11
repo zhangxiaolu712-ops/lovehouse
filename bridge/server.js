@@ -149,6 +149,20 @@ const supabaseRest = createSupabaseRest({
   url: SUPABASE_URL,
   serverKey: SUPABASE_SERVER_KEY,
 })
+
+function createFencedRest(rest, table, methods) {
+  const allowed = new Set(methods)
+  return function fencedRest(method, path, body) {
+    if (!allowed.has(method)) {
+      throw new Error(`${method} not allowed on ${table} fence`)
+    }
+    if (path !== table && !path.startsWith(`${table}?`)) {
+      throw new Error(`"${path.split('?')[0]}" not allowed through ${table} fence`)
+    }
+    return rest(method, path, body)
+  }
+}
+const livingroomRest = createFencedRest(supabaseRest, 'livingroom', ['GET', 'POST'])
 const canonicalMemoryRepository = new SupabaseMemoryRepository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
@@ -278,7 +292,7 @@ app.get('/livingroom', verifyLivingroom, async (req, res) => {
       if (Number.isNaN(since.valueOf())) return res.status(400).json({ error: 'invalid since timestamp' })
       path += `&created_at=gt.${encodeURIComponent(since.toISOString())}`
     }
-    const rows = await supabaseRest('GET', path)
+    const rows = await livingroomRest('GET', path)
     return res.json((Array.isArray(rows) ? rows : []).reverse())
   } catch (error) {
     return res.status(500).json({ error: error.message })
@@ -291,7 +305,7 @@ app.post('/livingroom', verifyLivingroom, async (req, res) => {
       return res.status(400).json({ error: 'message required' })
     }
     if (req.body.message.length > 10_000) return res.status(400).json({ error: 'message is too long' })
-    const rows = await supabaseRest('POST', 'livingroom', {
+    const rows = await livingroomRest('POST', 'livingroom', {
       sender: req.sender,
       message: req.body.message.trim(),
     })
@@ -304,7 +318,7 @@ app.post('/livingroom', verifyLivingroom, async (req, res) => {
 app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 1), 100)
-    const rows = await supabaseRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
+    const rows = await livingroomRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
     const context = (Array.isArray(rows) ? rows : []).reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
     return res.json({ context, count: rows?.length || 0 })
   } catch (error) {
@@ -315,12 +329,12 @@ app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
 const gptChannel = createMcpChannel({
   actor: MEMORY_ACTORS.GPT,
   memoryService,
-  livingroomRest: supabaseRest,
+  livingroomRest,
 })
 const claudeChannel = createMcpChannel({
   actor: MEMORY_ACTORS.CLAUDE,
   memoryService,
-  livingroomRest: supabaseRest,
+  livingroomRest,
 })
 
 function verifyMcpKey(req) {
