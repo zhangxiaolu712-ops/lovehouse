@@ -3,6 +3,9 @@ name: Deploy to GitHub Pages + Cloudflare
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,7 +13,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,6 +39,7 @@ jobs:
 
   deploy-pages:
     needs: build
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -58,7 +62,7 @@ jobs:
   deploy-cloudflare:
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ vars.ENABLE_CLOUDFLARE != 'false' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.ENABLE_CLOUDFLARE != 'false' }}
     steps:
       - uses: actions/checkout@v4
 
