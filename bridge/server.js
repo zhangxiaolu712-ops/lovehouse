@@ -1,8 +1,12 @@
-import { spawn } from 'child_process'
 import cors from 'cors'
 import express from 'express'
 
 import { installClaudeOAuth } from './oauth.js'
+import {
+  sendMessage as claudeSend,
+  resetSession,
+  getStats as getClaudeStats,
+} from './claudeProcess.js'
 import {
   createSupabaseRest,
   createRuntimeMemoryRepository,
@@ -18,7 +22,6 @@ import {
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { safeEqual } from './security.js'
-import { addMessage, buildPrompt, clear as clearChatContext } from './chatContext.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -261,41 +264,40 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
     return res.status(400).json({ error: 'message required' })
   }
-  if (req.body.newSession) clearChatContext()
+  if (req.body.newSession) resetSession()
 
   const message = req.body.message.trim()
-  const prompt = buildPrompt(message)
-  addMessage('user', message)
+  const systemPrompt = req.body.system || SYSTEM_PROMPT
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
 
-  let fullResponse = ''
-  const claude = spawn('/usr/bin/claude', [
-    '-p', prompt,
-    '--output-format', 'text',
-    '--system-prompt', req.body.system || SYSTEM_PROMPT,
-  ])
-  claude.stdout.on('data', chunk => {
-    const text = chunk.toString()
-    fullResponse += text
-    res.write(`data: ${JSON.stringify({ text })}\n\n`)
+  let closed = false
+  res.on('close', () => { closed = true })
+
+  claudeSend(message, systemPrompt, {
+    onText(delta) {
+      if (!closed) res.write(`data: ${JSON.stringify({ text: delta })}\n\n`)
+    },
+    onThinking(delta) {
+      if (!closed) res.write(`data: ${JSON.stringify({ thinking: delta })}\n\n`)
+    },
+    onDone() {
+      if (!closed) { res.write('data: [DONE]\n\n'); res.end() }
+    },
+    onError(err) {
+      if (!closed) {
+        res.write(`data: ${JSON.stringify({ error: err })}\n\n`)
+        res.write('data: [DONE]\n\n')
+        res.end()
+      }
+    },
   })
-  claude.stderr.on('data', chunk => console.error('[claude stderr]', chunk.toString()))
-  claude.on('close', code => {
-    if (code === 0 && fullResponse.trim()) {
-      addMessage('assistant', fullResponse.trim())
-    }
-    if (code !== 0) res.write(`data: ${JSON.stringify({ error: `claude exited ${code}` })}\n\n`)
-    res.write('data: [DONE]\n\n')
-    res.end()
-  })
-  res.on('close', () => claude.kill())
 })
 
 app.post('/reset', verifyOwnerBearer, (_req, res) => {
-  clearChatContext()
+  resetSession()
   res.json({ ok: true })
 })
 
@@ -380,6 +382,7 @@ installMcpTransports(app, {
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
+    claude_process: getClaudeStats(),
     memory_system: 'foundation',
     memory_system_enabled: MEMORY_SYSTEM_ENABLED,
     memory_semantic_enabled: MEMORY_SEMANTIC_ENABLED,

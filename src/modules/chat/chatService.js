@@ -62,7 +62,7 @@ function buildContent(msg) {
 }
 
 async function streamBridge(messages, config, cb) {
-  const { onText, onDone, onError } = cb
+  const { onThinking, onText, onDone, onError } = cb
   const lastUser = [...messages].reverse().find(m => m.role === 'user')
   if (!lastUser) { onError?.('没有消息'); return }
 
@@ -90,7 +90,7 @@ async function streamBridge(messages, config, cb) {
 
     const reader = res.body.getReader()
     const dec = new TextDecoder()
-    let buf = '', text = ''
+    let buf = '', text = '', thinking = ''
 
     for (;;) {
       const { done, value } = await reader.read()
@@ -109,11 +109,15 @@ async function streamBridge(messages, config, cb) {
             text += evt.text
             onText?.(text)
           }
+          if (evt.thinking) {
+            thinking += evt.thinking
+            onThinking?.(thinking)
+          }
         } catch {}
       }
     }
 
-    onDone?.({ content: text })
+    onDone?.({ content: text, thinking: thinking || undefined })
   } catch (err) {
     onError?.(err.message)
   }
