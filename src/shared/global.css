@@ -2603,15 +2603,20 @@ body {
 }
 
 .livingroom-head {
+  --livingroom-lock-clearance: 104px;
   display: flex;
   min-height: calc(72px + env(safe-area-inset-top));
-  padding: max(12px, env(safe-area-inset-top)) max(64px, calc(12px + env(safe-area-inset-right))) 10px max(12px, env(safe-area-inset-left));
+  padding: max(12px, env(safe-area-inset-top)) max(var(--livingroom-lock-clearance), calc(12px + env(safe-area-inset-right))) 10px max(12px, env(safe-area-inset-left));
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-card) 82%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
+}
+
+[data-theme="prince"] .livingroom-head {
+  --livingroom-lock-clearance: 64px;
 }
 
 .livingroom-icon-button {
@@ -3049,6 +3054,12 @@ body {
 
   .livingroom-bubble {
     font-size: 13px;
+  }
+}
+
+@media (max-width: 420px) {
+  .livingroom-head {
+    --livingroom-lock-clearance: 64px;
   }
 }
 
