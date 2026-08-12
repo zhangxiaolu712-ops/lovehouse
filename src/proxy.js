@@ -1,4 +1,4 @@
-const BRIDGE = 'http://139.180.146.26:3000'
+const BRIDGE = 'https://tingtunehouse.duckdns.org/api'
 
 export default {
   async fetch(request, env, ctx) {
