@@ -14,6 +14,7 @@ export class DisabledMemoryRepository {
   async memoryBox() { throw new MemorySystemDisabledError() }
   async revise() { throw new MemorySystemDisabledError() }
   async proposeShared() { throw new MemorySystemDisabledError() }
+  async expandSource() { throw new MemorySystemDisabledError() }
 }
 
 export function createRuntimeMemoryRepository({ enabled, canonicalRepository }) {

@@ -16,6 +16,7 @@ import {
   EmbeddingIndexer,
   HttpDreamCuratorProvider,
   HttpEmbeddingProvider,
+  createCanonicalSourceResolver,
   MEMORY_ACTORS,
   MemoryService,
   SupabaseMemoryRepository,
@@ -187,6 +188,7 @@ const memoryService = new MemoryService({
   semanticRecallEnabled: MEMORY_SEMANTIC_ENABLED,
   embeddingProvider,
   rankingProfile: MEMORY_RANKING_PROFILE,
+  sourceResolver: createCanonicalSourceResolver(),
 })
 
 const embeddingProviderConfigured = Boolean(

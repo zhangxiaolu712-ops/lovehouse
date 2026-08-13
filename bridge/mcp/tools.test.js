@@ -31,9 +31,9 @@ test('MCP schemas expose no author, authority, owner, revision, hash, space or S
   }
 })
 
-test('all nine compatibility tools remain and all thirteen tools have an explicit adapter route', () => {
+test('all compatibility tools remain and all fourteen tools have an explicit adapter route', () => {
   const toolNames = createMcpToolDefinitions(MEMORY_ACTORS.GPT).map(tool => tool.name)
-  assert.equal(toolNames.length, 13)
+  assert.equal(toolNames.length, 14)
   assert.deepEqual(Object.keys(MCP_TOOL_ROUTES), toolNames)
   assert.deepEqual(
     Object.values(MCP_TOOL_ROUTES).slice(3, 10),
@@ -49,7 +49,7 @@ test('all nine compatibility tools remain and all thirteen tools have an explici
   )
 })
 
-test('all thirteen adapter routes reach only MemoryService or livingroom REST', async () => {
+test('all fourteen adapter routes reach only MemoryService or livingroom REST', async () => {
   const calls = []
   const memoryService = {
     async write() { calls.push('memory.write'); return { id: 1 } },
@@ -60,6 +60,7 @@ test('all thirteen adapter routes reach only MemoryService or livingroom REST', 
     async get() { calls.push('memory.get'); return null },
     async revise() { calls.push('memory.revise'); return {} },
     async proposeShared() { calls.push('memory.proposeShared'); return {} },
+    async expandSource() { calls.push('memory.expandSource'); return {} },
   }
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
@@ -85,6 +86,7 @@ test('all thirteen adapter routes reach only MemoryService or livingroom REST', 
   await handler('get_memory', { memory_id: 1 })
   await handler('revise_memory', { memory_id: 1, content: 'five', reason: 'clarify' })
   await handler('propose_shared_candidate', { memory_id: 1, reason: 'useful together' })
+  await handler('expand_source', { source_id: 1 })
 
   assert.deepEqual(calls, [
     'livingroom.read',
@@ -100,6 +102,7 @@ test('all thirteen adapter routes reach only MemoryService or livingroom REST', 
     'memory.get',
     'memory.revise',
     'memory.proposeShared',
+    'memory.expandSource',
   ])
 })
 
@@ -213,6 +216,7 @@ test('GPT compatibility tools call one MemoryService with fixed GPT actor', asyn
     async get(...args) { calls.push(['get', ...args]); return null },
     async revise(...args) { calls.push(['revise', ...args]); return {} },
     async proposeShared(...args) { calls.push(['proposeShared', ...args]); return {} },
+    async expandSource(...args) { calls.push(['expandSource', ...args]); return {} },
   }
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,

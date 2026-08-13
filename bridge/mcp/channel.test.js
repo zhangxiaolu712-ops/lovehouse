@@ -16,6 +16,7 @@ function recordingMemoryService(calls) {
     async get(...args) { calls.push(['get', ...args]); return null },
     async revise(...args) { calls.push(['revise', ...args]); return {} },
     async proposeShared(...args) { calls.push(['proposeShared', ...args]); return {} },
+    async expandSource(...args) { calls.push(['expandSource', ...args]); return {} },
   }
 }
 

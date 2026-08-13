@@ -35,6 +35,24 @@ test('repository uses the fixed GPT runtime recall door instead of raw table rea
   assert.doesNotMatch(calls[0][1], /brain|memories/)
 })
 
+test('source expansion uses only the fixed actor Runtime door', async () => {
+  const calls = []
+  const repository = new SupabaseMemoryRepository({
+    ownerId,
+    rest: async (...args) => {
+      calls.push(args)
+      return { ok: true, source: { source_id: 7, source_kind: 'manual_quote' } }
+    },
+  })
+  const source = await repository.expandSource(7, { actor: 'gpt', requestId })
+  assert.equal(source.source_id, 7)
+  assert.deepEqual(calls[0], ['POST', 'rpc/memory_runtime_expand_source_gpt', {
+    p_owner_id: ownerId,
+    p_request_id: requestId,
+    p_source_id: 7,
+  }])
+})
+
 test('Memory Box uses a fixed actor RPC with only bounded non-authority input', async () => {
   const calls = []
   const repository = new SupabaseMemoryRepository({

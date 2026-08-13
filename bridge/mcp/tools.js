@@ -15,6 +15,7 @@ export const MCP_TOOL_ROUTES = Object.freeze({
   get_memory: 'memory.get',
   revise_memory: 'memory.revise',
   propose_shared_candidate: 'memory.proposeShared',
+  expand_source: 'memory.expandSource',
 })
 
 const closedObject = properties => ({
@@ -23,8 +24,40 @@ const closedObject = properties => ({
   additionalProperties: false,
 })
 
+const sourceInput = {
+  oneOf: [
+    {
+      ...closedObject({ source_id: { type: 'integer', minimum: 1 } }),
+      required: ['source_id'],
+    },
+    {
+      ...closedObject({
+        source_channel: { type: 'string', minLength: 1, maxLength: 80 },
+        source_kind: {
+          type: 'string',
+          pattern: '^[a-z][a-z0-9_]{0,79}$',
+        },
+        locator: {
+          type: 'object',
+          properties: {
+            message_id: { type: 'integer', minimum: 1 },
+            start_message_id: { type: 'integer', minimum: 1 },
+            end_message_id: { type: 'integer', minimum: 1 },
+            reference: { type: 'string', maxLength: 1000 },
+            external_ref: { type: 'string', maxLength: 1000 },
+          },
+          additionalProperties: false,
+        },
+        quote_text: { type: 'string', minLength: 1, maxLength: 10000 },
+      }),
+      required: ['source_channel', 'source_kind', 'locator'],
+    },
+  ],
+}
+
 const memoryFields = {
   content: { type: 'string', minLength: 1, maxLength: 50000 },
+  summary: { type: 'string', minLength: 1, maxLength: 2000 },
   title: { type: 'string', maxLength: 500 },
   memory_type: {
     type: 'string',
@@ -38,6 +71,7 @@ const memoryFields = {
   importance: { type: 'integer', minimum: 1, maximum: 5 },
   retention: { type: 'string', enum: ['fixed', 'long', 'short', 'temporary'] },
   source_ref: { type: 'string', maxLength: 500 },
+  sources: { type: 'array', maxItems: 8, items: sourceInput },
 }
 
 const revisionMemoryFields = Object.fromEntries(
@@ -94,7 +128,7 @@ export function createMcpToolDefinitions(actor) {
     },
     {
       name: 'recall',
-      description: '检索自己的私有记忆与已批准 Shared；不会检索另一方私有空间或 Legacy Pending。',
+      description: '检索自己的私有记忆与已批准 Shared；默认只返回 summary、必要 metadata 和 source 描述，不展开完整正文或证据。',
       inputSchema: {
         ...closedObject({
           query: { type: 'string', minLength: 1, maxLength: 500 },
@@ -137,6 +171,8 @@ export function createMcpToolDefinitions(actor) {
           category: { type: 'string' },
           level: { type: 'string' },
           importance: memoryFields.importance,
+          summary: memoryFields.summary,
+          sources: memoryFields.sources,
         }),
         required: ['content'],
       },
@@ -170,6 +206,18 @@ export function createMcpToolDefinitions(actor) {
           reason: { type: 'string', minLength: 1, maxLength: 1000 },
         }),
         required: ['memory_id', 'reason'],
+      },
+    },
+    {
+      name: 'expand_source',
+      description: '显式展开一项有权访问的 Memory source。manual quote 返回快照；LoveHouse message/range 通过服务端受限读取链分页返回。',
+      inputSchema: {
+        ...closedObject({
+          source_id: { type: 'integer', minimum: 1 },
+          cursor_message_id: { type: 'integer', minimum: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 20 },
+        }),
+        required: ['source_id'],
       },
     },
   ]
@@ -255,6 +303,8 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
     if (name === 'save_to_memories') {
       const saved = await memoryService.write(actor, {
         content: args.content,
+        summary: args.summary,
+        ...(args.sources === undefined ? {} : { sources: args.sources }),
         category: args.category,
         level: args.level,
         importance: args.importance,
@@ -270,6 +320,9 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
     if (name === 'propose_shared_candidate') {
       const candidate = await memoryService.proposeShared(actor, args, trustedContext)
       return JSON.stringify({ ok: true, candidate_id: candidate?.id, status: candidate?.shared_status })
+    }
+    if (name === 'expand_source') {
+      return JSON.stringify(await memoryService.expandSource(actor, args, trustedContext))
     }
     throw new Error(`unknown tool: ${name}`)
   }
