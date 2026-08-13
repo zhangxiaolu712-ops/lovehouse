@@ -10,6 +10,8 @@
 - OAuth 元数据同步声明 refresh grant；授权码流程继续强制精确 redirect、resource、scope 和 PKCE S256。
 - 新增服务端 refresh token 状态仓库。原始 refresh token 只返回给客户端，落盘仅保存 HMAC 摘要、token family、代数、状态和 owner/client/resource/scope 绑定。
 - refresh token 使用后立即轮换；旧 token 重放会撤销整个 family；无效、撤销、过期或绑定不匹配均 fail closed。
+- #137 只读边界复审复现了两个文件 store 实例可同时读取 active token 并各自轮换的并发缺陷；以同目录原子 lock directory 包住完整 read-modify-write，修复同主机多进程双签发窗口。遗留 lock 会使操作超时失败，必须在确认无实例持有后由运维处理，不会被自动删除或绕过。
+- 同次复审确认可选相对路径会随 PM2 release cwd 漂移；`OAUTH_REFRESH_STORE_PATH` 现仅接受绝对路径，默认 HOME 外置路径保持不变。
 - 保留 `client_secret_post` 的 confidential web client 边界；native client 只能使用 `none`，不新增 OAuth 绕过。
 
 ## 为什么这样做
@@ -33,8 +35,8 @@
 
 ## 验证结果
 
-- OAuth 定向测试：12/12 通过。
-- Bridge 全量测试：155/155 通过。
+- OAuth 定向测试：15/15 通过，新增文件权限、双实例并发、缺失/损坏 fail-closed 与签名密钥轮换覆盖。
+- Bridge 全量测试：158/158 通过。
 - 前端 lint：通过，仅有既有非阻断 warning；build：通过，仅有既有 chunk-size warning。
 - `git diff --check`：通过。
 - 真实 Claude Code 到浏览器的 preview 验证：未执行。当前没有不触碰生产且具备公网 HTTPS OAuth issuer/callback 的 sidecar；本地等价契约测试已走到真实授权页、授权码、PKCE、access token 与 refresh token。

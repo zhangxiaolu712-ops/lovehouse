@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'crypto'
-import { mkdtemp, readFile, rm } from 'fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
@@ -352,6 +352,10 @@ test('refresh token state persists for reuse without storing the raw token', asy
   const storedText = await readFile(storePath, 'utf8')
   assert.equal(storedText.includes(tokens.refresh_token), false)
   assert.equal(storedText.includes(tokenSecret), false)
+  if (process.platform !== 'win32') {
+    assert.equal((await stat(storePath)).mode & 0o777, 0o600)
+    assert.equal((await stat(directory)).mode & 0o777, 0o700)
+  }
 
   const restartedBase = await createServer(t, {
     refreshTokenStore: createFileRefreshTokenStore({ filePath: storePath }),
@@ -359,6 +363,86 @@ test('refresh token state persists for reuse without storing the raw token', asy
   const reused = await refresh(restartedBase, registration, tokens.refresh_token)
   assert.equal(reused.response.status, 200)
   assert.match(reused.body.refresh_token, /^lh_rt_/)
+})
+
+test('independent file-store instances serialize rotation and prevent double issuance', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-oauth-lock-'))
+  const storePath = path.join(directory, 'refresh-tokens.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const firstStore = createFileRefreshTokenStore({ filePath: storePath })
+  const secondStore = createFileRefreshTokenStore({ filePath: storePath })
+  const now = Date.now()
+  const original = {
+    token_digest: 'original-digest',
+    family_id: 'family-1',
+    generation: 0,
+    client_id: 'client-1',
+    client_auth_method: 'none',
+    owner_user_id: 'owner-1',
+    resource,
+    scope: 'mcp:tools',
+    created_at: now,
+    expires_at: now + 60_000,
+  }
+  await firstStore.issue(original)
+  const replacement = suffix => current => ({
+    ...current,
+    token_digest: `replacement-${suffix}`,
+    generation: 1,
+    created_at: Date.now(),
+  })
+
+  const results = await Promise.all([
+    firstStore.rotate('original-digest', replacement('first'), () => true),
+    secondStore.rotate('original-digest', replacement('second'), () => true),
+  ])
+  assert.deepEqual(results.map(result => result.status).sort(), ['replayed', 'rotated'])
+  const issued = results.find(result => result.status === 'rotated').record
+  const revokedDescendant = await firstStore.rotate(
+    issued.token_digest,
+    current => ({ ...current, token_digest: 'next', generation: 2 }),
+    () => true,
+  )
+  assert.equal(revokedDescendant.status, 'revoked')
+})
+
+test('missing or corrupt file state never makes an old refresh token valid', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-oauth-invalid-'))
+  const storePath = path.join(directory, 'refresh-tokens.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const missingStore = createFileRefreshTokenStore({ filePath: storePath })
+  const missing = await missingStore.rotate('unknown', () => assert.fail('must not rotate'), () => true)
+  assert.equal(missing.status, 'invalid')
+
+  await writeFile(storePath, '{not-json', 'utf8')
+  const corruptStore = createFileRefreshTokenStore({ filePath: storePath })
+  await assert.rejects(
+    corruptStore.rotate('unknown', () => assert.fail('must not rotate'), () => true),
+    /JSON|OAuth refresh token store is invalid/,
+  )
+})
+
+test('rotating OAUTH_TOKEN_SECRET invalidates existing access and refresh tokens', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-oauth-secret-'))
+  const storePath = path.join(directory, 'refresh-tokens.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const firstBase = await createServer(t, {
+    refreshTokenStore: createFileRefreshTokenStore({ filePath: storePath }),
+  })
+  const { registration, tokens } = await issueClaudeCodeTokens(t, firstBase)
+  const rotatedSecret = 'rotated-oauth-signing-secret-that-is-long-enough'
+  const rotatedBase = await createServer(t, {
+    tokenSecret: rotatedSecret,
+    refreshTokenStore: createFileRefreshTokenStore({ filePath: storePath }),
+  })
+
+  const oldAccess = await nativeFetch(`${rotatedBase}/mcp/claude`, {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+  })
+  assert.equal(oldAccess.status, 401)
+  const oldRefresh = await refresh(rotatedBase, registration, tokens.refresh_token)
+  assert.equal(oldRefresh.response.status, 400)
+  assert.equal(oldRefresh.body.error, 'invalid_grant')
 })
 
 test('authorization-code-only clients do not receive a refresh token', async t => {
@@ -411,5 +495,9 @@ test('OAuth refuses unsafe startup configuration', () => {
   assert.throws(
     () => installTestOAuth(app, { refreshTokenStore: null }),
     /OAuth refresh token store is required/,
+  )
+  assert.throws(
+    () => createFileRefreshTokenStore({ filePath: 'release-relative/refresh-tokens.json' }),
+    /OAUTH_REFRESH_STORE_PATH must be an absolute path/,
   )
 })

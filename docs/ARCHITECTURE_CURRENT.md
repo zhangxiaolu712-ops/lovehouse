@@ -224,7 +224,7 @@ Claude CLI 每轮只显式加载一个名为 `lovehouse` 的远程 MCP，并以 
 
 小客厅的 Owner JWT、GPT API Key 与 Claude OAuth 均先在 Bridge 完成认证。认证后的三项小客厅能力通过服务端专用 Supabase key 访问数据库，并经过 `createLivingroomRest` 限制为 `livingroom` 的读取和新增；该通道不能选择或访问其他 P0 表。服务端 key 不进入前端构建。
 
-Claude MCP 的无令牌响应必须以 `401` 和 `WWW-Authenticate` 指向可公网读取的受保护资源元数据。元数据中的 `resource` 与 Claude 中填写的 MCP URL 必须完全一致；Bridge 启动时还会拒绝缺失或少于 32 字符的 `OAUTH_TOKEN_SECRET`，避免运行一个无法签发有效令牌的假健康 OAuth 服务。DCR 只接受既有 `authorization_code`，或 Claude Code 实际使用的 `authorization_code + refresh_token`；响应类型仍固定为 `code`，native/public 客户端仍固定 `none + PKCE S256`。refresh token 每次使用都会轮换，只以服务端 HMAC 摘要持久化并绑定 owner、client、resource 与 scope；旧 token 重放会撤销同一 token family，不能扩大既有 MCP、RLS 或小客厅权限。
+Claude MCP 的无令牌响应必须以 `401` 和 `WWW-Authenticate` 指向可公网读取的受保护资源元数据。元数据中的 `resource` 与 Claude 中填写的 MCP URL 必须完全一致；Bridge 启动时还会拒绝缺失或少于 32 字符的 `OAUTH_TOKEN_SECRET`，避免运行一个无法签发有效令牌的假健康 OAuth 服务。DCR 只接受既有 `authorization_code`，或 Claude Code 实际使用的 `authorization_code + refresh_token`；响应类型仍固定为 `code`，native/public 客户端仍固定 `none + PKCE S256`。refresh token 每次使用都会轮换，只以服务端 HMAC 摘要持久化并绑定 owner、client、resource 与 scope；同一主机上共享状态文件的 Bridge 实例通过文件级互斥完成 read-modify-write，旧 token 重放会撤销同一 token family，不能扩大既有 MCP、RLS 或小客厅权限。不同主机之间不共享该文件，不能作为多 VPS 分布式 store 使用。
 
 ### MCP 工具（GPT + Claude 共享 14 个）
 
@@ -378,7 +378,7 @@ MemoryService 管理同一套规则
 | LIVINGROOM_KEY | VPS pm2 env | GPT MCP 认证密钥（不入 git） |
 | OAUTH_BASE_URL | VPS pm2 env | OAuth issuer base URL |
 | OAUTH_TOKEN_SECRET | VPS pm2 env | 签发 MCP 短期访问令牌的随机密钥（至少 32 字符，不入 git） |
-| OAUTH_REFRESH_STORE_PATH | VPS pm2 env（可选） | refresh token 状态文件；默认位于服务账号私有配置目录，只保存摘要与绑定信息，不保存原始 token |
+| OAUTH_REFRESH_STORE_PATH | VPS pm2 env（可选） | refresh token 状态文件的绝对路径；默认位于服务账号私有配置目录，只保存摘要与绑定信息，不保存原始 token；相对路径会在启动时拒绝 |
 | MCP_RESOURCE_URL | VPS pm2 env | MCP 对外资源地址；使用 Cloudflare 代理时填写代理后的完整地址 |
 | MCP_RESOURCE_METADATA_URL | VPS pm2 env | 受保护资源元数据公网 HTTPS 地址；默认使用 `${MCP_BASE_URL}/.well-known/oauth-protected-resource/mcp/claude` |
 | CLAUDE_MCP_URL | VPS pm2 env（可选） | Claude CLI 显式加载的 LoveHouse MCP HTTPS 地址；未填时依次使用 `MCP_RESOURCE_URL` 或 `OAUTH_BASE_URL + /api/mcp/claude` |

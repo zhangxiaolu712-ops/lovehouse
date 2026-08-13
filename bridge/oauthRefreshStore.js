@@ -1,11 +1,12 @@
 import crypto from 'crypto'
-import { mkdir, readFile, rename, writeFile, chmod } from 'fs/promises'
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
 const STORE_VERSION = 1
 const DEFAULT_MAX_RECORDS = 10_000
 const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000
+const LOCK_WAIT_MS = 5_000
 
 function emptyState() {
   return { version: STORE_VERSION, records: {} }
@@ -146,9 +147,36 @@ export class RefreshTokenStore {
   }
 
   async #exclusive(work) {
-    const next = this.operation.then(work, work)
+    const guardedWork = this.filePath ? () => this.#withFileLock(work) : work
+    const next = this.operation.then(guardedWork, guardedWork)
     this.operation = next.catch(() => {})
     return next
+  }
+
+  async #withFileLock(work) {
+    const directory = path.dirname(this.filePath)
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    await chmod(directory, 0o700)
+    const lockPath = `${this.filePath}.lock`
+    const deadline = Date.now() + LOCK_WAIT_MS
+
+    while (true) {
+      try {
+        await mkdir(lockPath, { mode: 0o700 })
+        await chmod(lockPath, 0o700)
+        break
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+        if (Date.now() >= deadline) throw new Error('OAuth refresh token store is busy')
+        await new Promise(resolve => setTimeout(resolve, 10 + crypto.randomInt(20)))
+      }
+    }
+
+    try {
+      return await work()
+    } finally {
+      await rm(lockPath, { recursive: true, force: true })
+    }
   }
 
   async #load() {
@@ -199,6 +227,9 @@ export function createMemoryRefreshTokenStore(options = {}) {
 }
 
 export function createFileRefreshTokenStore({ filePath, ...options } = {}) {
+  if (filePath && !path.isAbsolute(filePath)) {
+    throw new Error('OAUTH_REFRESH_STORE_PATH must be an absolute path')
+  }
   return new RefreshTokenStore({
     ...options,
     filePath: filePath || path.join(os.homedir(), '.config', 'lovehouse-bridge', 'oauth-refresh-tokens.json'),
