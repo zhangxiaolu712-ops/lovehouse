@@ -2,6 +2,7 @@ import cors from 'cors'
 import express from 'express'
 
 import { installClaudeOAuth } from './oauth.js'
+import { createFileRefreshTokenStore } from './oauthRefreshStore.js'
 import {
   sendMessage as claudeSend,
   abortWindow,
@@ -61,6 +62,7 @@ const OWNER_USER_ID = process.env.OWNER_USER_ID || ''
 const LIVINGROOM_KEY = process.env.LIVINGROOM_KEY || ''
 const OAUTH_BASE = process.env.OAUTH_BASE_URL || 'https://tingtunehouse.duckdns.org'
 const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
+const OAUTH_REFRESH_STORE_PATH = process.env.OAUTH_REFRESH_STORE_PATH || ''
 const MCP_BASE = process.env.MCP_BASE_URL || `${OAUTH_BASE}/api`
 const MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
 const MCP_RESOURCE_METADATA = process.env.MCP_RESOURCE_METADATA_URL
@@ -399,6 +401,7 @@ const verifyClaudeOAuth = installClaudeOAuth(app, {
   ownerUserId: OWNER_USER_ID,
   tokenSecret: OAUTH_TOKEN_SECRET,
   checkRate,
+  refreshTokenStore: createFileRefreshTokenStore({ filePath: OAUTH_REFRESH_STORE_PATH }),
 })
 
 installMcpTransports(app, {
