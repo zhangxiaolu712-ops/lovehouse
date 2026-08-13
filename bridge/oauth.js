@@ -70,6 +70,7 @@ export function installClaudeOAuth(app, {
   ownerUserId,
   tokenSecret,
   checkRate,
+  clientRegistry,
   refreshTokenStore,
   tokenTtlSeconds = 30 * 24 * 60 * 60,
   refreshTokenTtlSeconds = 90 * 24 * 60 * 60,
@@ -91,8 +92,12 @@ export function installClaudeOAuth(app, {
     || typeof refreshTokenStore.rotate !== 'function') {
     throw new Error('OAuth refresh token store is required')
   }
+  if (!clientRegistry
+    || typeof clientRegistry.register !== 'function'
+    || typeof clientRegistry.get !== 'function') {
+    throw new Error('OAuth client registry is required')
+  }
   const protectedResourceMetadataUrl = metadataUrl.toString()
-  const clients = new Map()
   const codes = new Map()
 
   const cleanupTimer = setInterval(() => {
@@ -100,21 +105,27 @@ export function installClaudeOAuth(app, {
     for (const [code, value] of codes) {
       if (value.expires_at < now) codes.delete(code)
     }
-    for (const [clientId, value] of clients) {
-      if (value.created_at < now - 60 * 60_000) clients.delete(clientId)
-    }
   }, 5 * 60_000)
   cleanupTimer.unref?.()
 
-  function getValidClient(clientId, redirectUri) {
-    const client = clients.get(clientId)
+  async function getActiveClient(clientId) {
+    const client = await clientRegistry.get(clientId)
+    const now = Date.now()
+    if (!client
+      || client.revoked_at !== null
+      || (client.expires_at !== null && client.expires_at <= now)) return null
+    return client
+  }
+
+  async function getValidClient(clientId, redirectUri) {
+    const client = await getActiveClient(clientId)
     if (!client || !client.redirect_uris.includes(redirectUri)) return null
     return client
   }
 
-  function validateAuthorizationRequest(input) {
+  async function validateAuthorizationRequest(input) {
     if (input.response_type !== 'code') return 'unsupported_response_type'
-    const client = getValidClient(input.client_id, input.redirect_uri)
+    const client = await getValidClient(input.client_id, input.redirect_uri)
     if (!client || !client.grant_types.includes(AUTHORIZATION_CODE)) return 'invalid_client'
     if (!validatePkce(input.code_challenge, input.code_challenge_method)) return 'invalid_request'
     if (input.resource !== resource) return 'invalid_target'
@@ -176,7 +187,7 @@ export function installClaudeOAuth(app, {
   app.get('/.well-known/oauth-protected-resource', protectedResourceMetadata)
   app.get('/.well-known/oauth-protected-resource/mcp/claude', protectedResourceMetadata)
 
-  app.post('/oauth/register', (req, res) => {
+  app.post('/oauth/register', async (req, res) => {
     if (!checkRate(`oauth-register:${req.ip}`, 10, 15 * 60_000)) {
       return oauthError(res, 429, 'too_many_requests', 'try again later')
     }
@@ -207,9 +218,9 @@ export function installClaudeOAuth(app, {
     const clientSecret = tokenAuthMethod === 'client_secret_post'
       ? crypto.randomBytes(32).toString('hex')
       : null
-    const client = {
+    const storedClient = {
       client_id: clientId,
-      client_secret: clientSecret,
+      client_secret_digest: clientSecret ? digestClientSecret(clientSecret, tokenSecret) : null,
       client_secret_expires_at: 0,
       client_name: String(req.body.client_name || 'MCP client').slice(0, 120),
       redirect_uris: req.body.redirect_uris,
@@ -218,16 +229,23 @@ export function installClaudeOAuth(app, {
       application_type: applicationType,
       token_endpoint_auth_method: tokenAuthMethod,
       created_at: Date.now(),
+      expires_at: null,
+      revoked_at: null,
     }
-    clients.set(clientId, client)
+    try {
+      await clientRegistry.register(storedClient)
+    } catch (error) {
+      console.error('[oauth client registry error]', error.message)
+      return oauthError(res, 503, 'temporarily_unavailable', 'client registration service is unavailable')
+    }
     const registration = {
-      client_id: client.client_id,
-      client_name: client.client_name,
-      redirect_uris: client.redirect_uris,
-      grant_types: client.grant_types,
-      response_types: client.response_types,
-      application_type: client.application_type,
-      token_endpoint_auth_method: client.token_endpoint_auth_method,
+      client_id: storedClient.client_id,
+      client_name: storedClient.client_name,
+      redirect_uris: storedClient.redirect_uris,
+      grant_types: storedClient.grant_types,
+      response_types: storedClient.response_types,
+      application_type: storedClient.application_type,
+      token_endpoint_auth_method: storedClient.token_endpoint_auth_method,
     }
     if (clientSecret) {
       registration.client_secret = clientSecret
@@ -236,13 +254,20 @@ export function installClaudeOAuth(app, {
     return res.status(201).json(registration)
   })
 
-  app.get('/oauth/authorize', (req, res) => {
-    const validationError = validateAuthorizationRequest(req.query)
+  app.get('/oauth/authorize', async (req, res) => {
+    let validationError
+    let client
+    try {
+      validationError = await validateAuthorizationRequest(req.query)
+      if (!validationError) client = await clientRegistry.get(req.query.client_id)
+    } catch (error) {
+      console.error('[oauth client registry error]', error.message)
+      return oauthError(res, 503, 'temporarily_unavailable', 'authorization service is unavailable')
+    }
     if (validationError) return oauthError(res, 400, validationError, 'invalid authorization request')
     if (typeof req.query.state === 'string' && req.query.state.length > 2048) {
       return oauthError(res, 400, 'invalid_request', 'state is too long')
     }
-    const client = clients.get(req.query.client_id)
     const redirectOrigin = new URL(req.query.redirect_uri).origin
     const hidden = Object.entries({
       client_id: req.query.client_id,
@@ -260,7 +285,13 @@ export function installClaudeOAuth(app, {
   })
 
   app.post('/oauth/authorize', async (req, res) => {
-    const validationError = validateAuthorizationRequest(req.body)
+    let validationError
+    try {
+      validationError = await validateAuthorizationRequest(req.body)
+    } catch (error) {
+      console.error('[oauth client registry error]', error.message)
+      return oauthError(res, 503, 'temporarily_unavailable', 'authorization service is unavailable')
+    }
     if (validationError) return oauthError(res, 400, validationError, 'invalid authorization request')
     if (typeof req.body.state === 'string' && req.body.state.length > 2048) {
       return oauthError(res, 400, 'invalid_request', 'state is too long')
@@ -321,7 +352,13 @@ export function installClaudeOAuth(app, {
     if (requestedScope(req.body.scope) !== stored.scope) {
       return oauthError(res, 400, 'invalid_scope', 'scope does not match')
     }
-    const client = clients.get(req.body.client_id)
+    let client
+    try {
+      client = await getValidClient(req.body.client_id, req.body.redirect_uri)
+    } catch (error) {
+      console.error('[oauth client registry error]', error.message)
+      return oauthError(res, 503, 'temporarily_unavailable', 'token service is unavailable')
+    }
     if (!validClientAuthentication(client, req.body)) {
       return oauthError(res, 401, 'invalid_client', 'client authentication failed')
     }
@@ -368,6 +405,18 @@ export function installClaudeOAuth(app, {
     const scope = requestedScope(req.body.scope)
     if (!tokenDigest) return oauthError(res, 400, 'invalid_grant')
     if (!scope) return oauthError(res, 400, 'invalid_scope')
+    let registeredClient
+    try {
+      registeredClient = await getActiveClient(req.body.client_id)
+    } catch (error) {
+      console.error('[oauth client registry error]', error.message)
+      return oauthError(res, 503, 'temporarily_unavailable', 'token service is unavailable')
+    }
+    if (!registeredClient
+      || !registeredClient.grant_types.includes(REFRESH_TOKEN)
+      || !validClientAuthentication(registeredClient, req.body)) {
+      return oauthError(res, 400, 'invalid_grant')
+    }
     const requestedResource = req.body.resource || resource
     const replacementToken = createRefreshToken()
     try {
@@ -390,6 +439,7 @@ export function installClaudeOAuth(app, {
           && requestedResource === current.resource
           && current.scope === MCP_SCOPE
           && scope === current.scope
+          && current.client_id === registeredClient.client_id
           && validClientAuthentication(current, req.body),
       )
       if (rotated.status !== 'rotated') return oauthError(res, 400, 'invalid_grant')
