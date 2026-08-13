@@ -8,6 +8,15 @@ import {
   validateRedirectUris,
   verifyAccessToken,
 } from './security.js'
+import {
+  createRefreshToken,
+  digestClientSecret,
+  digestRefreshToken,
+} from './oauthRefreshStore.js'
+
+const AUTHORIZATION_CODE = 'authorization_code'
+const REFRESH_TOKEN = 'refresh_token'
+const MCP_SCOPE = 'mcp:tools'
 
 function escapeHtml(value) {
   return String(value || '')
@@ -29,6 +38,25 @@ function authorizationFailurePage(message) {
   <body><div class="card"><h2>没有打开门</h2><p>${escapeHtml(message)}</p><p>请关闭本页，再从 CC 重新点一次授权。</p></div></body></html>`
 }
 
+function validGrantTypes(value) {
+  if (value === undefined) return [AUTHORIZATION_CODE]
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2) return null
+  if (new Set(value).size !== value.length) return null
+  if (!value.includes(AUTHORIZATION_CODE)) return null
+  if (value.some(grant => ![AUTHORIZATION_CODE, REFRESH_TOKEN].includes(grant))) return null
+  return value
+}
+
+function validResponseTypes(value) {
+  if (value === undefined) return ['code']
+  return Array.isArray(value) && value.length === 1 && value[0] === 'code' ? value : null
+}
+
+function requestedScope(value) {
+  if (value === undefined || value === '') return MCP_SCOPE
+  return value === MCP_SCOPE ? value : null
+}
+
 /**
  * CC's OAuth/PKCE flow, extracted from the old monolithic Bridge so the MCP
  * transport remains an adapter rather than becoming the Memory System.
@@ -42,7 +70,9 @@ export function installClaudeOAuth(app, {
   ownerUserId,
   tokenSecret,
   checkRate,
+  refreshTokenStore,
   tokenTtlSeconds = 30 * 24 * 60 * 60,
+  refreshTokenTtlSeconds = 90 * 24 * 60 * 60,
 }) {
   if (!tokenSecret || tokenSecret.length < 32) {
     throw new Error('OAUTH_TOKEN_SECRET must contain at least 32 characters')
@@ -55,6 +85,11 @@ export function installClaudeOAuth(app, {
   }
   if (metadataUrl.protocol !== 'https:' || metadataUrl.hash || metadataUrl.username || metadataUrl.password) {
     throw new Error('MCP_RESOURCE_METADATA_URL must be a valid HTTPS URL')
+  }
+  if (!refreshTokenStore
+    || typeof refreshTokenStore.issue !== 'function'
+    || typeof refreshTokenStore.rotate !== 'function') {
+    throw new Error('OAuth refresh token store is required')
   }
   const protectedResourceMetadataUrl = metadataUrl.toString()
   const clients = new Map()
@@ -79,10 +114,25 @@ export function installClaudeOAuth(app, {
 
   function validateAuthorizationRequest(input) {
     if (input.response_type !== 'code') return 'unsupported_response_type'
-    if (!getValidClient(input.client_id, input.redirect_uri)) return 'invalid_client'
+    const client = getValidClient(input.client_id, input.redirect_uri)
+    if (!client || !client.grant_types.includes(AUTHORIZATION_CODE)) return 'invalid_client'
     if (!validatePkce(input.code_challenge, input.code_challenge_method)) return 'invalid_request'
     if (input.resource !== resource) return 'invalid_target'
+    if (!requestedScope(input.scope)) return 'invalid_scope'
     return null
+  }
+
+  function validClientAuthentication(clientLike, body) {
+    if (!clientLike || clientLike.client_id !== body.client_id) return false
+    if (clientLike.client_auth_method === 'client_secret_post'
+      || clientLike.token_endpoint_auth_method === 'client_secret_post') {
+      const expectedDigest = clientLike.client_secret_digest
+        || digestClientSecret(clientLike.client_secret, tokenSecret)
+      const presentedDigest = digestClientSecret(body.client_secret, tokenSecret)
+      return Boolean(expectedDigest && presentedDigest && safeEqual(expectedDigest, presentedDigest))
+    }
+    return (clientLike.client_auth_method === 'none'
+      || clientLike.token_endpoint_auth_method === 'none') && !body.client_secret
   }
 
   async function verifyOwnerCredentials(email, password) {
@@ -108,10 +158,10 @@ export function installClaudeOAuth(app, {
       token_endpoint: `${oauthBase}/oauth/token`,
       registration_endpoint: `${oauthBase}/oauth/register`,
       response_types_supported: ['code'],
-      grant_types_supported: ['authorization_code'],
+      grant_types_supported: [AUTHORIZATION_CODE, REFRESH_TOKEN],
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
-      scopes_supported: ['mcp:tools'],
+      scopes_supported: [MCP_SCOPE],
     })
   })
 
@@ -120,7 +170,7 @@ export function installClaudeOAuth(app, {
       resource,
       authorization_servers: [oauthBase],
       bearer_methods_supported: ['header'],
-      scopes_supported: ['mcp:tools'],
+      scopes_supported: [MCP_SCOPE],
     })
   }
   app.get('/.well-known/oauth-protected-resource', protectedResourceMetadata)
@@ -133,15 +183,24 @@ export function installClaudeOAuth(app, {
     if (!validateRedirectUris(req.body.redirect_uris)) {
       return oauthError(res, 400, 'invalid_redirect_uri', 'redirect_uris must contain 1-5 HTTPS or loopback URLs')
     }
-    if (req.body.grant_types && !req.body.grant_types.every(value => value === 'authorization_code')) {
-      return oauthError(res, 400, 'invalid_client_metadata', 'only authorization_code is supported')
+    const grantTypes = validGrantTypes(req.body.grant_types)
+    if (!grantTypes) {
+      return oauthError(res, 400, 'invalid_client_metadata', 'only authorization_code with optional refresh_token is supported')
     }
-    if (req.body.response_types && !req.body.response_types.every(value => value === 'code')) {
+    const responseTypes = validResponseTypes(req.body.response_types)
+    if (!responseTypes) {
       return oauthError(res, 400, 'invalid_client_metadata', 'only code response type is supported')
     }
     const tokenAuthMethod = req.body.token_endpoint_auth_method || 'none'
     if (!['none', 'client_secret_post'].includes(tokenAuthMethod)) {
       return oauthError(res, 400, 'invalid_client_metadata', 'unsupported token endpoint auth method')
+    }
+    const applicationType = req.body.application_type || 'native'
+    if (!['native', 'web'].includes(applicationType)) {
+      return oauthError(res, 400, 'invalid_client_metadata', 'unsupported application type')
+    }
+    if (applicationType === 'native' && tokenAuthMethod !== 'none') {
+      return oauthError(res, 400, 'invalid_client_metadata', 'native clients must use token endpoint auth method none')
     }
 
     const clientId = `lh_${crypto.randomBytes(16).toString('hex')}`
@@ -154,9 +213,9 @@ export function installClaudeOAuth(app, {
       client_secret_expires_at: 0,
       client_name: String(req.body.client_name || 'MCP client').slice(0, 120),
       redirect_uris: req.body.redirect_uris,
-      grant_types: ['authorization_code'],
-      response_types: ['code'],
-      application_type: req.body.application_type || 'native',
+      grant_types: grantTypes,
+      response_types: responseTypes,
+      application_type: applicationType,
       token_endpoint_auth_method: tokenAuthMethod,
       created_at: Date.now(),
     }
@@ -192,6 +251,7 @@ export function installClaudeOAuth(app, {
       code_challenge: req.query.code_challenge,
       code_challenge_method: req.query.code_challenge_method,
       resource: req.query.resource,
+      scope: requestedScope(req.query.scope),
       response_type: 'code',
     }).map(([name, value]) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`).join('')
 
@@ -222,6 +282,7 @@ export function installClaudeOAuth(app, {
       redirect_uri: req.body.redirect_uri,
       code_challenge: req.body.code_challenge,
       resource: req.body.resource,
+      scope: requestedScope(req.body.scope),
       expires_at: Date.now() + 600_000,
     })
     const redirect = new URL(req.body.redirect_uri)
@@ -230,10 +291,24 @@ export function installClaudeOAuth(app, {
     return res.redirect(redirect.toString())
   })
 
-  app.post('/oauth/token', (req, res) => {
-    if (req.body.grant_type !== 'authorization_code') {
-      return oauthError(res, 400, 'unsupported_grant_type')
+  function refreshRecord({ rawToken, client, familyId, generation, expiresAt }) {
+    return {
+      token_digest: digestRefreshToken(rawToken, tokenSecret),
+      family_id: familyId,
+      generation,
+      client_id: client.client_id,
+      client_auth_method: client.token_endpoint_auth_method,
+      client_secret_digest: client.client_secret_digest
+        || (client.client_secret ? digestClientSecret(client.client_secret, tokenSecret) : null),
+      owner_user_id: ownerUserId,
+      resource,
+      scope: MCP_SCOPE,
+      created_at: Date.now(),
+      expires_at: expiresAt,
     }
+  }
+
+  async function exchangeAuthorizationCode(req, res) {
     const stored = codes.get(req.body.code)
     codes.delete(req.body.code)
     if (!stored || stored.expires_at < Date.now()) return oauthError(res, 400, 'invalid_grant')
@@ -243,19 +318,20 @@ export function installClaudeOAuth(app, {
     if (req.body.resource !== stored.resource || stored.resource !== resource) {
       return oauthError(res, 400, 'invalid_target', 'resource does not match')
     }
+    if (requestedScope(req.body.scope) !== stored.scope) {
+      return oauthError(res, 400, 'invalid_scope', 'scope does not match')
+    }
     const client = clients.get(req.body.client_id)
-    const invalidClient = !client
-      || (client.token_endpoint_auth_method === 'client_secret_post'
-        && (!req.body.client_secret || !safeEqual(client.client_secret, req.body.client_secret)))
-      || (client.token_endpoint_auth_method === 'none' && req.body.client_secret)
-    if (invalidClient) return oauthError(res, 401, 'invalid_client', 'client authentication failed')
+    if (!validClientAuthentication(client, req.body)) {
+      return oauthError(res, 401, 'invalid_client', 'client authentication failed')
+    }
 
     const verifierHash = hashPkceVerifier(req.body.code_verifier)
     if (!verifierHash || !safeEqual(verifierHash, stored.code_challenge)) {
       return oauthError(res, 400, 'invalid_grant', 'PKCE verification failed')
     }
     try {
-      return res.json({
+      const response = {
         access_token: issueAccessToken({
           clientId: req.body.client_id,
           ownerUserId,
@@ -265,12 +341,86 @@ export function installClaudeOAuth(app, {
         }),
         token_type: 'Bearer',
         expires_in: tokenTtlSeconds,
-        scope: 'mcp:tools',
-      })
+        scope: MCP_SCOPE,
+      }
+      if (client.grant_types.includes(REFRESH_TOKEN)) {
+        const rawToken = createRefreshToken()
+        const expiresAt = Date.now() + refreshTokenTtlSeconds * 1000
+        await refreshTokenStore.issue(refreshRecord({
+          rawToken,
+          client,
+          familyId: crypto.randomBytes(16).toString('hex'),
+          generation: 0,
+          expiresAt,
+        }))
+        response.refresh_token = rawToken
+        response.refresh_token_expires_in = refreshTokenTtlSeconds
+      }
+      return res.json(response)
     } catch (error) {
       console.error('[oauth token error]', error.message)
       return oauthError(res, 503, 'temporarily_unavailable', 'token service is not configured')
     }
+  }
+
+  async function exchangeRefreshToken(req, res) {
+    const tokenDigest = digestRefreshToken(req.body.refresh_token, tokenSecret)
+    const scope = requestedScope(req.body.scope)
+    if (!tokenDigest) return oauthError(res, 400, 'invalid_grant')
+    if (!scope) return oauthError(res, 400, 'invalid_scope')
+    const requestedResource = req.body.resource || resource
+    const replacementToken = createRefreshToken()
+    try {
+      const rotated = await refreshTokenStore.rotate(
+        tokenDigest,
+        current => refreshRecord({
+          rawToken: replacementToken,
+          client: {
+            client_id: current.client_id,
+            token_endpoint_auth_method: current.client_auth_method,
+            client_secret: null,
+            client_secret_digest: current.client_secret_digest,
+          },
+          familyId: current.family_id,
+          generation: current.generation + 1,
+          expiresAt: current.expires_at,
+        }),
+        current => current.owner_user_id === ownerUserId
+          && current.resource === resource
+          && requestedResource === current.resource
+          && current.scope === MCP_SCOPE
+          && scope === current.scope
+          && validClientAuthentication(current, req.body),
+      )
+      if (rotated.status !== 'rotated') return oauthError(res, 400, 'invalid_grant')
+
+      return res.json({
+        access_token: issueAccessToken({
+          clientId: rotated.record.client_id,
+          ownerUserId,
+          audience: rotated.record.resource,
+          secret: tokenSecret,
+          ttlSeconds: tokenTtlSeconds,
+        }),
+        token_type: 'Bearer',
+        expires_in: tokenTtlSeconds,
+        scope: rotated.record.scope,
+        refresh_token: replacementToken,
+        refresh_token_expires_in: Math.max(
+          0,
+          Math.floor((rotated.record.expires_at - Date.now()) / 1000),
+        ),
+      })
+    } catch (error) {
+      console.error('[oauth refresh error]', error.message)
+      return oauthError(res, 503, 'temporarily_unavailable', 'token service is not configured')
+    }
+  }
+
+  app.post('/oauth/token', async (req, res) => {
+    if (req.body.grant_type === AUTHORIZATION_CODE) return exchangeAuthorizationCode(req, res)
+    if (req.body.grant_type === REFRESH_TOKEN) return exchangeRefreshToken(req, res)
+    return oauthError(res, 400, 'unsupported_grant_type')
   })
 
   return function verifyOAuthToken(req, res, next) {
