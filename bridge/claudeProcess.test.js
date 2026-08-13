@@ -2,7 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
-import { createClaudeSessionManager, isValidWindowId } from './claudeProcess.js'
+import {
+  createClaudeSessionManager,
+  isValidWindowId,
+  normalizeRecentHistory,
+  RECENT_HISTORY_LIMITS,
+} from './claudeProcess.js'
 import { CLAUDE_ALLOWED_TOOLS } from './claudePolicy.js'
 
 const WINDOW_A = '11111111-1111-4111-8111-111111111111'
@@ -118,7 +123,7 @@ test('first turn binds --session-id and later turns use only --resume', () => {
   complete(spawned[1].proc, { sessionId: SESSION_A, text: 'second reply' })
 
   assert.deepEqual(text, ['reply', 'second reply'])
-  assert.deepEqual(sessions.map(session => session.mode), ['created', 'resumed'])
+  assert.deepEqual(sessions.map(session => session.mode), ['new_session', 'resumed_session'])
   assert.equal(done[1].session_id, SESSION_A)
   assert.equal(done[1].usage.input_tokens, 12)
   assert.equal(done[1].usage.total_cost_usd, 0.001)
@@ -316,22 +321,188 @@ test('unrelated resume failures stay explicit and do not create a new session', 
   assert.deepEqual(errors, ['authentication failed'])
 })
 
-test('lost Bridge window state creates a new session and tells the frontend', () => {
+test('lost Bridge window state recovers a valid known session before creating anything', () => {
   const { manager, spawned, logs } = harness([SESSION_B])
   const sessions = []
+  const done = []
   manager.sendMessage(
     WINDOW_A,
     'after bridge restart',
     'system',
-    { onSession: session => sessions.push(session) },
-    { knownSessionId: SESSION_A },
+    {
+      onSession: session => sessions.push(session),
+      onDone: result => done.push(result),
+    },
+    { knownSessionId: SESSION_A, sessionIntent: 'continue' },
   )
 
-  assert.equal(spawned[0].args.at(spawned[0].args.indexOf('--session-id') + 1), SESSION_B)
-  assert.equal(spawned[0].args.includes('--resume'), false)
-  assert.equal(sessions[0].fallback, true)
-  assert.equal(sessions[0].fallback_reason, 'bridge_state_lost')
-  assert.match(logs[0], /reason=bridge_state_lost/)
+  assert.equal(spawned[0].args.at(spawned[0].args.indexOf('--resume') + 1), SESSION_A)
+  assert.equal(spawned[0].args.includes('--session-id'), false)
+  assert.equal(sessions[0].mode, 'resumed_known_session')
+  assert.equal(sessions[0].fallback, false)
+  complete(spawned[0].proc, { sessionId: SESSION_A, text: 'recovered' })
+  assert.equal(done[0].session_id, SESSION_A)
+  assert.equal(done[0].session_mode, 'resumed_known_session')
+  assert.deepEqual(logs, [])
+  assert.deepEqual(manager.getStats(), { windows: 1, busy: 0, turns: 1, fallbacks: 0 })
+})
+
+test('invalid or missing known session ids use an explicit controlled fallback', () => {
+  for (const [knownSessionId, reason] of [
+    ['not-a-session', 'known_session_invalid'],
+    [null, 'known_session_missing'],
+  ]) {
+    const { manager, spawned, logs } = harness()
+    const sessions = []
+    manager.sendMessage(
+      WINDOW_A,
+      'continue',
+      'system',
+      { onSession: session => sessions.push(session) },
+      { knownSessionId, sessionIntent: 'continue' },
+    )
+
+    assert.equal(spawned.length, 1)
+    assert.equal(spawned[0].args.at(spawned[0].args.indexOf('--session-id') + 1), SESSION_A)
+    assert.equal(sessions[0].mode, 'fallback_new_session')
+    assert.equal(sessions[0].fallback, true)
+    assert.equal(sessions[0].fallback_reason, reason)
+    assert.equal(sessions[0].history_bootstrapped, false)
+    assert.match(logs[0], new RegExp(`reason=${reason}`))
+  }
+})
+
+test('a non-session failure while recovering a known session never triggers fallback', () => {
+  const { manager, spawned } = harness()
+  const errors = []
+  manager.sendMessage(
+    WINDOW_A,
+    'recover me',
+    'system',
+    { onError: error => errors.push(error) },
+    { knownSessionId: SESSION_A, sessionIntent: 'continue' },
+  )
+  spawned[0].proc.stderr.emit('data', Buffer.from('permission denied by upstream'))
+  spawned[0].proc.emit('close', 1)
+
+  assert.equal(spawned.length, 1)
+  assert.deepEqual(errors, ['permission denied by upstream'])
+  assert.deepEqual(manager.getStats(), { windows: 1, busy: 0, turns: 0, fallbacks: 0 })
+
+  manager.sendMessage(WINDOW_A, 'retry recovery', 'system', {})
+  assert.equal(spawned.length, 2)
+  assert.equal(spawned[1].args.at(spawned[1].args.indexOf('--resume') + 1), SESSION_A)
+  assert.equal(spawned[1].args.includes('--session-id'), false)
+})
+
+test('reset prevents a stale known session from being restored and stays window-scoped', () => {
+  const { manager, spawned } = harness()
+  manager.sendMessage(WINDOW_A, 'a', 'system', {})
+  complete(spawned[0].proc, { sessionId: SESSION_A })
+  manager.sendMessage(WINDOW_B, 'b', 'system', {})
+  complete(spawned[1].proc, { sessionId: SESSION_B })
+
+  assert.equal(manager.resetSession(WINDOW_A), true)
+  const sessions = []
+  manager.sendMessage(
+    WINDOW_A,
+    'stale retry',
+    'system',
+    { onSession: session => sessions.push(session) },
+    { knownSessionId: SESSION_A, sessionIntent: 'continue' },
+  )
+
+  assert.equal(spawned[2].args.includes('--resume'), false)
+  assert.equal(spawned[2].args.at(spawned[2].args.indexOf('--session-id') + 1), SESSION_C)
+  assert.equal(sessions[0].mode, 'new_session')
+  manager.sendMessage(WINDOW_B, 'b again', 'system', {})
+  assert.equal(spawned[3].args.at(spawned[3].args.indexOf('--resume') + 1), SESSION_B)
+})
+
+test('recent history validates roles, item limits, total caps and current-message duplication', () => {
+  const message = { role: 'user', content: 'hello' }
+  assert.deepEqual(normalizeRecentHistory([message], 'different'), [message])
+  assert.throws(
+    () => normalizeRecentHistory(Array.from({ length: RECENT_HISTORY_LIMITS.messages + 1 }, () => message)),
+    /cannot exceed 30 messages/,
+  )
+  assert.throws(() => normalizeRecentHistory([{ role: 'system', content: 'no' }]), /invalid role/)
+  assert.throws(
+    () => normalizeRecentHistory([{ role: 'user', content: 'a'.repeat(2_001) }]),
+    /content is too long/,
+  )
+  assert.throws(
+    () => normalizeRecentHistory(Array.from({ length: 11 }, () => ({
+      role: 'assistant', content: 'a'.repeat(2_000),
+    }))),
+    /total character limit/,
+  )
+  assert.throws(
+    () => normalizeRecentHistory(Array.from({ length: 5 }, () => ({
+      role: 'assistant', content: '😀'.repeat(2_000),
+    }))),
+    /total byte limit/,
+  )
+  assert.throws(() => normalizeRecentHistory([message], 'hello'), /must not repeat the current message/)
+})
+
+test('fallback history is injected once without duplicating the current message', () => {
+  const { manager, spawned } = harness([SESSION_B])
+  const sessions = []
+  const history = [
+    { role: 'user', content: 'older question' },
+    { role: 'assistant', content: 'older answer' },
+  ]
+  manager.sendMessage(
+    WINDOW_A,
+    'current unique question',
+    'system',
+    { onSession: session => sessions.push(session) },
+    { knownSessionId: SESSION_A, recentHistory: history, sessionIntent: 'continue' },
+  )
+  assert.equal(spawned[0].args[1], 'current unique question')
+  spawned[0].proc.stderr.emit('data', Buffer.from('No conversation found with session ID'))
+  spawned[0].proc.emit('close', 1)
+
+  const fallbackPrompt = spawned[1].args[1]
+  assert.match(fallbackPrompt, /<recent_history_bootstrap>/)
+  assert.match(fallbackPrompt, /older question/)
+  assert.equal(fallbackPrompt.match(/current unique question/g)?.length, 1)
+  assert.equal(sessions.at(-1).mode, 'fallback_new_session')
+  assert.equal(sessions.at(-1).history_bootstrapped, true)
+  complete(spawned[1].proc, { sessionId: SESSION_B })
+
+  manager.sendMessage(WINDOW_A, 'next turn', 'system', {})
+  assert.equal(spawned[2].args[1], 'next turn')
+  assert.equal(spawned[2].args.at(spawned[2].args.indexOf('--resume') + 1), SESSION_B)
+})
+
+test('fallback still requires the exact MCP tool set and fails closed when MCP is unavailable', () => {
+  const { manager, spawned } = harness([SESSION_B])
+  const errors = []
+  const done = []
+  manager.sendMessage(
+    WINDOW_A,
+    'recover',
+    'system',
+    { onError: error => errors.push(error), onDone: result => done.push(result) },
+    { knownSessionId: SESSION_A, sessionIntent: 'continue' },
+  )
+  spawned[0].proc.stderr.emit('data', Buffer.from('No conversation found with session ID'))
+  spawned[0].proc.emit('close', 1)
+
+  assert.deepEqual(
+    spawned[1].args.slice(
+      spawned[1].args.indexOf('--allowedTools') + 1,
+      spawned[1].args.indexOf('--permission-mode'),
+    ),
+    CLAUDE_ALLOWED_TOOLS,
+  )
+  emitMcpInit(spawned[1].proc, { sessionId: SESSION_B, status: 'failed', tools: [] })
+  assert.deepEqual(done, [])
+  assert.deepEqual(errors, ['LoveHouse MCP failed to initialize (failed)'])
+  assert.equal(spawned[1].proc.killed, true)
+  assert.equal(spawned.length, 2)
 })
 
 test('stream parser forwards thinking and falls back to final result text when partials are absent', () => {

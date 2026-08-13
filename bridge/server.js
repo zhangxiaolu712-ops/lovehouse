@@ -8,6 +8,7 @@ import {
   resetSession,
   getStats as getClaudeStats,
   isValidWindowId,
+  normalizeRecentHistory,
 } from './claudeProcess.js'
 import {
   createSupabaseRest,
@@ -262,10 +263,22 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (!isValidWindowId(windowId)) {
     return res.status(400).json({ error: 'valid window_id required' })
   }
-  if (req.body.newSession) resetSession(windowId)
 
   const message = req.body.message.trim()
   const systemPrompt = req.body.system || SYSTEM_PROMPT
+  const requestedIntent = req.body.session_intent
+  if (requestedIntent !== undefined && requestedIntent !== 'new' && requestedIntent !== 'continue') {
+    return res.status(400).json({ error: 'session_intent must be new or continue' })
+  }
+  const sessionIntent = requestedIntent
+    || (req.body.newSession ? 'new' : (req.body.known_session_id ? 'continue' : 'new'))
+  let recentHistory
+  try {
+    recentHistory = normalizeRecentHistory(req.body.recent_history, message)
+  } catch (error) {
+    return res.status(400).json({ error: error.message })
+  }
+  if (sessionIntent === 'new') resetSession(windowId)
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
@@ -288,6 +301,7 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
       if (!closed) {
         res.write(`data: ${JSON.stringify({
           session_id: result.session_id,
+          session_mode: result.session_mode,
           usage: result.usage,
         })}\n\n`)
         res.write('data: [DONE]\n\n')
@@ -301,7 +315,11 @@ app.post('/chat', verifyOwnerBearer, (req, res) => {
         res.end()
       }
     },
-  }, { knownSessionId: req.body.known_session_id })
+  }, {
+    knownSessionId: req.body.known_session_id,
+    recentHistory,
+    sessionIntent,
+  })
 })
 
 app.post('/reset', verifyOwnerBearer, (req, res) => {

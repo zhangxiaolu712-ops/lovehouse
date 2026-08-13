@@ -8,6 +8,12 @@ const NEW_SESSION_KEY = 'lovehouse_chat_new'
 
 const DEFAULT_BRIDGE = '/api'
 const DEFAULT_SYSTEM = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
+const RECENT_HISTORY_LIMITS = Object.freeze({
+  messages: 30,
+  messageCharacters: 2_000,
+  totalCharacters: 20_000,
+  totalBytes: 32_000,
+})
 
 async function getAuthToken() {
   const { data } = await supabase.auth.getSession()
@@ -85,6 +91,35 @@ function buildContent(msg) {
   return parts
 }
 
+export function buildRecentHistory(messages, currentMessage) {
+  const currentIndex = messages.lastIndexOf(currentMessage)
+  const candidates = currentIndex >= 0 ? messages.slice(0, currentIndex) : messages
+  const selected = []
+  let totalCharacters = 0
+  let totalBytes = 0
+
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const entry = candidates[index]
+    if ((entry.role !== 'user' && entry.role !== 'assistant') || entry.notice || entry.error) continue
+    if (typeof entry.content !== 'string' || !entry.content.trim()) continue
+    const content = [...entry.content.trim()]
+      .slice(0, RECENT_HISTORY_LIMITS.messageCharacters)
+      .join('')
+    const characters = [...content].length
+    const bytes = new TextEncoder().encode(content).byteLength
+    if (
+      selected.length >= RECENT_HISTORY_LIMITS.messages
+      || totalCharacters + characters > RECENT_HISTORY_LIMITS.totalCharacters
+      || totalBytes + bytes > RECENT_HISTORY_LIMITS.totalBytes
+    ) break
+    selected.push({ role: entry.role, content })
+    totalCharacters += characters
+    totalBytes += bytes
+  }
+
+  return selected.reverse()
+}
+
 async function streamBridge(messages, config, cb) {
   const { onThinking, onText, onSession, onDone, onError } = cb
   const lastUser = [...messages].reverse().find(m => m.role === 'user')
@@ -93,6 +128,10 @@ async function streamBridge(messages, config, cb) {
   const windowId = getChatWindowId()
   const isNew = sessionStorage.getItem(NEW_SESSION_KEY) === '1'
   const knownSessionId = getChatSession().session_id
+  const sessionIntent = isNew || messages.filter(m => m.role === 'user').length <= 1
+    ? 'new'
+    : 'continue'
+  const recentHistory = buildRecentHistory(messages, lastUser)
 
   try {
     const token = await getAuthToken()
@@ -105,9 +144,11 @@ async function streamBridge(messages, config, cb) {
       body: JSON.stringify({
         window_id: windowId,
         ...(knownSessionId ? { known_session_id: knownSessionId } : {}),
+        session_intent: sessionIntent,
+        ...(recentHistory.length ? { recent_history: recentHistory } : {}),
         message: lastUser.content || '',
         system: config.system || DEFAULT_SYSTEM,
-        newSession: isNew || messages.filter(m => m.role === 'user').length <= 1,
+        newSession: sessionIntent === 'new',
       }),
     })
 
@@ -147,6 +188,9 @@ async function streamBridge(messages, config, cb) {
           }
           if (evt.session_id) {
             session = { ...(session || {}), session_id: evt.session_id }
+          }
+          if (evt.session_mode) {
+            session = { ...(session || {}), mode: evt.session_mode }
           }
           if (evt.usage) usage = evt.usage
         } catch {}

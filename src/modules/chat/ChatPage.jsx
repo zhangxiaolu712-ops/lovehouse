@@ -114,13 +114,17 @@ export default function ChatPage() {
         saveChatSession({
           ...current,
           session_id: sessionInfo.session_id,
+          lastMode: sessionInfo.mode,
+          historyBootstrapped: sessionInfo.history_bootstrapped === true,
           lastActive: Date.now(),
           fallbackCount: (current.fallbackCount || 0) + (sessionInfo.fallback ? 1 : 0),
         })
         if (sessionInfo.fallback) {
           setMessages(prev => [...prev, {
             role: 'assistant',
-            content: '原来的 Claude 会话无法恢复，已明确创建并绑定一个新会话。',
+            content: sessionInfo.history_bootstrapped
+              ? '原来的 Claude 会话无法恢复，已创建新会话，并仅用本窗口最近记录恢复有限上下文。'
+              : '原来的 Claude 会话无法恢复，已明确创建并绑定一个无历史的新会话。',
             time: Date.now(),
             notice: true,
           }])

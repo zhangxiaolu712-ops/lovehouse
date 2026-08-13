@@ -12,8 +12,77 @@ import {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const SESSION_MISSING_PATTERN = /(?:no conversation found|session(?: id)?.*(?:not found|does not exist|missing|invalid)|failed to (?:load|resume).*(?:session|conversation)|unable to resume)/i
 
+export const RECENT_HISTORY_LIMITS = Object.freeze({
+  messages: 30,
+  messageCharacters: 2_000,
+  totalCharacters: 20_000,
+  totalBytes: 32_000,
+})
+
 export function isValidWindowId(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value)
+}
+
+function characterLength(value) {
+  return [...value].length
+}
+
+export function normalizeRecentHistory(value, currentMessage = '') {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) throw new Error('recent_history must be an array')
+  if (value.length > RECENT_HISTORY_LIMITS.messages) {
+    throw new Error(`recent_history cannot exceed ${RECENT_HISTORY_LIMITS.messages} messages`)
+  }
+
+  let totalCharacters = 0
+  let totalBytes = 0
+  const normalized = value.map((entry, index) => {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(`recent_history[${index}] must be an object`)
+    }
+    if (entry.role !== 'user' && entry.role !== 'assistant') {
+      throw new Error(`recent_history[${index}] has an invalid role`)
+    }
+    if (typeof entry.content !== 'string' || !entry.content.trim()) {
+      throw new Error(`recent_history[${index}] requires text content`)
+    }
+    const content = entry.content.trim()
+    const characters = characterLength(content)
+    if (characters > RECENT_HISTORY_LIMITS.messageCharacters) {
+      throw new Error(`recent_history[${index}] content is too long`)
+    }
+    totalCharacters += characters
+    totalBytes += Buffer.byteLength(content, 'utf8')
+    return { role: entry.role, content }
+  })
+
+  if (totalCharacters > RECENT_HISTORY_LIMITS.totalCharacters) {
+    throw new Error('recent_history exceeds the total character limit')
+  }
+  if (totalBytes > RECENT_HISTORY_LIMITS.totalBytes) {
+    throw new Error('recent_history exceeds the total byte limit')
+  }
+  const last = normalized.at(-1)
+  if (last?.role === 'user' && last.content === currentMessage.trim()) {
+    throw new Error('recent_history must not repeat the current message')
+  }
+  return normalized
+}
+
+function buildFallbackPrompt(message, recentHistory) {
+  if (!recentHistory.length) return message
+  const transcript = recentHistory
+    .map(entry => `<message role="${entry.role}">\n${entry.content}\n</message>`)
+    .join('\n')
+  return [
+    '<recent_history_bootstrap>',
+    'The following bounded transcript was supplied by the current LoveHouse window only for one-time session recovery context.',
+    transcript,
+    '</recent_history_bootstrap>',
+    '<current_user_message>',
+    message,
+    '</current_user_message>',
+  ].join('\n')
 }
 
 function shortId(value) {
@@ -105,26 +174,34 @@ export function createClaudeSessionManager({
   const childEnv = buildClaudeChildEnv(sourceEnv)
   const policyArgs = buildClaudePolicyArgs({ mcpUrl })
   const windows = new Map()
+  const resetWindows = new Set()
 
-  function getOrCreateWindow(windowId) {
-    let state = windows.get(windowId)
-    if (!state) {
-      state = {
-        sessionId: createSessionId(),
-        active: null,
-        turns: 0,
-        fallbackCount: 0,
-        lastUsage: {},
-        lastActive: Date.now(),
-      }
-      windows.set(windowId, state)
+  function createWindow(windowId, sessionId = createSessionId(), resumeNext = false) {
+    const state = {
+      sessionId,
+      resumeNext,
+      active: null,
+      turns: 0,
+      fallbackCount: 0,
+      lastUsage: {},
+      lastActive: Date.now(),
     }
+    windows.set(windowId, state)
     return state
   }
 
-  function spawnAttempt(windowId, windowState, message, systemPrompt, callbacks, resume, fallback = null) {
+  function spawnAttempt(
+    windowId,
+    windowState,
+    message,
+    systemPrompt,
+    callbacks,
+    resume,
+    { mode, fallback = null, recentHistory = [] },
+  ) {
+    const prompt = fallback ? buildFallbackPrompt(message, recentHistory) : message
     const args = [
-      '-p', message,
+      '-p', prompt,
       '--output-format', 'stream-json',
       '--include-partial-messages',
       '--verbose',
@@ -136,9 +213,10 @@ export function createClaudeSessionManager({
 
     callbacks.onSession?.({
       session_id: windowState.sessionId,
-      mode: resume ? 'resumed' : 'created',
+      mode,
       fallback: Boolean(fallback),
       ...(fallback ? { fallback_reason: fallback.reason } : {}),
+      ...(fallback ? { history_bootstrapped: recentHistory.length > 0 } : {}),
     })
 
     const proc = spawnProcess(claudePath, args, { env: childEnv })
@@ -180,6 +258,7 @@ export function createClaudeSessionManager({
       if (resume && failed && !attempt.fullText && isMissingSessionFailure(attempt.stderr, attempt.result)) {
         const previousSessionId = windowState.sessionId
         windowState.sessionId = createSessionId()
+        windowState.resumeNext = false
         windowState.fallbackCount += 1
         logger.error?.(
           `[claude session fallback] window=${shortId(windowId)} session=${shortId(previousSessionId)} reason=session_not_found`
@@ -191,7 +270,11 @@ export function createClaudeSessionManager({
           systemPrompt,
           callbacks,
           false,
-          { previousSessionId, reason: 'session_not_found' },
+          {
+            mode: 'fallback_new_session',
+            fallback: { previousSessionId, reason: 'session_not_found' },
+            recentHistory,
+          },
         )
       }
 
@@ -221,6 +304,7 @@ export function createClaudeSessionManager({
         if (attempt.fullText) callbacks.onText?.(attempt.fullText)
       }
       windowState.turns += 1
+      windowState.resumeNext = true
       windowState.lastActive = Date.now()
       windowState.lastUsage = normalizeUsage(attempt.result, attempt.assistantUsage)
       callbacks.onDone?.({
@@ -228,6 +312,7 @@ export function createClaudeSessionManager({
         session_id: windowState.sessionId,
         usage: windowState.lastUsage,
         fallback: Boolean(fallback),
+        session_mode: mode,
       })
     }
 
@@ -235,7 +320,13 @@ export function createClaudeSessionManager({
     proc.on('close', code => finish(code))
   }
 
-  function sendMessage(windowId, message, systemPrompt, callbacks = {}, { knownSessionId = null } = {}) {
+  function sendMessage(
+    windowId,
+    message,
+    systemPrompt,
+    callbacks = {},
+    { knownSessionId = null, recentHistory = [], sessionIntent = 'new' } = {},
+  ) {
     if (!isValidWindowId(windowId)) {
       callbacks.onError?.('invalid window_id')
       return false
@@ -245,13 +336,60 @@ export function createClaudeSessionManager({
       callbacks.onError?.('busy')
       return false
     }
-    const windowState = getOrCreateWindow(windowId)
+    if (sessionIntent !== 'new' && sessionIntent !== 'continue') {
+      callbacks.onError?.('invalid session intent')
+      return false
+    }
+    let normalizedHistory
+    try {
+      normalizedHistory = normalizeRecentHistory(recentHistory, message)
+    } catch (error) {
+      callbacks.onError?.(error.message)
+      return false
+    }
+
+    const resetPending = resetWindows.delete(windowId)
+    if (existing) {
+      spawnAttempt(
+        windowId,
+        existing,
+        message,
+        systemPrompt,
+        callbacks,
+        existing.resumeNext,
+        { mode: existing.resumeNext ? 'resumed_session' : 'new_session' },
+      )
+      return true
+    }
+
+    if (sessionIntent === 'continue' && !resetPending && isValidWindowId(knownSessionId)) {
+      const recoveredState = createWindow(windowId, knownSessionId, true)
+      spawnAttempt(
+        windowId,
+        recoveredState,
+        message,
+        systemPrompt,
+        callbacks,
+        true,
+        { mode: 'resumed_known_session', recentHistory: normalizedHistory },
+      )
+      return true
+    }
+
+    const windowState = createWindow(windowId)
     let fallback = null
-    if (!existing && isValidWindowId(knownSessionId)) {
-      fallback = { previousSessionId: knownSessionId, reason: 'bridge_state_lost' }
+    if (sessionIntent === 'continue' && !resetPending) {
+      const knownProvided = knownSessionId !== undefined
+        && knownSessionId !== null
+        && knownSessionId !== ''
+      fallback = {
+        previousSessionId: knownProvided ? knownSessionId : null,
+        reason: knownProvided ? 'known_session_invalid' : 'known_session_missing',
+      }
       windowState.fallbackCount += 1
+      const loggedSession = knownProvided ? 'invalid' : 'missing'
       logger.error?.(
-        `[claude session fallback] window=${shortId(windowId)} session=${shortId(knownSessionId)} reason=bridge_state_lost`
+        `[claude session fallback] window=${shortId(windowId)} session=${loggedSession} reason=${fallback.reason}`
       )
     }
     spawnAttempt(
@@ -260,8 +398,12 @@ export function createClaudeSessionManager({
       message,
       systemPrompt,
       callbacks,
-      windowState.turns > 0,
-      fallback,
+      false,
+      {
+        mode: fallback ? 'fallback_new_session' : 'new_session',
+        fallback,
+        recentHistory: normalizedHistory,
+      },
     )
     return true
   }
@@ -280,6 +422,7 @@ export function createClaudeSessionManager({
     const existed = windows.has(windowId)
     abortWindow(windowId)
     windows.delete(windowId)
+    resetWindows.add(windowId)
     return existed
   }
 
