@@ -415,6 +415,23 @@ export class SupabaseMemoryRepository {
     return envelope.memory
   }
 
+  async expandSource(id, { actor, requestId }) {
+    const sourceId = Number.parseInt(id, 10)
+    if (!Number.isSafeInteger(sourceId) || sourceId < 1) {
+      throw new TypeError('source_id must be a positive integer')
+    }
+    const envelope = this.unwrapEnvelope(await this.rest(
+      'POST',
+      this.runtimePath('expand_source', fixedActor(actor)),
+      {
+        p_owner_id: this.requireOwnerId(),
+        p_request_id: requestId,
+        p_source_id: sourceId,
+      }
+    ))
+    return envelope.source
+  }
+
   async proposeShared(id, reason, { actor, requestId }) {
     const envelope = this.unwrapEnvelope(await this.rest(
       'POST',

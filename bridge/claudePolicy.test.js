@@ -12,7 +12,7 @@ import {
 
 test('the explicit Claude whitelist matches the reviewed Bridge routes', () => {
   assert.doesNotThrow(() => assertClaudeToolPolicyMatchesBridge())
-  assert.equal(CLAUDE_MCP_TOOL_NAMES.length, 13)
+  assert.equal(CLAUDE_MCP_TOOL_NAMES.length, 14)
   assert.equal(CLAUDE_ALLOWED_TOOLS.every(name => name.startsWith('mcp__lovehouse__')), true)
 })
 

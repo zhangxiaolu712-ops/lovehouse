@@ -19,6 +19,7 @@ export const CLAUDE_MCP_TOOL_NAMES = Object.freeze([
   'get_memory',
   'revise_memory',
   'propose_shared_candidate',
+  'expand_source',
 ])
 
 export const CLAUDE_ALLOWED_TOOLS = Object.freeze(

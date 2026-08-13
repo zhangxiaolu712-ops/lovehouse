@@ -130,6 +130,58 @@ test('Claude can write only to Claude Memory', async () => {
   assert.equal(saved.author, MEMORY_ACTORS.CLAUDE)
 })
 
+test('Memory writes accept optional bounded summary and source descriptors without changing old calls', async () => {
+  const { repository, service } = createService([])
+  await service.write('gpt', { content: 'old compatible call' })
+  assert.equal(repository.lastInsert.summary, null)
+  assert.equal(repository.lastInsert.sources, undefined)
+
+  await service.write('gpt', {
+    content: 'full body remains intact',
+    summary: 'bounded summary',
+    sources: [{
+      source_channel: 'chatgpt_app', source_kind: 'manual_quote',
+      locator: { reference: 'selected' }, quote_text: 'quoted evidence',
+    }],
+  })
+  assert.equal(repository.lastInsert.content, 'full body remains intact')
+  assert.equal(repository.lastInsert.summary, 'bounded summary')
+  assert.equal(repository.lastInsert.sources[0].quote_text, 'quoted evidence')
+})
+
+test('source locators reject browser state and Supabase-specific storage paths', async () => {
+  const { service } = createService([])
+  for (const locator of [
+    { window_id: 'browser-window' },
+    { localStorage: { key: 'chat' } },
+    { external_ref: 'https://project.supabase.co/rest/v1/messages?id=eq.1' },
+  ]) {
+    await assert.rejects(service.write('gpt', {
+      content: 'portable source only',
+      sources: [{ source_channel: 'api_chat', source_kind: 'api_chat_message', locator }],
+    }), /browser or storage state|Supabase REST path/)
+  }
+})
+
+test('expand_source combines an authorized descriptor with the configured resolver', async () => {
+  const calls = []
+  const service = new MemoryService({
+    repository: {
+      transactionalAudit: true,
+      async expandSource(id, context) {
+        calls.push([id, context])
+        return { source_id: id, source_channel: 'chatgpt_app', source_kind: 'manual_quote', quote_text: 'snapshot' }
+      },
+    },
+    auditSink: { persistent: true, async record() {} },
+    sourceResolver: { async resolve(source, page) { return { source, page } } },
+  })
+  const result = await service.expandSource('gpt', { source_id: 7, limit: 3 }, { requestId: 'expand-7' })
+  assert.equal(result.source.quote_text, 'snapshot')
+  assert.equal(result.page.limit, 3)
+  assert.deepEqual(calls[0], [7, { actor: 'gpt', requestId: 'expand-7' }])
+})
+
 for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
   test(`${actor} diary author is fixed by the server and inherited by revisions`, async () => {
     const { repository, service } = createService([])

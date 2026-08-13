@@ -47,7 +47,7 @@ test('enabled runtime repository uses only the canonical repository', () => {
   )
 })
 
-test('all ten memory MCP tools fail closed while Memory System is disabled', async () => {
+test('all eleven memory MCP tools fail closed while Memory System is disabled', async () => {
   const memoryService = new MemoryService({
     repository: createRuntimeMemoryRepository({ enabled: false }),
     auditSink: { persistent: true, async record() {} },
@@ -72,6 +72,7 @@ test('all ten memory MCP tools fail closed while Memory System is disabled', asy
     ['get_memory', { memory_id: 1 }],
     ['revise_memory', { memory_id: 1, content: 'blocked', reason: 'test' }],
     ['propose_shared_candidate', { memory_id: 1, reason: 'test' }],
+    ['expand_source', { source_id: 1 }],
   ]
 
   for (const [name, args] of calls) {

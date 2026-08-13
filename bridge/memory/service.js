@@ -6,6 +6,14 @@ import { NullMemoryAuditSink } from './audit.js'
 import { semanticFallbackAllowed } from './embedding.js'
 import { bundledHouseRulesProvider, STARTER_PACK_SCHEMA_VERSION } from './houseRules.js'
 
+const unavailableSourceResolver = Object.freeze({
+  async resolve() {
+    const error = new Error('Memory source expansion is not configured')
+    error.code = 'MEMORY_SOURCE_RESOLVER_NOT_CONFIGURED'
+    throw error
+  },
+})
+
 function stringOrNull(value, maximum = 500) {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -62,6 +70,80 @@ function positiveId(value, label = 'memory_id') {
   return parsed
 }
 
+function portableLocator(value, label) {
+  const encoded = JSON.stringify(value)
+  if (encoded.length > 4_000) throw new TypeError(`${label} is too large`)
+  const forbiddenKey = /^(window_?id|component_?state|local_?storage|session_?storage|supabase_?(url|path))$/i
+  const visit = item => {
+    if (Array.isArray(item)) return item.forEach(visit)
+    if (!item || typeof item !== 'object') {
+      if (typeof item === 'string' && /\.supabase\.co\/rest\/v1/i.test(item)) {
+        throw new TypeError(`${label} cannot contain a Supabase REST path`)
+      }
+      return
+    }
+    for (const [key, nested] of Object.entries(item)) {
+      if (forbiddenKey.test(key)) throw new TypeError(`${label} contains browser or storage state`)
+      visit(nested)
+    }
+  }
+  visit(value)
+  return structuredClone(value)
+}
+
+function normalizeSources(input) {
+  if (!Object.prototype.hasOwnProperty.call(input, 'sources')) return undefined
+  if (!Array.isArray(input.sources) || input.sources.length > 8) {
+    throw new TypeError('sources must be an array with at most eight items')
+  }
+  return input.sources.map((source, index) => {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      throw new TypeError(`sources[${index}] must be an object`)
+    }
+    if (source.source_id !== undefined) {
+      return { source_id: positiveId(source.source_id, `sources[${index}].source_id`) }
+    }
+
+    const sourceChannel = stringOrNull(source.source_channel, 80)
+    const sourceKind = stringOrNull(source.source_kind, 80)
+    if (!sourceChannel) throw new TypeError(`sources[${index}].source_channel is required`)
+    if (!/^[a-z][a-z0-9_]{0,79}$/.test(sourceKind || '')) {
+      throw new TypeError(`sources[${index}].source_kind is invalid`)
+    }
+    const locator = source.locator === undefined ? {} : source.locator
+    if (!locator || typeof locator !== 'object' || Array.isArray(locator)) {
+      throw new TypeError(`sources[${index}].locator must be an object`)
+    }
+    if (source.quote_text !== undefined && source.quote_text !== null
+      && String(source.quote_text).trim().length > 10_000) {
+      throw new TypeError(`sources[${index}].quote_text is too long`)
+    }
+    const quoteText = stringOrNull(source.quote_text, 10_000)
+    if (sourceKind === 'lovehouse_message') {
+      positiveId(locator.message_id, `sources[${index}].locator.message_id`)
+      if (quoteText) throw new TypeError('LoveHouse sources cannot provide quote_text')
+    } else if (['lovehouse_message_range', 'lovehouse_range'].includes(sourceKind)) {
+      const start = positiveId(locator.start_message_id, `sources[${index}].locator.start_message_id`)
+      const end = positiveId(locator.end_message_id, `sources[${index}].locator.end_message_id`)
+      if (end < start || end - start > 49) throw new TypeError('LoveHouse source range must span at most 50 ids')
+      if (quoteText) throw new TypeError('LoveHouse sources cannot provide quote_text')
+    } else if (sourceKind === 'manual_quote' && !quoteText) {
+      throw new TypeError('manual_quote requires quote_text')
+    } else if (sourceKind === 'manual_summary' && quoteText) {
+      throw new TypeError('manual_summary cannot provide quote_text')
+    } else if (!['manual_quote', 'manual_summary'].includes(sourceKind) && quoteText) {
+      throw new TypeError('Only manual_quote sources can provide quote_text')
+    }
+
+    return {
+      source_channel: sourceChannel,
+      source_kind: sourceKind,
+      locator: portableLocator(locator, `sources[${index}].locator`),
+      ...(quoteText ? { quote_text: quoteText } : {}),
+    }
+  })
+}
+
 function normalizedMemory(input, { partial = false } = {}) {
   const memory = {}
   const has = key => Object.prototype.hasOwnProperty.call(input, key)
@@ -73,6 +155,11 @@ function normalizedMemory(input, { partial = false } = {}) {
     memory.content = input.content.trim()
   }
   if (!partial || has('title')) memory.title = stringOrNull(input.title, 500)
+  if (!partial || has('summary')) {
+    if (input.summary !== undefined && input.summary !== null
+      && String(input.summary).trim().length > 2_000) throw new TypeError('summary is too long')
+    memory.summary = stringOrNull(input.summary, 2000)
+  }
   if (!partial || has('memory_type') || has('memoryType') || has('kind') || has('tag')) {
     memory.memory_type = memoryTypeFromInput(input)
   }
@@ -83,6 +170,8 @@ function normalizedMemory(input, { partial = false } = {}) {
   if (!partial && (has('source_ref') || has('sourceRef'))) {
     memory.source_ref = stringOrNull(input.source_ref || input.sourceRef, 500)
   }
+  const sources = normalizeSources(input)
+  if (sources !== undefined) memory.sources = sources
   return memory
 }
 
@@ -96,6 +185,7 @@ export class MemoryService {
     embeddingProvider = null,
     rankingProfile = 'ranking_v1',
     houseRulesProvider = bundledHouseRulesProvider,
+    sourceResolver = unavailableSourceResolver,
     clock = () => new Date(),
   }) {
     if (!repository) throw new Error('MemoryRepository is required')
@@ -111,6 +201,8 @@ export class MemoryService {
     this.embeddingProvider = embeddingProvider
     this.rankingProfile = rankingProfile
     this.houseRulesProvider = houseRulesProvider
+    if (typeof sourceResolver?.resolve !== 'function') throw new Error('Memory source resolver is required')
+    this.sourceResolver = sourceResolver
     this.clock = clock
   }
 
@@ -285,6 +377,22 @@ export class MemoryService {
         mode: 'random_history',
         items,
       }
+    })
+  }
+
+  async expandSource(actor, input = {}, context = {}) {
+    return this.audited(actor, 'expand_source', context, async trusted => {
+      this.accessPolicy.assertActor(actor)
+      this.accessPolicy.assertNoSpaceOverride(input)
+      const sourceId = positiveId(input.source_id ?? input.sourceId, 'source_id')
+      const source = await this.repository.expandSource(sourceId, {
+        actor,
+        requestId: trusted.requestId,
+      })
+      return this.sourceResolver.resolve(source, {
+        cursorMessageId: input.cursor_message_id ?? input.cursorMessageId ?? null,
+        limit: input.limit,
+      })
     })
   }
 
