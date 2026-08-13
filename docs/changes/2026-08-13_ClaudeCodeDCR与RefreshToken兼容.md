@@ -12,6 +12,7 @@
 - refresh token 使用后立即轮换；旧 token 重放会撤销整个 family；无效、撤销、过期或绑定不匹配均 fail closed。
 - #137 只读边界复审复现了两个文件 store 实例可同时读取 active token 并各自轮换的并发缺陷；以同目录原子 lock directory 包住完整 read-modify-write，修复同主机多进程双签发窗口。遗留 lock 会使操作超时失败，必须在确认无实例持有后由运维处理，不会被自动删除或绕过。
 - 同次复审确认可选相对路径会随 PM2 release cwd 漂移；`OAUTH_REFRESH_STORE_PATH` 现仅接受绝对路径，默认 HOME 外置路径保持不变。
+- 同次复审确认仅原子 rename 未保证断电后的 rotation durability；写入现为临时文件 fsync → 同目录 rename → 目录 fsync，避免主机掉电后回退到旧 active token 状态。
 - 保留 `client_secret_post` 的 confidential web client 边界；native client 只能使用 `none`，不新增 OAuth 绕过。
 
 ## 为什么这样做

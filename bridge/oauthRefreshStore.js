@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
+import { chmod, mkdir, open, readFile, rename, rm } from 'fs/promises'
 import os from 'os'
 import path from 'path'
 
@@ -199,9 +199,23 @@ export class RefreshTokenStore {
     await mkdir(directory, { recursive: true, mode: 0o700 })
     await chmod(directory, 0o700)
     const temporary = `${this.filePath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`
-    await writeFile(temporary, `${JSON.stringify(state)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    const temporaryHandle = await open(temporary, 'wx', 0o600)
+    try {
+      await temporaryHandle.writeFile(`${JSON.stringify(state)}\n`, 'utf8')
+      await temporaryHandle.sync()
+    } finally {
+      await temporaryHandle.close()
+    }
     await rename(temporary, this.filePath)
     await chmod(this.filePath, 0o600)
+    if (process.platform !== 'win32') {
+      const directoryHandle = await open(directory, 'r')
+      try {
+        await directoryHandle.sync()
+      } finally {
+        await directoryHandle.close()
+      }
+    }
   }
 
   #prune(state) {
