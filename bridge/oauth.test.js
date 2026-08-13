@@ -9,6 +9,10 @@ import express from 'express'
 
 import { installClaudeOAuth } from './oauth.js'
 import {
+  createFileOAuthClientRegistry,
+  createMemoryOAuthClientRegistry,
+} from './oauthClientRegistry.js'
+import {
   createFileRefreshTokenStore,
   createMemoryRefreshTokenStore,
   digestRefreshToken,
@@ -30,12 +34,13 @@ function installTestOAuth(app, overrides = {}) {
     ownerUserId: 'owner-1',
     tokenSecret,
     checkRate: () => true,
+    clientRegistry: createMemoryOAuthClientRegistry(),
     refreshTokenStore: createMemoryRefreshTokenStore(),
     ...overrides,
   })
 }
 
-async function createServer(t, overrides = {}) {
+async function startServer(overrides = {}) {
   const app = express()
   app.use(express.json())
   app.use(express.urlencoded({ extended: false }))
@@ -44,8 +49,19 @@ async function createServer(t, overrides = {}) {
   const server = await new Promise(resolve => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening))
   })
-  t.after(() => new Promise(resolve => server.close(resolve)))
-  return `http://127.0.0.1:${server.address().port}`
+  return {
+    base: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise((resolve, reject) => {
+      if (!server.listening) return resolve()
+      return server.close(error => error ? reject(error) : resolve())
+    }),
+  }
+}
+
+async function createServer(t, overrides = {}) {
+  const instance = await startServer(overrides)
+  t.after(instance.close)
+  return instance.base
 }
 
 function mockOwnerLogin(t) {
@@ -233,6 +249,153 @@ test('dynamic registration accepts the real Claude Code auth-code plus refresh c
   assert.equal('client_secret' in body, false)
 })
 
+test('DCR client registration survives a Bridge restart with strict metadata intact', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-oauth-clients-'))
+  const registryPath = path.join(directory, 'oauth-clients.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+
+  const firstServer = await startServer({
+    clientRegistry: createFileOAuthClientRegistry({ filePath: registryPath }),
+  })
+  t.after(firstServer.close)
+  const registrationResult = await register(firstServer.base)
+  assert.equal(registrationResult.response.status, 201)
+  const confidentialResult = await register(firstServer.base, claudeCodeRegistration({
+    redirect_uris: ['https://client.example/callback'],
+    application_type: 'web',
+    token_endpoint_auth_method: 'client_secret_post',
+  }))
+  assert.equal(confidentialResult.response.status, 201)
+  assert.match(confidentialResult.body.client_secret, /^[a-f0-9]{64}$/)
+
+  const storedText = await readFile(registryPath, 'utf8')
+  const storedState = JSON.parse(storedText).clients
+  const stored = storedState[registrationResult.body.client_id]
+  assert.deepEqual(stored.redirect_uris, registrationResult.body.redirect_uris)
+  assert.deepEqual(stored.grant_types, ['authorization_code', 'refresh_token'])
+  assert.deepEqual(stored.response_types, ['code'])
+  assert.equal(stored.token_endpoint_auth_method, 'none')
+  assert.equal(stored.application_type, 'native')
+  assert.equal(Number.isFinite(stored.created_at), true)
+  assert.equal(stored.expires_at, null)
+  assert.equal(stored.revoked_at, null)
+  const storedConfidential = storedState[confidentialResult.body.client_id]
+  assert.equal(storedConfidential.token_endpoint_auth_method, 'client_secret_post')
+  assert.equal(typeof storedConfidential.client_secret_digest, 'string')
+  assert.equal(storedText.includes(confidentialResult.body.client_secret), false)
+  if (process.platform !== 'win32') {
+    assert.equal((await stat(registryPath)).mode & 0o777, 0o600)
+    assert.equal((await stat(directory)).mode & 0o777, 0o700)
+  }
+
+  await firstServer.close()
+  mockOwnerLogin(t)
+  const restartedBase = await createServer(t, {
+    clientRegistry: createFileOAuthClientRegistry({ filePath: registryPath }),
+  })
+  const authorization = await authorize(restartedBase, registrationResult.body)
+  const tokens = await exchangeCode(restartedBase, registrationResult.body, authorization)
+  assert.equal(tokens.response.status, 200)
+  assert.match(tokens.body.access_token, /^lh1\./)
+  assert.match(tokens.body.refresh_token, /^lh_rt_/)
+})
+
+test('expired, revoked, unknown and redirect-mismatched clients remain invalid', async t => {
+  const now = Date.now()
+  const registry = createMemoryOAuthClientRegistry({ now: () => now })
+  const client = {
+    client_id: 'lh_11111111111111111111111111111111',
+    client_secret_digest: null,
+    client_secret_expires_at: 0,
+    client_name: 'Strict client',
+    redirect_uris: ['http://127.0.0.1:43123/callback'],
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+    application_type: 'native',
+    token_endpoint_auth_method: 'none',
+    created_at: now - 2_000,
+    expires_at: now - 1_000,
+    revoked_at: null,
+  }
+  await registry.register(client)
+  const base = await createServer(t, { clientRegistry: registry })
+  const verifier = 'a'.repeat(64)
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
+  const request = overrides => nativeFetch(`${base}/oauth/authorize?${new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: client.redirect_uris[0],
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    resource,
+    scope: 'mcp:tools',
+    ...overrides,
+  })}`)
+
+  const expired = await request()
+  assert.equal(expired.status, 400)
+  assert.equal((await expired.json()).error, 'invalid_client')
+
+  const activeRegistry = createMemoryOAuthClientRegistry({ now: () => now })
+  await activeRegistry.register({ ...client, expires_at: null })
+  await activeRegistry.revoke(client.client_id)
+  const revokedBase = await createServer(t, { clientRegistry: activeRegistry })
+  const revoked = await nativeFetch(`${revokedBase}/oauth/authorize?${new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: client.redirect_uris[0],
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    resource,
+    scope: 'mcp:tools',
+  })}`)
+  assert.equal(revoked.status, 400)
+  assert.equal((await revoked.json()).error, 'invalid_client')
+
+  const unknown = await request({ client_id: 'lh_22222222222222222222222222222222' })
+  assert.equal(unknown.status, 400)
+  assert.equal((await unknown.json()).error, 'invalid_client')
+  const wrongRedirect = await request({ redirect_uri: 'http://127.0.0.1:43124/callback' })
+  assert.equal(wrongRedirect.status, 400)
+  assert.equal((await wrongRedirect.json()).error, 'invalid_client')
+})
+
+test('file client registry serializes writers and corrupt state fails closed', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-oauth-client-lock-'))
+  const registryPath = path.join(directory, 'oauth-clients.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const first = createFileOAuthClientRegistry({ filePath: registryPath })
+  const second = createFileOAuthClientRegistry({ filePath: registryPath })
+  const record = suffix => ({
+    client_id: `lh_${suffix.repeat(32)}`,
+    client_secret_digest: null,
+    client_secret_expires_at: 0,
+    client_name: `Client ${suffix}`,
+    redirect_uris: [`http://127.0.0.1:4312${suffix === 'a' ? '1' : '2'}/callback`],
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+    application_type: 'native',
+    token_endpoint_auth_method: 'none',
+    created_at: Date.now(),
+    expires_at: null,
+    revoked_at: null,
+  })
+  await Promise.all([first.register(record('a')), second.register(record('b'))])
+  assert.equal((await first.get(record('a').client_id)).client_name, 'Client a')
+  assert.equal((await second.get(record('b').client_id)).client_name, 'Client b')
+  await first.revoke(record('a').client_id)
+  const reloaded = createFileOAuthClientRegistry({ filePath: registryPath })
+  assert.equal(Number.isFinite((await reloaded.get(record('a').client_id)).revoked_at), true)
+
+  await writeFile(registryPath, '{not-json', 'utf8')
+  const corruptBase = await createServer(t, {
+    clientRegistry: createFileOAuthClientRegistry({ filePath: registryPath }),
+  })
+  const failedRegistration = await register(corruptBase)
+  assert.equal(failedRegistration.response.status, 503)
+  assert.equal(failedRegistration.body.error, 'temporarily_unavailable')
+})
+
 test('dynamic registration rejects unsupported grants and invalid client metadata combinations', async t => {
   const base = await createServer(t)
   const invalidCases = [
@@ -343,9 +506,11 @@ test('confidential web clients keep client-secret binding across refresh rotatio
 test('refresh token state persists for reuse without storing the raw token', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-oauth-'))
   const storePath = path.join(directory, 'refresh-tokens.json')
+  const registryPath = path.join(directory, 'oauth-clients.json')
   t.after(() => rm(directory, { recursive: true, force: true }))
 
   const firstBase = await createServer(t, {
+    clientRegistry: createFileOAuthClientRegistry({ filePath: registryPath }),
     refreshTokenStore: createFileRefreshTokenStore({ filePath: storePath }),
   })
   const { registration, tokens } = await issueClaudeCodeTokens(t, firstBase)
@@ -358,6 +523,7 @@ test('refresh token state persists for reuse without storing the raw token', asy
   }
 
   const restartedBase = await createServer(t, {
+    clientRegistry: createFileOAuthClientRegistry({ filePath: registryPath }),
     refreshTokenStore: createFileRefreshTokenStore({ filePath: storePath }),
   })
   const reused = await refresh(restartedBase, registration, tokens.refresh_token)
@@ -425,14 +591,17 @@ test('missing or corrupt file state never makes an old refresh token valid', asy
 test('rotating OAUTH_TOKEN_SECRET invalidates existing access and refresh tokens', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-oauth-secret-'))
   const storePath = path.join(directory, 'refresh-tokens.json')
+  const registryPath = path.join(directory, 'oauth-clients.json')
   t.after(() => rm(directory, { recursive: true, force: true }))
   const firstBase = await createServer(t, {
+    clientRegistry: createFileOAuthClientRegistry({ filePath: registryPath }),
     refreshTokenStore: createFileRefreshTokenStore({ filePath: storePath }),
   })
   const { registration, tokens } = await issueClaudeCodeTokens(t, firstBase)
   const rotatedSecret = 'rotated-oauth-signing-secret-that-is-long-enough'
   const rotatedBase = await createServer(t, {
     tokenSecret: rotatedSecret,
+    clientRegistry: createFileOAuthClientRegistry({ filePath: registryPath }),
     refreshTokenStore: createFileRefreshTokenStore({ filePath: storePath }),
   })
 
@@ -497,7 +666,15 @@ test('OAuth refuses unsafe startup configuration', () => {
     /OAuth refresh token store is required/,
   )
   assert.throws(
+    () => installTestOAuth(app, { clientRegistry: null }),
+    /OAuth client registry is required/,
+  )
+  assert.throws(
     () => createFileRefreshTokenStore({ filePath: 'release-relative/refresh-tokens.json' }),
     /OAUTH_REFRESH_STORE_PATH must be an absolute path/,
+  )
+  assert.throws(
+    () => createFileOAuthClientRegistry({ filePath: 'release-relative/oauth-clients.json' }),
+    /OAUTH_CLIENT_REGISTRY_PATH must be an absolute path/,
   )
 })

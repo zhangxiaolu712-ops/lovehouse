@@ -224,7 +224,28 @@ Claude CLI 每轮只显式加载一个名为 `lovehouse` 的远程 MCP，并以 
 
 小客厅的 Owner JWT、GPT API Key 与 Claude OAuth 均先在 Bridge 完成认证。认证后的三项小客厅能力通过服务端专用 Supabase key 访问数据库，并经过 `createLivingroomRest` 限制为 `livingroom` 的读取和新增；该通道不能选择或访问其他 P0 表。服务端 key 不进入前端构建。
 
-Claude MCP 的无令牌响应必须以 `401` 和 `WWW-Authenticate` 指向可公网读取的受保护资源元数据。元数据中的 `resource` 与 Claude 中填写的 MCP URL 必须完全一致；Bridge 启动时还会拒绝缺失或少于 32 字符的 `OAUTH_TOKEN_SECRET`，避免运行一个无法签发有效令牌的假健康 OAuth 服务。DCR 只接受既有 `authorization_code`，或 Claude Code 实际使用的 `authorization_code + refresh_token`；响应类型仍固定为 `code`，native/public 客户端仍固定 `none + PKCE S256`。refresh token 每次使用都会轮换，只以服务端 HMAC 摘要持久化并绑定 owner、client、resource 与 scope；同一主机上共享状态文件的 Bridge 实例通过文件级互斥完成 read-modify-write，持久化采用临时文件 fsync、同目录原子 rename 与目录 fsync，旧 token 重放会撤销同一 token family，不能扩大既有 MCP、RLS 或小客厅权限。不同主机之间不共享该文件，不能作为多 VPS 分布式 store 使用。
+Claude MCP 的无令牌响应必须以 `401` 和 `WWW-Authenticate` 指向可公网读取的受保护资源元数据。元数据中的 `resource` 与 Claude 中填写的 MCP URL 必须完全一致；Bridge 启动时还会拒绝缺失或少于 32 字符的 `OAUTH_TOKEN_SECRET`，避免运行一个无法签发有效令牌的假健康 OAuth 服务。DCR 只接受既有 `authorization_code`，或 Claude Code 实际使用的 `authorization_code + refresh_token`；响应类型仍固定为 `code`，native/public 客户端仍固定 `none + PKCE S256`。DCR 客户端登记保存在服务账号私有配置目录，记录精确 redirect、grant/response type、application type、token auth method、创建/过期/撤销状态；confidential client 只落盘 secret 的 HMAC 摘要。Bridge 重启后仍按同一登记执行严格 client/redirect 校验，未知、过期、撤销或不匹配客户端继续 fail closed。refresh token 每次使用都会轮换，只以服务端 HMAC 摘要持久化并绑定 owner、client、resource 与 scope；两个 OAuth 文件仓库均使用同目录文件锁、临时文件 fsync、同目录原子 rename 与目录 fsync。旧 refresh token 重放会撤销同一 token family，不能扩大既有 MCP、RLS 或小客厅权限。不同主机之间不共享这些文件，不能作为多 VPS 分布式 store 使用。
+
+#### OAuth runtime state 迁移与恢复
+
+OAuth runtime state 由两个彼此独立、都位于 release 目录之外的私有文件组成：
+
+- `oauth-clients.json`：DCR client identity 与严格授权 metadata；默认 `~/.config/lovehouse-bridge/oauth-clients.json`。
+- `oauth-refresh-tokens.json`：refresh token family 的 HMAC digest、绑定、轮换与撤销状态；默认 `~/.config/lovehouse-bridge/oauth-refresh-tokens.json`。
+
+同一 VPS 上的普通 release 切换或 PM2 restart 必须继续使用同一服务账号、同一绝对路径与同一个 `OAUTH_TOKEN_SECRET`，不得把这两个文件复制进 release 目录或在部署时清空。运行时目录保持 0700、文件保持 0600；备份也必须按 secret 级别保护，不得输出文件内容到日志或工单。
+
+迁移到新 VPS 时必须先停止旧 Bridge 的所有写入，确认没有旧实例或 lock 持有者，再以单写者方式安全迁移两个文件、相同的 `OAUTH_TOKEN_SECRET`、相同的绝对路径和正确的服务账号 owner/mode。新 VPS 验证通过并切流前不得让两台 Bridge 同时写这些本地文件；需要 active-active 时必须另行实现具备事务/CAS 的共享 store，不能复制本地文件冒充共享状态。
+
+状态丢失或损坏必须 fail closed，不做“恢复为空等于全部有效”的兼容：
+
+- 丢失 `oauth-clients.json`：Claude 缓存的旧 `client_id` 返回 `invalid_client`；refresh 也因缺少 active client 登记而失败。重新 DCR 并完成一次人工授权，建立新的 client 与 refresh family。
+- 丢失 `oauth-refresh-tokens.json`：尚未过期的签名 access token 可继续到自身 expiry；旧 refresh token 返回 `invalid_grant`。保留的 client 登记仍可用于重新走 Authorization Code + PKCE，签发新的 token family。
+- 两个文件都丢失：旧 refresh 不可用，旧 client 不可继续授权；重新 DCR + 人工授权。旧 access token 只在签名 secret 未变且自身未过期时仍有效。
+- 任一文件损坏或 IO/权限异常：相关 DCR、authorize、token 操作返回 503，不自动覆盖损坏文件；停止 Bridge 后从受控备份恢复，无法恢复时按上述“状态丢失”路径重新授权。
+- `OAUTH_TOKEN_SECRET` 丢失或轮换：旧 access token、refresh digest 与 confidential client secret digest 均不可继续验证；按安全轮换流程归档旧 runtime state，并要求客户端重新 DCR/授权。不得为兼容而回填旧 secret 或放宽校验。
+
+回滚到不识别 client registry 的旧 Bridge 版本时，该版本不会消费或更新 `oauth-clients.json`，但不得删除它；回滚期间新产生的内存 DCR 登记不会被持久化。再次前滚后会恢复读取原文件中的登记，回滚期间注册的客户端则必须重新 DCR。
 
 ### MCP 工具（GPT + Claude 共享 14 个）
 
@@ -378,6 +399,7 @@ MemoryService 管理同一套规则
 | LIVINGROOM_KEY | VPS pm2 env | GPT MCP 认证密钥（不入 git） |
 | OAUTH_BASE_URL | VPS pm2 env | OAuth issuer base URL |
 | OAUTH_TOKEN_SECRET | VPS pm2 env | 签发 MCP 短期访问令牌的随机密钥（至少 32 字符，不入 git） |
+| OAUTH_CLIENT_REGISTRY_PATH | VPS pm2 env（可选） | DCR 客户端登记文件的绝对路径；默认位于服务账号私有配置目录，0600 文件/0700 目录，confidential secret 仅保存 HMAC 摘要；相对路径会在启动时拒绝 |
 | OAUTH_REFRESH_STORE_PATH | VPS pm2 env（可选） | refresh token 状态文件的绝对路径；默认位于服务账号私有配置目录，只保存摘要与绑定信息，不保存原始 token；相对路径会在启动时拒绝 |
 | MCP_RESOURCE_URL | VPS pm2 env | MCP 对外资源地址；使用 Cloudflare 代理时填写代理后的完整地址 |
 | MCP_RESOURCE_METADATA_URL | VPS pm2 env | 受保护资源元数据公网 HTTPS 地址；默认使用 `${MCP_BASE_URL}/.well-known/oauth-protected-resource/mcp/claude` |
