@@ -41,12 +41,12 @@
 
 ## 验证
 
-- Memory V2 定向测试：11/11 通过，覆盖 AI/human 权重、Starter Pack 三类选择、降级/恢复状态。
-- Bridge 全量测试：172/172 通过。
+- Memory V2 定向测试：12/12 通过，覆盖 AI/human 权重、Starter Pack Token 优先级、故障隔离与降级/恢复状态。
+- Bridge 全量测试：173/173 通过。
 - 前端 lint：通过，仅仓库既有 warnings。
 - 前端 build：通过，仅既有大 chunk 提示。
 - Node syntax 与 `git diff --check`：通过。
-- Disposable Supabase：fresh apply、中文拆分短语召回/无关中文排除、行为测试、rollback、re-apply 与 DB lint 全部通过（Actions run `32367681966`）。
+- Disposable Supabase：fresh apply、中文 fallback、Starter Pack 完整候选池/current-only/隔离行为、rollback、re-apply 与 DB lint 全部通过（Actions run `32369088614`）。
 
 ## 风险、回滚与下一步
 
