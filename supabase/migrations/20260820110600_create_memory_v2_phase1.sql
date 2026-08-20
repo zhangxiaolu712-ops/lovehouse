@@ -139,7 +139,7 @@ set search_path = pg_catalog, public, extensions
 as $$
 declare
   item jsonb;
-  source_id uuid;
+  materialized_source_id uuid;
   source_row public.memory_v2_sources%rowtype;
   source_ordinal integer := 0;
 begin
@@ -155,8 +155,8 @@ begin
     end if;
 
     if nullif(item ->> 'source_id', '') is not null then
-      source_id := (item ->> 'source_id')::uuid;
-      select * into source_row from public.memory_v2_sources where id = source_id;
+      materialized_source_id := (item ->> 'source_id')::uuid;
+      select * into source_row from public.memory_v2_sources where id = materialized_source_id;
       if not found or source_row.owner_id <> p_owner_id or source_row.space_key <> p_space_key then
         raise exception 'source is outside the private namespace' using errcode = '42501';
       end if;
@@ -179,11 +179,11 @@ begin
         nullif(item ->> 'quote_text', ''),
         coalesce(item -> 'provenance', '{}'::jsonb),
         p_actor
-      ) returning id into source_id;
+      ) returning id into materialized_source_id;
     end if;
 
     insert into public.memory_v2_revision_sources (revision_id, source_id, ordinal)
-    values (p_revision_id, source_id, source_ordinal)
+    values (p_revision_id, materialized_source_id, source_ordinal)
     on conflict (revision_id, source_id) do nothing;
     source_ordinal := source_ordinal + 1;
   end loop;

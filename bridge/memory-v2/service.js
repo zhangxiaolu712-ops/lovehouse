@@ -9,7 +9,6 @@ function fixedActor(actor) {
   if (!ACTORS.has(actor)) throw new TypeError('A fixed Memory V2 actor is required')
   return actor
 }
-
 function clamp(value, minimum = 0, maximum = 1) {
   return Math.min(maximum, Math.max(minimum, Number(value) || 0))
 }
@@ -335,4 +334,3 @@ export class MemoryV2Service {
     return { ...shared, current_time: currentTime, time_status: currentTime ? 'available' : 'unavailable' }
   }
 }
-

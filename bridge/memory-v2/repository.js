@@ -4,7 +4,6 @@ function fixedActor(actor) {
   if (!ACTORS.has(actor)) throw new TypeError('A fixed Memory V2 actor is required')
   return actor
 }
-
 function boundedLimit(value, fallback, maximum) {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed) || parsed < 1) return fallback
@@ -113,4 +112,3 @@ export class SupabaseMemoryV2Repository {
     })
   }
 }
-
