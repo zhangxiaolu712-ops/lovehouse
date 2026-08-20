@@ -28,8 +28,7 @@ export class SupabaseMemoryV2Repository {
   }
 
   async rpc(name, body) {
-    const payload = await this.rest('POST', `rpc/${name}`, body)
-    return Array.isArray(payload) ? payload[0] : payload
+    return this.rest('POST', `rpc/${name}`, body)
   }
 
   remember(actor, content, options = {}) {
