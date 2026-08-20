@@ -2,7 +2,7 @@
 
 - 日期：2026-08-20
 - 执行者：Codex
-- 状态：本地实现与回归完成，等待 disposable Supabase CI；未部署、未合并
+- 状态：本地实现、disposable Supabase 与回归完成；未部署、未合并，等待人工复审
 
 ## 做了什么
 
@@ -46,7 +46,7 @@
 - 前端 lint：通过，仅仓库既有 warnings。
 - 前端 build：通过，仅既有大 chunk 提示。
 - Node syntax 与 `git diff --check`：通过。
-- Disposable Supabase：等待分支 push 后的 GitHub Actions 终态，未完成前不得写成数据库验证通过。
+- Disposable Supabase：fresh apply、行为测试、rollback、re-apply 与 DB lint 全部通过（Actions run `32364334961`）。
 
 ## 风险、回滚与下一步
 
@@ -54,4 +54,4 @@
 - `current_time` 的 `+08:00` 是当前默认 server context；未来若 owner timezone 可配置，应只替换构造参数，不增加时间服务。
 - Starter Pack 使用轻量 token 估算而不是 Token Meter；它是硬停止预算，但不是模型厂商账单计数器。
 - rollback SQL 只删除 `memory_v2_*` 函数和五张旁路表，不触碰 V1。
-- 下一步只等待 disposable CI 与人工复审；不自行接 MCP、迁移 V1、部署或开启生产切流。
+- 下一步只等待人工复审；不自行接 MCP、迁移 V1、部署或开启生产切流。
