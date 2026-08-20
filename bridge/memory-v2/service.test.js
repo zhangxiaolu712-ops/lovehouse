@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { MemoryV2Service, rankMemoryCandidates } from './service.js'
+import {
+  MemoryV2Service,
+  RECALL_IMPORTANCE_WEIGHTS,
+  rankMemoryCandidates,
+} from './service.js'
 
 const NOW = new Date('2026-08-20T11:06:00.000Z')
 
@@ -176,11 +180,42 @@ test('semantic recall is preferred and embedding failure falls back to lexical',
   assert.equal(fallback.mode, 'lexical_fallback')
   assert.equal(fallback.items[0].content, '离线关键词结果')
   assert.match(fallback.semantic_error, /OLLAMA_OFFLINE/)
+
+  const unconfigured = await createService(offlineRepository)
+    .forActor('gpt').recall({ query: '关键词' })
+  assert.equal(unconfigured.mode, 'lexical_fallback')
+  assert.equal(unconfigured.semantic_error, 'embedding_not_configured')
 })
 
-test('dynamic weight only reorders relevant candidates and bounds recall feedback', () => {
+test('recall exposes semantic degradation and later recovery without a new status service', async () => {
+  const repository = new FakeRepository()
+  repository.candidates = [candidate({ content: '备用搜索结果' })]
+  repository.semanticCandidates = [candidate({ content: '恢复后的语义结果' })]
+  const vector = Array(1536).fill(0.01)
+  let online = false
+  const service = createService(repository, {
+    embedding: {
+      embed: async () => {
+        if (!online) throw Object.assign(new Error('Ollama connection refused'), { code: 'EMBEDDING_OFFLINE' })
+        return { vector, model: 'qwen3-embedding:4b' }
+      },
+    },
+  }).forActor('gpt')
+
+  const degraded = await service.recall({ query: '测试' })
+  assert.equal(degraded.mode, 'lexical_fallback')
+  assert.equal(degraded.semantic_error, 'EMBEDDING_OFFLINE')
+
+  online = true
+  const recovered = await service.recall({ query: '测试' })
+  assert.equal(recovered.mode, 'semantic')
+  assert.equal(recovered.semantic_error, null)
+})
+
+test('recall importance is adjustable AI 70 / human 30 and never overrides relevance', () => {
   const ranked = rankMemoryCandidates([
-    candidate({ memory_id: 'important', relevance: 0.7, human_importance: 5 }),
+    candidate({ memory_id: 'ai-important', relevance: 0.7, ai_importance: 5 }),
+    candidate({ memory_id: 'human-important', relevance: 0.7, human_importance: 5 }),
     candidate({ memory_id: 'ordinary', relevance: 0.7 }),
     candidate({
       memory_id: 'frequent-old',
@@ -188,10 +223,15 @@ test('dynamic weight only reorders relevant candidates and bounds recall feedbac
       recall_count: 1000000,
       last_recalled_at: '2025-01-01T00:00:00Z',
     }),
-    candidate({ memory_id: 'irrelevant', relevance: 0, human_importance: 5 }),
+    candidate({ memory_id: 'irrelevant', relevance: 0, ai_importance: 5 }),
   ], NOW)
 
-  assert.equal(ranked[0].memory_id, 'important')
+  assert.deepEqual(RECALL_IMPORTANCE_WEIGHTS, { ai: 0.7, human: 0.3 })
+  assert.equal(ranked[0].memory_id, 'ai-important')
+  assert.ok(
+    ranked.find(item => item.memory_id === 'ai-important').importance_score
+      > ranked.find(item => item.memory_id === 'human-important').importance_score
+  )
   assert.ok(ranked.find(item => item.memory_id === 'ordinary').tide_score > 0)
   assert.equal(ranked.find(item => item.memory_id === 'irrelevant').rank_score, 0)
   assert.ok(ranked.every(item => item.dynamic_weight <= 1))
@@ -240,22 +280,46 @@ test('Shared creation is unavailable without explicit owner approval', async () 
   assert.equal(shared.shared_status, 'approved')
 })
 
-test('starter pack applies a soft item limit, hard token budget and never expands source', async () => {
+test('starter pack selects commitment then recent then random blindbox without importance ranking', async () => {
   const repository = new FakeRepository()
-  repository.candidates = Array.from({ length: 20 }, (_, index) => candidate({
-    memory_id: `memory-${index}`,
-    revision_id: `revision-${index}`,
-    content: `第 ${index} 条很长的记忆`.repeat(30),
-    source_count: 2,
-    created_at: `2026-08-${String(20 - Math.min(index, 19)).padStart(2, '0')}T10:00:00Z`,
+  const commitments = Array.from({ length: 5 }, (_, index) => candidate({
+    memory_id: `commitment-${index}`,
+    revision_id: `commitment-revision-${index}`,
+    content: `当前承诺 ${index}`,
+    metadata: { commitment_status: 'active' },
+    created_at: `2026-08-${String(20 - index).padStart(2, '0')}T10:00:00Z`,
   }))
+  const ordinary = Array.from({ length: 14 }, (_, index) => candidate({
+    memory_id: `ordinary-${index}`,
+    revision_id: `ordinary-revision-${index}`,
+    content: `普通记忆 ${index}`,
+    ai_importance: index === 13 ? 5 : null,
+    human_importance: index === 13 ? 5 : null,
+    created_at: `2026-07-${String(31 - index).padStart(2, '0')}T10:00:00Z`,
+  }))
+  repository.candidates = [...commitments, ...ordinary]
 
-  const pack = await createService(repository).forActor('gpt').starterPack({
-    softLimit: 12,
-    tokenBudget: 600,
+  const pack = await createService(repository, { random: () => 0 }).forActor('gpt').starterPack({
+    softLimit: 15,
+    tokenBudget: 4000,
   })
-  assert.ok(pack.items.length > 0 && pack.items.length < 12)
-  assert.ok(pack.estimated_tokens <= 600)
+  assert.equal(pack.items.filter(item => item.starter_category === 'commitment').length, 4)
+  assert.equal(pack.items.filter(item => item.starter_category === 'recent').length, 8)
+  assert.equal(pack.items.filter(item => item.starter_category === 'blindbox').length, 3)
+  assert.equal(new Set(pack.items.map(item => item.memory_id)).size, pack.items.length)
+  assert.deepEqual(
+    pack.items.filter(item => item.starter_category === 'recent').map(item => item.memory_id),
+    ordinary.slice(0, 8).map(item => item.memory_id)
+  )
+  assert.ok(!pack.items.some(item => item.memory_id === 'ordinary-13' && item.starter_category === 'recent'))
   assert.ok(pack.items.every(item => item.summary.length <= 240))
   assert.ok(pack.items.every(item => !('quote_text' in item) && !('sources' in item)))
+
+  const tight = await createService(repository, { random: () => 0 }).forActor('gpt').starterPack({
+    softLimit: 15,
+    tokenBudget: 180,
+  })
+  assert.ok(tight.items.length > 0)
+  assert.ok(tight.items.every(item => item.starter_category === 'commitment'))
+  assert.ok(tight.estimated_tokens <= 180)
 })

@@ -4,6 +4,13 @@ const RESERVED_FIELDS = new Set([
   'shared_status', 'created_by_actor', 'permissions',
 ])
 const OPTIONAL_METADATA_FIELDS = ['tag', 'tags', 'project', 'type', 'mood', 'stance']
+export const RECALL_IMPORTANCE_WEIGHTS = Object.freeze({ ai: 0.7, human: 0.3 })
+const STARTER_PACK_LIMITS = Object.freeze({
+  commitments: 4,
+  recent: 8,
+  blindbox: 3,
+  total: 15,
+})
 
 function fixedActor(actor) {
   if (!ACTORS.has(actor)) throw new TypeError('A fixed Memory V2 actor is required')
@@ -140,7 +147,8 @@ export function rankMemoryCandidates(candidates, currentTime) {
     const tide = clamp(0.7 * recency + 0.3 * usage)
     const human = clamp((Number(candidate.human_importance) || 0) / 5)
     const ai = clamp((Number(candidate.ai_importance) || 0) / 5)
-    const importance = 0.7 * human + 0.3 * ai
+    const importance = RECALL_IMPORTANCE_WEIGHTS.ai * ai
+      + RECALL_IMPORTANCE_WEIGHTS.human * human
     const dynamicWeight = 0.75 + 0.15 * tide + 0.10 * importance
     return {
       ...candidate,
@@ -175,13 +183,51 @@ function shortMemory(candidate, maximum = 240) {
   return text.length <= maximum ? text : `${text.slice(0, maximum - 1)}…`
 }
 
+function newestFirst(left, right) {
+  return String(right.created_at || '').localeCompare(String(left.created_at || ''))
+}
+
+function isCurrentCommitment(candidate) {
+  return String(candidate.metadata?.commitment_status || '').toLowerCase() === 'active'
+}
+
+function randomOrder(candidates, random) {
+  const shuffled = [...candidates]
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapWith = Math.min(index, Math.floor(clamp(random()) * (index + 1)))
+    ;[shuffled[index], shuffled[swapWith]] = [shuffled[swapWith], shuffled[index]]
+  }
+  return shuffled
+}
+
+function starterItem(candidate, category) {
+  return {
+    memory_id: candidate.memory_id,
+    revision_id: candidate.revision_id,
+    summary: shortMemory(candidate),
+    event_time: candidate.event_time || null,
+    created_at: candidate.created_at,
+    space_key: candidate.space_key,
+    source_count: Number(candidate.source_count) || 0,
+    starter_category: category,
+  }
+}
+
 export class MemoryV2Service {
-  constructor({ repository, embedding = null, clock = () => new Date(), utcOffsetMinutes = 480, onEmbeddingError = () => {} }) {
+  constructor({
+    repository,
+    embedding = null,
+    clock = () => new Date(),
+    utcOffsetMinutes = 480,
+    random = Math.random,
+    onEmbeddingError = () => {},
+  }) {
     if (!repository) throw new TypeError('Memory V2 repository is required')
     this.repository = repository
     this.embedding = embedding
     this.clock = clock
     this.utcOffsetMinutes = utcOffsetMinutes
+    this.random = random
     this.onEmbeddingError = onEmbeddingError
   }
 
@@ -242,8 +288,8 @@ export class MemoryV2Service {
     const candidateLimit = Math.min(50, Math.max(limit * 4, 20))
     const currentTime = this.currentTime()
     let candidates
-    let mode = 'lexical'
-    let semanticError = null
+    let mode = 'lexical_fallback'
+    let semanticError = 'embedding_not_configured'
 
     if (this.embedding && typeof this.embedding.embed === 'function') {
       try {
@@ -254,9 +300,11 @@ export class MemoryV2Service {
           limit: candidateLimit,
         })
         mode = 'semantic'
+        semanticError = null
         if (!Array.isArray(candidates) || candidates.length === 0) {
           candidates = await this.repository.recallLexical(trustedActor, { query, limit: candidateLimit })
           mode = 'lexical_fallback'
+          semanticError = 'semantic_no_results'
         }
       } catch (error) {
         semanticError = error?.code || error?.message || 'embedding_unavailable'
@@ -287,27 +335,34 @@ export class MemoryV2Service {
   async starterPack(actor, input = {}) {
     const trustedActor = fixedActor(actor)
     assertNoAuthorityFields(input)
-    const softLimit = boundedInteger(input.softLimit, 12, 15)
+    const softLimit = boundedInteger(input.softLimit, STARTER_PACK_LIMITS.total, STARTER_PACK_LIMITS.total)
     const tokenBudget = boundedInteger(input.tokenBudget, 1600, 4000)
     const currentTime = this.currentTime()
     const candidates = await this.repository.recallLexical(trustedActor, {
       query: '',
       limit: Math.min(50, softLimit * 3),
     })
-    const ranked = rankMemoryCandidates(candidates, currentTime)
+    const unique = [...new Map(candidates.map(candidate => [candidate.memory_id, candidate])).values()]
+    const commitments = unique.filter(isCurrentCommitment).sort(newestFirst)
+    const commitmentIds = new Set(commitments.map(candidate => candidate.memory_id))
+    const recent = unique.filter(candidate => !commitmentIds.has(candidate.memory_id)).sort(newestFirst)
+    const recentSelected = recent.slice(0, STARTER_PACK_LIMITS.recent)
+    const recentIds = new Set(recentSelected.map(candidate => candidate.memory_id))
+    const blindbox = randomOrder(
+      recent.filter(candidate => !recentIds.has(candidate.memory_id)),
+      this.random
+    )
+    const selections = [
+      ...commitments.slice(0, STARTER_PACK_LIMITS.commitments)
+        .map(candidate => starterItem(candidate, 'commitment')),
+      ...recentSelected.map(candidate => starterItem(candidate, 'recent')),
+      ...blindbox.slice(0, STARTER_PACK_LIMITS.blindbox)
+        .map(candidate => starterItem(candidate, 'blindbox')),
+    ]
     const items = []
     let estimatedTokens = 0
-    for (const candidate of ranked) {
+    for (const item of selections) {
       if (items.length >= softLimit) break
-      const item = {
-        memory_id: candidate.memory_id,
-        revision_id: candidate.revision_id,
-        summary: shortMemory(candidate),
-        event_time: candidate.event_time || null,
-        created_at: candidate.created_at,
-        space_key: candidate.space_key,
-        source_count: Number(candidate.source_count) || 0,
-      }
       const itemTokens = estimateTokens(JSON.stringify(item))
       if (estimatedTokens + itemTokens > tokenBudget) break
       items.push(item)

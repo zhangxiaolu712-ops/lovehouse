@@ -3,6 +3,7 @@ begin;
 -- Memory V2 Phase 1 is a sidecar. It does not read or mutate any V1 table.
 create extension if not exists pgcrypto with schema extensions;
 create extension if not exists vector with schema extensions;
+create extension if not exists pg_trgm with schema extensions;
 
 create table public.memory_v2_entries (
   id uuid primary key default extensions.gen_random_uuid(),
@@ -289,7 +290,15 @@ as $$
           ts_rank_cd(
             to_tsvector('simple', r.content),
             plainto_tsquery('simple', btrim(p_query))
-          )::double precision
+          )::double precision,
+          case
+            when char_length(btrim(p_query)) >= 3
+              and extensions.word_similarity(lower(btrim(p_query)), lower(r.content)) >= 0.25
+            then 0.45::double precision
+              + 0.25::double precision
+                * extensions.word_similarity(lower(btrim(p_query)), lower(r.content))::double precision
+            else 0.0::double precision
+          end
         )
       end as relevance
     from public.memory_v2_entries e

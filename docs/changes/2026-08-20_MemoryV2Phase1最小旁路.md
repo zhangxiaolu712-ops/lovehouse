@@ -10,11 +10,11 @@
 - 新增独立 `bridge/memory-v2/` Service/Repository；没有修改或注册现有 MCP、Bridge server、Chat 或前端入口。
 - `remember` 支持仅传正文；owner、GPT/Claude actor 与 private scope 由服务端 facade 固定。事件时间、tag/project/type/mood/stance、人类/AI 重要性及 source 全部可选。
 - remember/revise 成功后才 best-effort 写 embedding；provider 未配置、离线或失败不回滚正文。
-- recall 优先使用 semantic candidates；provider 错误或没有可用向量时自动走 PostgreSQL lexical candidates，再使用同一个动态 Ranker。
-- Ranker 将相关性与权重分开：最终分为 `relevance × (0.75 + 0.15 × tide + 0.10 × importance)`。Tide 只复用 created/event/last recalled 时间和有上限的 recall count，不新增 Tide 表。
+- recall 优先使用 semantic candidates；provider 错误或没有可用向量时自动走 PostgreSQL lexical + `pg_trgm.word_similarity` candidates，再使用同一个动态 Ranker。降级返回 `mode=lexical_fallback` 与明确 `semantic_error`，恢复后返回 `mode=semantic`。
+- Ranker 将相关性与权重分开：最终分为 `relevance × (0.75 + 0.15 × tide + 0.10 × importance)`；importance 使用可调实现常量 AI 70%、human 30%。Tide 只复用 created/event/last recalled 时间和有上限的 recall count，不新增 Tide 表。
 - revision append-only；普通 recall 只查 active/current，旧事实用一个 `superseded_by_id` 关联保留历史。
 - source 可省略；存在时绑定确定 revision，默认 recall 只返回 source count，原文由显式 expand 展开。
-- Starter Pack 默认 12 条软上限、15 条绝对条数上限、1600 estimated-token 硬预算；长正文只给 bounded excerpt，不展开 source。
+- Starter Pack 不使用 importance 排序：当前 revision 以 `metadata.commitment_status=active` 表达有效承诺（最多 4），其后最近记忆/变化（最多 8），最后从剩余合格池随机盲盒（最多 3）；三类去重，总数软上限 15，1600 estimated-token 为最终硬预算，长正文只给 bounded excerpt，不展开 source。
 - 每次 remember/recall/revise/starter pack 在入口取得一次 `current_time`（默认 `+08:00`）；时间格式化失败明确返回 unavailable，但不阻止正文存入。
 
 ## 修改文件

@@ -54,6 +54,8 @@ declare
   shared_saved jsonb;
   old_saved jsonb;
   new_saved jsonb;
+  chinese_saved jsonb;
+  chinese_unrelated jsonb;
   result jsonb;
   expanded jsonb;
   quote_source_id uuid;
@@ -201,6 +203,26 @@ begin
   result := public.memory_v2_recall_lexical(owner_id, 'gpt', 'orchid', 10);
   if jsonb_array_length(result) = 0 then
     raise exception 'lexical recall depended on the embedding sidecar';
+  end if;
+
+  chinese_saved := public.memory_v2_remember(
+    owner_id, 'gpt', '我以前很喜欢苹果茉莉绿奶茶', '{}'::jsonb
+  );
+  chinese_unrelated := public.memory_v2_remember(
+    owner_id, 'gpt', '昨天下午我们一起去公园散步看晚霞', '{}'::jsonb
+  );
+  result := public.memory_v2_recall_lexical(owner_id, 'gpt', '苹果奶茶', 10);
+  if not exists (
+    select 1 from jsonb_array_elements(result) item
+    where item ->> 'memory_id' = chinese_saved ->> 'memory_id'
+  ) then
+    raise exception 'Chinese lexical fallback did not recall the split phrase';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(result) item
+    where item ->> 'memory_id' = chinese_unrelated ->> 'memory_id'
+  ) then
+    raise exception 'Chinese lexical fallback overmatched unrelated content';
   end if;
 end;
 $$;
