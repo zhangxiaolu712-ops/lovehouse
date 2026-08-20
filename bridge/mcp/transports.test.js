@@ -21,7 +21,7 @@ test('real GPT SSE and Claude HTTP transports reach symmetric fixed actors', asy
   const calls = []
   const makeChannel = actor => ({
     actor,
-    tools: [{ name: 'save_memory', inputSchema: { type: 'object' } }],
+    tools: [{ name: 'remember', inputSchema: { type: 'object' } }],
     async callTool(name, args, context) {
       calls.push({ actor, name, args, context })
       return JSON.stringify({ ok: true, actor })
@@ -63,7 +63,7 @@ test('real GPT SSE and Claude HTTP transports reach symmetric fixed actors', asy
     id: 77,
     method: 'tools/call',
     params: {
-      name: 'save_memory',
+      name: 'remember',
       arguments: { content: 'transport test', actor: 'owner', space_key: 'shared' },
     },
     actor: 'owner',

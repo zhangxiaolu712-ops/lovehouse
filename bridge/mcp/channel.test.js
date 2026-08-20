@@ -7,61 +7,59 @@ import { createMcpChannel } from './channel.js'
 
 const emptyLivingroomFence = () => createLivingroomRest({ rest: async () => [] })
 
-function recordingMemoryService(calls) {
+function recordingMemoryV2Service(calls) {
   return {
-    async write(...args) { calls.push(['write', ...args]); return { id: 1 } },
-    async recall(...args) { calls.push(['recall', ...args]); return [] },
-    async list(...args) { calls.push(['list', ...args]); return [] },
-    async starterPack(...args) { calls.push(['starterPack', ...args]); return {} },
-    async get(...args) { calls.push(['get', ...args]); return null },
-    async revise(...args) { calls.push(['revise', ...args]); return {} },
-    async proposeShared(...args) { calls.push(['proposeShared', ...args]); return {} },
-    async expandSource(...args) { calls.push(['expandSource', ...args]); return {} },
+    forActor(actor) {
+      calls.push(['forActor', actor])
+      return {
+        async remember(input) {
+          calls.push(['remember', actor, input])
+          return { actor }
+        },
+        async recall(input) {
+          calls.push(['recall', actor, input])
+          return { actor, items: [] }
+        },
+      }
+    },
   }
 }
 
 for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
-  test(`${expectedActor} channel ignores actor spoofing in body, query, headers and tool args`, async () => {
+  test(`${expectedActor} channel exposes exactly seven tools and fixes its Memory V2 actor`, async () => {
     const calls = []
     const channel = createMcpChannel({
       actor: expectedActor,
-      memoryService: recordingMemoryService(calls),
+      memoryV2Service: recordingMemoryV2Service(calls),
       livingroomRest: emptyLivingroomFence(),
     })
     const forgedActor = expectedActor === MEMORY_ACTORS.GPT
       ? MEMORY_ACTORS.CLAUDE
       : MEMORY_ACTORS.GPT
 
-    await channel.callTool(
-      'save_memory',
-      {
-        content: 'server actor wins',
-        actor: forgedActor,
-        space_key: forgedActor,
-      },
-      {
-        body: { actor: forgedActor },
-        query: { actor: forgedActor, space_key: forgedActor },
-        headers: {
-          actor: forgedActor,
-          'x-memory-actor': forgedActor,
-          'x-memory-space': forgedActor,
-        },
-      }
-    )
+    assert.deepEqual(channel.tools.map(tool => tool.name), [
+      'wake_up',
+      'remember',
+      'recall',
+      'revise',
+      'open_memory',
+      'read_livingroom',
+      'say_livingroom',
+    ])
+    await channel.callTool('remember', {
+      content: 'server actor wins',
+      actor: forgedActor,
+      space_key: forgedActor,
+    }, {
+      body: { actor: forgedActor },
+      query: { actor: forgedActor },
+      headers: { 'x-memory-actor': forgedActor },
+    })
+    await channel.callTool('recall', { query: 'rose', actor: forgedActor })
 
     assert.equal(channel.actor, expectedActor)
-    assert.equal(calls[0][1], expectedActor)
-  })
-
-  test(`${expectedActor} channel forwards only trusted request context`, async () => {
-    const calls = []
-    const channel = createMcpChannel({
-      actor: expectedActor,
-      memoryService: recordingMemoryService(calls),
-      livingroomRest: emptyLivingroomFence(),
-    })
-    await channel.callTool('recall', { query: 'rose' }, { requestId: 'trusted-id' })
-    assert.deepEqual(calls[0][3], { requestId: 'trusted-id' })
+    assert.deepEqual(calls.map(call => call[1]), [expectedActor, expectedActor, expectedActor])
+    assert.equal(calls[1][2].actor, undefined)
+    assert.equal(calls[1][2].space_key, undefined)
   })
 }

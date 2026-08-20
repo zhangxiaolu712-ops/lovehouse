@@ -2,21 +2,17 @@ import { MEMORY_ACTORS } from '../memory/index.js'
 import { isLivingroomRest } from '../livingroom.js'
 
 export const MCP_TOOL_ROUTES = Object.freeze({
-  read_livingroom_messages: 'livingroom.read',
-  send_livingroom_message: 'livingroom.write',
-  get_livingroom_context: 'livingroom.context',
-  get_starter_pack: 'memory.starterPack',
-  open_memory_box: 'memory.memoryBox',
-  save_memory: 'memory.write',
-  recall: 'memory.recall',
-  load_memories: 'memory.list',
-  search_memories: 'memory.recall',
-  save_to_memories: 'memory.write',
-  get_memory: 'memory.get',
-  revise_memory: 'memory.revise',
-  propose_shared_candidate: 'memory.proposeShared',
-  expand_source: 'memory.expandSource',
+  wake_up: 'memory-v2.starterPack',
+  remember: 'memory-v2.remember',
+  recall: 'memory-v2.recall',
+  revise: 'memory-v2.revise',
+  open_memory: 'memory-v2.open',
+  read_livingroom: 'livingroom.read',
+  say_livingroom: 'livingroom.write',
 })
+
+const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+const uuidField = { type: 'string', pattern: UUID_PATTERN }
 
 const closedObject = properties => ({
   type: 'object',
@@ -27,197 +23,136 @@ const closedObject = properties => ({
 const sourceInput = {
   oneOf: [
     {
-      ...closedObject({ source_id: { type: 'integer', minimum: 1 } }),
+      ...closedObject({ source_id: uuidField }),
       required: ['source_id'],
     },
     {
       ...closedObject({
-        source_channel: { type: 'string', minLength: 1, maxLength: 80 },
         source_kind: {
           type: 'string',
           pattern: '^[a-z][a-z0-9_]{0,79}$',
         },
-        locator: {
-          type: 'object',
-          properties: {
-            message_id: { type: 'integer', minimum: 1 },
-            start_message_id: { type: 'integer', minimum: 1 },
-            end_message_id: { type: 'integer', minimum: 1 },
-            reference: { type: 'string', maxLength: 1000 },
-            external_ref: { type: 'string', maxLength: 1000 },
-          },
-          additionalProperties: false,
-        },
-        quote_text: { type: 'string', minLength: 1, maxLength: 10000 },
+        locator: { type: 'object' },
+        provenance: { type: 'object' },
+        quote_text: { type: 'string', minLength: 1, maxLength: 20000 },
       }),
-      required: ['source_channel', 'source_kind', 'locator'],
+      required: ['source_kind'],
     },
   ],
 }
 
-const memoryFields = {
-  content: { type: 'string', minLength: 1, maxLength: 50000 },
-  summary: { type: 'string', minLength: 1, maxLength: 2000 },
-  title: { type: 'string', maxLength: 500 },
-  memory_type: {
-    type: 'string',
-    enum: ['fact', 'feeling', 'diary', 'article', 'small_moment', 'memo', 'self_inquiry', 'quote', 'summary', 'reflection'],
-  },
-  kind: { type: 'string', enum: ['记事', '记感受'] },
-  tag: { type: 'string', maxLength: 80 },
-  tags: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 80 } },
-  feeling: { type: 'string', maxLength: 1000 },
-  mood: { type: 'string', maxLength: 80 },
-  importance: { type: 'integer', minimum: 1, maximum: 5 },
-  retention: { type: 'string', enum: ['fixed', 'long', 'short', 'temporary'] },
-  source_ref: { type: 'string', maxLength: 500 },
-  sources: { type: 'array', maxItems: 8, items: sourceInput },
+const optionalMemoryFields = {
+  metadata: { type: 'object', maxProperties: 30 },
+  event_time: { type: 'string', description: '真实事件时间；未知时不要填写。' },
+  human_importance: { type: 'number', minimum: 0, maximum: 5 },
+  ai_importance: { type: 'number', minimum: 0, maximum: 5 },
+  supersedes_memory_id: uuidField,
+  sources: { type: 'array', maxItems: 20, items: sourceInput },
 }
 
-const revisionMemoryFields = Object.fromEntries(
-  Object.entries(memoryFields).filter(([name]) => name !== 'source_ref')
-)
+function toMemoryV2Sources(sources) {
+  if (sources === undefined) return undefined
+  return sources.map(source => source.source_id
+    ? { sourceId: source.source_id }
+    : {
+        sourceKind: source.source_kind,
+        locator: source.locator,
+        provenance: source.provenance,
+        quoteText: source.quote_text,
+      })
+}
+
+function toMemoryV2Input(args) {
+  return {
+    ...(args.content === undefined ? {} : { content: args.content }),
+    ...(args.metadata === undefined ? {} : { metadata: args.metadata }),
+    ...(args.event_time === undefined ? {} : { eventTime: args.event_time }),
+    ...(args.human_importance === undefined ? {} : { humanImportance: args.human_importance }),
+    ...(args.ai_importance === undefined ? {} : { aiImportance: args.ai_importance }),
+    ...(args.supersedes_memory_id === undefined
+      ? {}
+      : { supersedesMemoryId: args.supersedes_memory_id }),
+    ...(args.reason === undefined ? {} : { reason: args.reason }),
+    ...(args.sources === undefined ? {} : { sources: toMemoryV2Sources(args.sources) }),
+  }
+}
 
 export function createMcpToolDefinitions(actor) {
   const sender = actor === MEMORY_ACTORS.GPT ? 'GPT' : 'CC'
   return [
     {
-      name: 'read_livingroom_messages',
-      description: '读取小客厅最近的消息。',
+      name: 'wake_up',
+      description: '新窗口开始时调用。返回 Memory V2 的当前有效承诺、最近记忆/变化和少量随机盲盒；遵守固定 actor private 与 approved Shared 边界。',
+      inputSchema: closedObject({
+        soft_limit: { type: 'integer', minimum: 1, maximum: 15 },
+        token_budget: { type: 'integer', minimum: 1, maximum: 4000 },
+      }),
+    },
+    {
+      name: 'remember',
+      description: `记住一件事。最少只需 content；owner、actor 与 private space 由服务端固定为 ${actor}。`,
+      inputSchema: {
+        ...closedObject({
+          content: { type: 'string', minLength: 1, maxLength: 50000 },
+          ...optionalMemoryFields,
+        }),
+        required: ['content'],
+      },
+    },
+    {
+      name: 'recall',
+      description: '召回相关 Memory V2。语义检索可用时使用 semantic，不可用时由 Memory V2 自动 lexical fallback；MCP 不实现第二套搜索。',
+      inputSchema: {
+        ...closedObject({
+          query: { type: 'string', minLength: 1, maxLength: 1000 },
+          limit: { type: 'integer', minimum: 1, maximum: 10 },
+        }),
+        required: ['query'],
+      },
+    },
+    {
+      name: 'revise',
+      description: '修订一条自己的私有 Memory V2；旧 revision 与 currentness 由 Memory V2 保存。',
+      inputSchema: {
+        ...closedObject({
+          memory_id: uuidField,
+          content: { type: 'string', minLength: 1, maxLength: 50000 },
+          reason: { type: 'string', minLength: 1, maxLength: 1000 },
+          ...optionalMemoryFields,
+        }),
+        required: ['memory_id', 'content'],
+      },
+    },
+    {
+      name: 'open_memory',
+      description: '深挖 Memory V2：传 memory_id 查看完整 revision history 与 source descriptors；传 source_id 才显式展开对应原文。',
+      inputSchema: {
+        oneOf: [
+          {
+            ...closedObject({ memory_id: uuidField }),
+            required: ['memory_id'],
+          },
+          {
+            ...closedObject({ source_id: uuidField }),
+            required: ['source_id'],
+          },
+        ],
+      },
+    },
+    {
+      name: 'read_livingroom',
+      description: '读取小客厅最近消息，同时返回同一批消息的纯文本 context。',
       inputSchema: closedObject({
         limit: { type: 'integer', minimum: 1, maximum: 200 },
         since: { type: 'string', description: 'ISO 时间戳' },
       }),
     },
     {
-      name: 'send_livingroom_message',
-      description: `向小客厅发送消息。发送者由服务端固定为 ${sender}。`,
+      name: 'say_livingroom',
+      description: `向小客厅说一句话。发送者由服务端固定为 ${sender}。`,
       inputSchema: {
         ...closedObject({ message: { type: 'string', minLength: 1, maxLength: 10000 } }),
         required: ['message'],
-      },
-    },
-    {
-      name: 'get_livingroom_context',
-      description: '获取小客厅最近的纯文本上下文。',
-      inputSchema: closedObject({
-        limit: { type: 'integer', minimum: 1, maximum: 100 },
-      }),
-    },
-    {
-      name: 'get_starter_pack',
-      description: '新对话开始时先调用。返回一眼可读完的 House Rules、自己的私有记忆与已批准 Shared Memory；无需预先了解 LoveHouse 历史，也不会返回另一 AI 的私有记忆或 Legacy Pending。',
-      inputSchema: closedObject({
-        limit: { type: 'integer', minimum: 1, maximum: 20 },
-      }),
-    },
-    {
-      name: 'open_memory_box',
-      description: 'AI 在新对话读完 get_starter_pack 后可调用：随机带回少量有权读取的旧记忆，用来重新认识过去的自己、共享经历和旧判断。这不是相关性搜索；拿到后可以接受旧理解、质疑它、用 revise_memory 修订自己的私有记忆，或暂时不处理。',
-      inputSchema: closedObject({
-        limit: { type: 'integer', minimum: 1, maximum: 4, default: 3 },
-      }),
-    },
-    {
-      name: 'save_memory',
-      description: `主动保存一条自己的私有记忆。memory_type=diary 表示你以第一人称记录自己的经历、判断、感受和变化，不是对小婷的观察报告，也不替她写日记。日记作者由服务端固定为 ${actor}；归属、actor、审计和幂等同样由服务端处理。`,
-      inputSchema: {
-        ...closedObject(memoryFields),
-        required: ['content'],
-      },
-    },
-    {
-      name: 'recall',
-      description: '检索自己的私有记忆与已批准 Shared；默认只返回 summary、必要 metadata 和 source 描述，不展开完整正文或证据。',
-      inputSchema: {
-        ...closedObject({
-          query: { type: 'string', minLength: 1, maxLength: 500 },
-          limit: { type: 'integer', minimum: 1, maximum: 10 },
-          cursor: { type: 'integer', minimum: 1 },
-          tags: memoryFields.tags,
-        }),
-        required: ['query'],
-      },
-    },
-    {
-      name: 'load_memories',
-      description: '兼容旧工具名；实际调用统一 Memory System，不直接读取旧 memories 表。',
-      inputSchema: closedObject({
-        level: { type: 'string' },
-        category: { type: 'string' },
-        limit: { type: 'integer', minimum: 1, maximum: 50 },
-        cursor: { type: 'integer', minimum: 1 },
-      }),
-    },
-    {
-      name: 'search_memories',
-      description: '兼容旧工具名；实际调用统一 Memory System 的 recall。',
-      inputSchema: {
-        ...closedObject({
-          keyword: { type: 'string', minLength: 1, maxLength: 500 },
-          category: { type: 'string' },
-          limit: { type: 'integer', minimum: 1, maximum: 10 },
-          cursor: { type: 'integer', minimum: 1 },
-        }),
-        required: ['keyword'],
-      },
-    },
-    {
-      name: 'save_to_memories',
-      description: '兼容旧工具名；实际保存到统一 Memory System 的固定私有空间。',
-      inputSchema: {
-        ...closedObject({
-          content: memoryFields.content,
-          category: { type: 'string' },
-          level: { type: 'string' },
-          importance: memoryFields.importance,
-          summary: memoryFields.summary,
-          sources: memoryFields.sources,
-        }),
-        required: ['content'],
-      },
-    },
-    {
-      name: 'get_memory',
-      description: '按编号读取一条自己有权访问的记忆。',
-      inputSchema: {
-        ...closedObject({ memory_id: { type: 'integer', minimum: 1 } }),
-        required: ['memory_id'],
-      },
-    },
-    {
-      name: 'revise_memory',
-      description: '修订自己的私有记忆；旧版本、来源链和审计由服务端自动保存。',
-      inputSchema: {
-        ...closedObject({
-          memory_id: { type: 'integer', minimum: 1 },
-          reason: { type: 'string', minLength: 1, maxLength: 1000 },
-          ...revisionMemoryFields,
-        }),
-        required: ['memory_id', 'reason'],
-      },
-    },
-    {
-      name: 'propose_shared_candidate',
-      description: '推荐把自己私有记忆的当前确定版本作为 Shared 候选；只有 Owner 能批准。',
-      inputSchema: {
-        ...closedObject({
-          memory_id: { type: 'integer', minimum: 1 },
-          reason: { type: 'string', minLength: 1, maxLength: 1000 },
-        }),
-        required: ['memory_id', 'reason'],
-      },
-    },
-    {
-      name: 'expand_source',
-      description: '显式展开一项有权访问的 Memory source。manual quote 返回快照；LoveHouse message/range 通过服务端受限读取链分页返回。',
-      inputSchema: {
-        ...closedObject({
-          source_id: { type: 'integer', minimum: 1 },
-          cursor_message_id: { type: 'integer', minimum: 1 },
-          limit: { type: 'integer', minimum: 1, maximum: 20 },
-        }),
-        required: ['source_id'],
       },
     },
   ]
@@ -237,25 +172,64 @@ function parseSince(value) {
   return new Date(value).toISOString()
 }
 
-export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
+export function createMcpToolHandler({ actor, memoryV2Service, livingroomRest }) {
   if (!Object.values(MEMORY_ACTORS).includes(actor)) throw new Error('A fixed MCP actor is required')
-  if (!memoryService) throw new Error('MemoryService is required')
+  if (!memoryV2Service || typeof memoryV2Service.forActor !== 'function') {
+    throw new Error('MemoryV2Service is required')
+  }
   if (!isLivingroomRest(livingroomRest)) {
     throw new Error('A fenced livingroom REST function is required')
   }
+  const memory = memoryV2Service.forActor(actor)
   const sender = actor === MEMORY_ACTORS.GPT ? 'GPT' : 'CC'
 
-  return async function callMcpTool(name, args = {}, trustedContext = {}) {
-    if (name === 'read_livingroom_messages') {
+  return async function callMcpTool(name, args = {}) {
+    if (name === 'wake_up') {
+      return JSON.stringify(await memory.starterPack({
+        softLimit: args.soft_limit,
+        tokenBudget: args.token_budget,
+      }))
+    }
+    if (name === 'remember') {
+      return JSON.stringify(await memory.remember(toMemoryV2Input(args)))
+    }
+    if (name === 'recall') {
+      return JSON.stringify(await memory.recall(args))
+    }
+    if (name === 'revise') {
+      return JSON.stringify(await memory.revise(args.memory_id, toMemoryV2Input(args)))
+    }
+    if (name === 'open_memory') {
+      const hasMemoryId = typeof args.memory_id === 'string' && args.memory_id.length > 0
+      const hasSourceId = typeof args.source_id === 'string' && args.source_id.length > 0
+      if (hasMemoryId === hasSourceId) {
+        throw new TypeError('open_memory requires exactly one of memory_id or source_id')
+      }
+      if (hasMemoryId) {
+        return JSON.stringify({
+          mode: 'history',
+          memory_id: args.memory_id,
+          revisions: await memory.history(args.memory_id),
+        })
+      }
+      return JSON.stringify({
+        mode: 'source',
+        source_id: args.source_id,
+        source: await memory.expandSource(args.source_id),
+      })
+    }
+    if (name === 'read_livingroom') {
       const limit = parseLimit(args.limit, 50, 200)
       const since = parseSince(args.since)
       let path = `livingroom?order=created_at.desc&limit=${limit}`
       if (since) path += `&created_at=gt.${encodeURIComponent(since)}`
-      const rows = await livingroomRest('GET', path)
-      return JSON.stringify(rows.slice().reverse())
+      const messages = (await livingroomRest('GET', path)).slice().reverse()
+      return JSON.stringify({
+        messages,
+        context: messages.map(row => `[${row.sender}] ${row.message}`).join('\n'),
+      })
     }
-
-    if (name === 'send_livingroom_message') {
+    if (name === 'say_livingroom') {
       if (typeof args.message !== 'string' || !args.message.trim()) throw new TypeError('message is required')
       if (args.message.length > 10_000) throw new TypeError('message is too long')
       const rows = await livingroomRest('POST', 'livingroom', {
@@ -263,66 +237,6 @@ export function createMcpToolHandler({ actor, memoryService, livingroomRest }) {
         message: args.message.trim(),
       })
       return JSON.stringify(rows[0])
-    }
-
-    if (name === 'get_livingroom_context') {
-      const limit = parseLimit(args.limit, 20, 100)
-      const rows = await livingroomRest('GET', `livingroom?order=created_at.desc&limit=${limit}`)
-      return rows.slice().reverse().map(row => `[${row.sender}] ${row.message}`).join('\n')
-    }
-
-    if (name === 'get_starter_pack') {
-      return JSON.stringify(await memoryService.starterPack(actor, args, trustedContext))
-    }
-    if (name === 'open_memory_box') {
-      return JSON.stringify(await memoryService.memoryBox(actor, args, trustedContext))
-    }
-    if (name === 'save_memory') {
-      const saved = await memoryService.write(actor, args, trustedContext)
-      return JSON.stringify({ ok: true, id: saved?.id, preview: args.content.slice(0, 80) })
-    }
-    if (name === 'recall') {
-      return JSON.stringify(await memoryService.recall(actor, args, trustedContext))
-    }
-    if (name === 'load_memories') {
-      return JSON.stringify(await memoryService.list(actor, {
-        limit: args.limit,
-        cursor: args.cursor,
-        level: args.level,
-        category: args.category,
-      }, trustedContext))
-    }
-    if (name === 'search_memories') {
-      return JSON.stringify(await memoryService.recall(actor, {
-        query: args.keyword,
-        limit: args.limit,
-        cursor: args.cursor,
-        category: args.category,
-      }, trustedContext))
-    }
-    if (name === 'save_to_memories') {
-      const saved = await memoryService.write(actor, {
-        content: args.content,
-        summary: args.summary,
-        ...(args.sources === undefined ? {} : { sources: args.sources }),
-        category: args.category,
-        level: args.level,
-        importance: args.importance,
-      }, trustedContext)
-      return JSON.stringify({ ok: true, id: saved?.id, preview: args.content.slice(0, 80) })
-    }
-    if (name === 'get_memory') {
-      return JSON.stringify(await memoryService.get(actor, args.memory_id, trustedContext))
-    }
-    if (name === 'revise_memory') {
-      return JSON.stringify(await memoryService.revise(actor, args, trustedContext))
-    }
-    if (name === 'propose_shared_candidate') {
-      const candidate = await memoryService.proposeShared(actor, args, trustedContext)
-      return JSON.stringify({ ok: true, candidate_id: candidate?.id, status: candidate?.shared_status })
-    }
-    if (name === 'expand_source') {
-      return JSON.stringify(await memoryService.expandSource(actor, args, trustedContext))
     }
     throw new Error(`unknown tool: ${name}`)
   }

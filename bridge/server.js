@@ -25,6 +25,11 @@ import {
   SupabaseMemoryRepository,
   SupabaseMemoryAuditSink,
 } from './memory/index.js'
+import {
+  createOllamaEmbeddingFromEnv,
+  MemoryV2Service,
+  SupabaseMemoryV2Repository,
+} from './memory-v2/index.js'
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest } from './livingroom.js'
@@ -165,6 +170,14 @@ const supabaseRest = createSupabaseRest({
   serverKey: SUPABASE_SERVER_KEY,
 })
 const livingroomRest = createLivingroomRest({ rest: supabaseRest })
+const memoryV2Repository = new SupabaseMemoryV2Repository({
+  rest: supabaseRest,
+  ownerId: OWNER_USER_ID,
+})
+const memoryV2Service = new MemoryV2Service({
+  repository: memoryV2Repository,
+  embedding: createOllamaEmbeddingFromEnv(),
+})
 const canonicalMemoryRepository = new SupabaseMemoryRepository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
@@ -380,12 +393,12 @@ app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
 
 const gptChannel = createMcpChannel({
   actor: MEMORY_ACTORS.GPT,
-  memoryService,
+  memoryV2Service,
   livingroomRest,
 })
 const claudeChannel = createMcpChannel({
   actor: MEMORY_ACTORS.CLAUDE,
-  memoryService,
+  memoryV2Service,
   livingroomRest,
 })
 
