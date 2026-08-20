@@ -218,6 +218,33 @@ test('recall exposes semantic degradation and later recovery without a new statu
   assert.equal(recovered.semantic_error, null)
 })
 
+test('embedding status is a lightweight adapter result and remains optional', () => {
+  const repository = new FakeRepository()
+  const unconfigured = createService(repository).forActor('gpt')
+  assert.deepEqual(unconfigured.embeddingStatus(), {
+    mode: 'unavailable',
+    model: null,
+    last_checked_at: null,
+    error: 'embedding_not_configured',
+  })
+
+  const configured = createService(repository, {
+    embedding: {
+      model: 'qwen3-embedding:4b',
+      async embed() { return { vector: Array(1536).fill(0.01), model: this.model } },
+      getStatus() {
+        return { mode: 'semantic', model: this.model, last_checked_at: '2026-08-20T14:30:00.000Z', error: null }
+      },
+    },
+  }).forActor('claude')
+  assert.deepEqual(configured.embeddingStatus(), {
+    mode: 'semantic',
+    model: 'qwen3-embedding:4b',
+    last_checked_at: '2026-08-20T14:30:00.000Z',
+    error: null,
+  })
+})
+
 test('recall importance is adjustable AI 70 / human 30 and never overrides relevance', () => {
   const ranked = rankMemoryCandidates([
     candidate({ memory_id: 'ai-important', relevance: 0.7, ai_importance: 5 }),

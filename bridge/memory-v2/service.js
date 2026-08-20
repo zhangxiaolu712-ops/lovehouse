@@ -216,7 +216,20 @@ export class MemoryV2Service {
       history: memoryId => this.repository.history(trustedActor, memoryId),
       expandSource: sourceId => this.repository.expandSource(trustedActor, sourceId),
       starterPack: input => this.starterPack(trustedActor, input),
+      embeddingStatus: () => this.embeddingStatus(),
     })
+  }
+
+  embeddingStatus() {
+    if (this.embedding && typeof this.embedding.getStatus === 'function') {
+      return this.embedding.getStatus()
+    }
+    return {
+      mode: 'unavailable',
+      model: this.embedding?.model || null,
+      last_checked_at: null,
+      error: 'embedding_not_configured',
+    }
   }
 
   currentTime() {
