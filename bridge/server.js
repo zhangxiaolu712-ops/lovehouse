@@ -29,8 +29,10 @@ import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest } from './livingroom.js'
 import { safeEqual } from './security.js'
+import { createHealthSnapshot } from './health.js'
 
 const app = express()
+const BRIDGE_STARTED_AT = new Date().toISOString()
 app.disable('x-powered-by')
 app.set('trust proxy', 'loopback')
 
@@ -417,20 +419,19 @@ installMcpTransports(app, {
 })
 
 app.get('/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    claude_process: getClaudeStats(),
-    memory_system: 'foundation',
-    memory_system_enabled: MEMORY_SYSTEM_ENABLED,
-    memory_semantic_enabled: MEMORY_SEMANTIC_ENABLED,
-    memory_embedding_provider_configured: embeddingProviderConfigured,
-    memory_dream_enabled: MEMORY_DREAM_ENABLED,
-    memory_dream_curator_configured: dreamCuratorConfigured,
-    memory_dream_curator_provider: MEMORY_DREAM_CURATOR_PROVIDER || null,
-    memory_ranking_profile: MEMORY_RANKING_PROFILE,
-    memory_writes_enabled: memoryService.writeEnabled,
-    database_migration: MEMORY_SYSTEM_ENABLED ? 'expected' : 'not_applied',
-  })
+  res.json(createHealthSnapshot({
+    bridgeStartedAt: BRIDGE_STARTED_AT,
+    claudeProcess: getClaudeStats(),
+    memorySystemEnabled: MEMORY_SYSTEM_ENABLED,
+    memorySemanticEnabled: MEMORY_SEMANTIC_ENABLED,
+    memoryEmbeddingProviderConfigured: embeddingProviderConfigured,
+    memoryDreamEnabled: MEMORY_DREAM_ENABLED,
+    memoryDreamCuratorConfigured: dreamCuratorConfigured,
+    memoryDreamCuratorProvider: MEMORY_DREAM_CURATOR_PROVIDER,
+    memoryRankingProfile: MEMORY_RANKING_PROFILE,
+    memoryWritesEnabled: memoryService.writeEnabled,
+    memoryRepository,
+  }))
 })
 
 app.listen(3000, '0.0.0.0', () => {
