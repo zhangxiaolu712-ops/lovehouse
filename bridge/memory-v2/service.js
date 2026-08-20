@@ -5,6 +5,7 @@ const RESERVED_FIELDS = new Set([
 ])
 const OPTIONAL_METADATA_FIELDS = ['tag', 'tags', 'project', 'type', 'mood', 'stance']
 export const RECALL_IMPORTANCE_WEIGHTS = Object.freeze({ ai: 0.7, human: 0.3 })
+const RECALL_LEXICAL_SUPPLEMENT_LIMIT = 3
 const STARTER_PACK_TOTAL_LIMIT = 15
 
 function fixedActor(actor) {
@@ -159,6 +160,27 @@ export function rankMemoryCandidates(candidates, currentTime) {
   })
 }
 
+function memoryCandidateKey(candidate) {
+  if (candidate?.memory_id) return `memory:${candidate.memory_id}`
+  if (candidate?.revision_id) return `revision:${candidate.revision_id}`
+  return null
+}
+
+function mergeSemanticWithLexicalSupplements(semanticCandidates, lexicalCandidates) {
+  const merged = Array.isArray(semanticCandidates) ? semanticCandidates.slice() : []
+  const seen = new Set(merged.map(memoryCandidateKey).filter(Boolean))
+  let supplements = 0
+  for (const candidate of Array.isArray(lexicalCandidates) ? lexicalCandidates : []) {
+    if (supplements >= RECALL_LEXICAL_SUPPLEMENT_LIMIT) break
+    const key = memoryCandidateKey(candidate)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    merged.push(candidate)
+    supplements += 1
+  }
+  return merged
+}
+
 function estimateTokens(value) {
   const text = String(value || '')
   let ascii = 0
@@ -283,17 +305,31 @@ export class MemoryV2Service {
     if (this.embedding && typeof this.embedding.embed === 'function') {
       try {
         const embedded = await this.embedding.embed(query)
-        candidates = await this.repository.recallSemantic(trustedActor, {
+        const semanticCandidates = await this.repository.recallSemantic(trustedActor, {
           vector: embedded.vector,
           model: embedded.model,
           limit: candidateLimit,
         })
         mode = 'semantic'
         semanticError = null
-        if (!Array.isArray(candidates) || candidates.length === 0) {
+        if (!Array.isArray(semanticCandidates) || semanticCandidates.length === 0) {
           candidates = await this.repository.recallLexical(trustedActor, { query, limit: candidateLimit })
           mode = 'lexical_fallback'
           semanticError = 'semantic_no_results'
+        } else {
+          candidates = semanticCandidates
+          try {
+            const lexicalSupplements = await this.repository.recallLexical(trustedActor, {
+              query,
+              limit: RECALL_LEXICAL_SUPPLEMENT_LIMIT,
+            })
+            candidates = mergeSemanticWithLexicalSupplements(
+              semanticCandidates,
+              lexicalSupplements,
+            )
+          } catch {
+            // The consistency supplement must never downgrade a successful semantic recall.
+          }
         }
       } catch (error) {
         semanticError = error?.code || error?.message || 'embedding_unavailable'

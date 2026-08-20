@@ -88,6 +88,66 @@ class FakeRepository {
   }
 }
 
+class ReadAfterWriteRepository extends FakeRepository {
+  current = new Map()
+
+  async remember(actor, content, options) {
+    this.calls.push(['remember', actor, content, options])
+    const stored = {
+      memory_id: `${actor}-new-memory`,
+      revision_id: `${actor}-new-revision-1`,
+      revision_number: 1,
+      space_key: actor,
+      created_at: '2026-08-20T11:06:00.000Z',
+    }
+    this.setCurrent(candidate({
+      ...stored,
+      content,
+      relevance: 0.75,
+    }))
+    return stored
+  }
+
+  async revise(actor, memoryId, content, options) {
+    this.calls.push(['revise', actor, memoryId, content, options])
+    const previous = this.current.get(memoryId)
+    const stored = {
+      memory_id: memoryId,
+      revision_id: `${actor}-current-revision-2`,
+      revision_number: 2,
+      space_key: actor,
+      created_at: '2026-08-20T11:07:00.000Z',
+    }
+    this.setCurrent(candidate({
+      ...(previous || {}),
+      ...stored,
+      content,
+      relevance: 0.75,
+    }))
+    this.semanticCandidates = this.semanticCandidates.filter(item => item.memory_id !== memoryId)
+    return stored
+  }
+
+  setCurrent(item) {
+    this.current.set(item.memory_id, item)
+    this.candidates = [
+      ...this.candidates.filter(candidateItem => candidateItem.memory_id !== item.memory_id),
+      item,
+    ]
+  }
+
+  async storeEmbedding(actor, revisionId, result) {
+    this.calls.push(['storeEmbedding', actor, revisionId, result])
+    const current = [...this.current.values()].find(item => item.revision_id === revisionId)
+    if (current) {
+      this.semanticCandidates = [
+        ...this.semanticCandidates.filter(item => item.memory_id !== current.memory_id),
+        { ...current, relevance: 0.9 },
+      ]
+    }
+  }
+}
+
 function candidate(overrides = {}) {
   return {
     memory_id: 'memory-1',
@@ -203,6 +263,181 @@ test('semantic recall is preferred and embedding failure falls back to lexical',
     .forActor('gpt').recall({ query: '关键词' })
   assert.equal(unconfigured.mode, 'lexical_fallback')
   assert.equal(unconfigured.semantic_error, 'embedding_not_configured')
+})
+
+test('remember is immediately recallable while its embedding is delayed for ten seconds', async () => {
+  const repository = new ReadAfterWriteRepository()
+  repository.semanticCandidates = [candidate({
+    memory_id: 'existing-semantic',
+    revision_id: 'existing-semantic-revision',
+    content: '已有语义结果',
+    relevance: 0.7,
+  })]
+  const vector = Array(1536).fill(0.01)
+  const service = createService(repository, {
+    embedding: {
+      async embed(text) {
+        if (text === '刚刚写入的苹果茉莉绿奶茶记忆') {
+          await new Promise(resolve => setTimeout(resolve, 10_000))
+        }
+        return { vector, model: 'qwen3-embedding:4b' }
+      },
+    },
+  }).forActor('gpt')
+
+  const remembered = await service.remember('刚刚写入的苹果茉莉绿奶茶记忆')
+  const immediate = await service.recall({ query: '苹果奶茶', limit: 5 })
+
+  assert.equal(immediate.mode, 'semantic')
+  assert.equal(immediate.semantic_error, null)
+  assert.ok(immediate.items.some(item => item.memory_id === remembered.memory_id))
+  assert.deepEqual(
+    repository.calls.find(call => call[0] === 'recallLexical'),
+    ['recallLexical', 'gpt', { query: '苹果奶茶', limit: 3 }],
+  )
+  assert.equal(repository.calls.some(call => call[0] === 'storeEmbedding'), false)
+
+  await new Promise(resolve => setTimeout(resolve, 10_100))
+  const embedded = await service.recall({ query: '苹果奶茶', limit: 5 })
+  assert.equal(embedded.mode, 'semantic')
+  assert.equal(
+    embedded.items.filter(item => item.memory_id === remembered.memory_id).length,
+    1,
+  )
+  assert.ok(repository.calls.some(call => (
+    call[0] === 'storeEmbedding' && call[2] === remembered.revision_id
+  )))
+})
+
+test('revise is immediately recallable and only the current revision is returned', async () => {
+  const repository = new ReadAfterWriteRepository()
+  const previous = candidate({
+    memory_id: 'changing-memory',
+    revision_id: 'old-revision-1',
+    revision_number: 1,
+    content: '旧事实：喜欢 A',
+    relevance: 0.9,
+  })
+  repository.setCurrent(previous)
+  repository.semanticCandidates = [
+    previous,
+    candidate({
+      memory_id: 'existing-semantic',
+      revision_id: 'existing-semantic-revision',
+      content: '已有语义结果',
+      relevance: 0.7,
+    }),
+  ]
+  const vector = Array(1536).fill(0.01)
+  const service = createService(repository, {
+    embedding: {
+      async embed(text) {
+        if (text === '新事实：现在喜欢 B') return new Promise(() => {})
+        return { vector, model: 'qwen3-embedding:4b' }
+      },
+    },
+  }).forActor('gpt')
+
+  const revised = await service.revise('changing-memory', {
+    content: '新事实：现在喜欢 B',
+    reason: '偏好改变',
+  })
+  const recalled = await service.recall({ query: '现在喜欢什么', limit: 5 })
+
+  assert.equal(recalled.mode, 'semantic')
+  assert.ok(recalled.items.some(item => item.revision_id === revised.revision_id))
+  assert.equal(recalled.items.some(item => item.revision_id === 'old-revision-1'), false)
+  assert.equal(
+    recalled.items.filter(item => item.memory_id === 'changing-memory').length,
+    1,
+  )
+})
+
+test('semantic lexical supplements stay bounded, deduplicated and actor scoped', async () => {
+  const repository = new FakeRepository()
+  repository.semanticCandidates = [
+    candidate({ memory_id: 'gpt-semantic', revision_id: 'gpt-semantic-revision', space_key: 'gpt' }),
+    candidate({ memory_id: 'claude-semantic', revision_id: 'claude-semantic-revision', space_key: 'claude' }),
+    candidate({ memory_id: 'shared-semantic', revision_id: 'shared-semantic-revision', space_key: 'shared' }),
+  ]
+  repository.candidates = [
+    candidate({ memory_id: 'gpt-semantic', revision_id: 'gpt-semantic-revision', space_key: 'gpt' }),
+    candidate({ memory_id: 'gpt-new', revision_id: 'gpt-new-revision', space_key: 'gpt', relevance: 0.75 }),
+    candidate({ memory_id: 'claude-new', revision_id: 'claude-new-revision', space_key: 'claude', relevance: 0.75 }),
+    candidate({ memory_id: 'shared-new', revision_id: 'shared-new-revision', space_key: 'shared', relevance: 0.75 }),
+    candidate({ memory_id: 'shared-extra', revision_id: 'shared-extra-revision', space_key: 'shared', relevance: 0.7 }),
+    candidate({ memory_id: 'shared-over-limit', revision_id: 'shared-over-limit-revision', space_key: 'shared', relevance: 0.7 }),
+  ]
+  const vector = Array(1536).fill(0.01)
+  const service = createService(repository, {
+    embedding: { embed: async () => ({ vector, model: 'qwen3-embedding:4b' }) },
+  })
+
+  const gpt = await service.forActor('gpt').recall({ query: '相关记忆', limit: 10 })
+  const claude = await service.forActor('claude').recall({ query: '相关记忆', limit: 10 })
+
+  assert.equal(gpt.items.some(item => item.memory_id === 'claude-new'), false)
+  assert.equal(claude.items.some(item => item.memory_id === 'gpt-new'), false)
+  assert.ok(gpt.items.some(item => item.memory_id === 'shared-new'))
+  assert.ok(claude.items.some(item => item.memory_id === 'shared-new'))
+  assert.equal(new Set(gpt.items.map(item => item.memory_id)).size, gpt.items.length)
+  assert.equal(new Set(claude.items.map(item => item.memory_id)).size, claude.items.length)
+  assert.ok(gpt.items.length <= 10)
+  assert.ok(claude.items.length <= 10)
+  assert.ok(repository.calls
+    .filter(call => call[0] === 'recallLexical')
+    .every(call => call[2].limit === 3))
+})
+
+test('semantic lexical supplements preserve the existing ranker and hard result limit', async () => {
+  const repository = new FakeRepository()
+  repository.semanticCandidates = [
+    candidate({ memory_id: 'semantic-1', revision_id: 'semantic-revision-1', relevance: 0.95 }),
+    candidate({ memory_id: 'semantic-2', revision_id: 'semantic-revision-2', relevance: 0.85 }),
+    candidate({ memory_id: 'semantic-3', revision_id: 'semantic-revision-3', relevance: 0.75 }),
+    candidate({ memory_id: 'semantic-4', revision_id: 'semantic-revision-4', relevance: 0.65 }),
+  ]
+  repository.candidates = [
+    candidate({ memory_id: 'semantic-1', revision_id: 'semantic-revision-1', relevance: 0.95 }),
+    candidate({ memory_id: 'lexical-1', revision_id: 'lexical-revision-1', relevance: 0.8 }),
+    candidate({ memory_id: 'lexical-2', revision_id: 'lexical-revision-2', relevance: 0.7 }),
+    candidate({ memory_id: 'lexical-3', revision_id: 'lexical-revision-3', relevance: 0.6 }),
+  ]
+  const vector = Array(1536).fill(0.01)
+  const service = createService(repository, {
+    embedding: { embed: async () => ({ vector, model: 'qwen3-embedding:4b' }) },
+  }).forActor('gpt')
+
+  const recalled = await service.recall({ query: '有界补充', limit: 4 })
+
+  assert.equal(recalled.mode, 'semantic')
+  assert.equal(recalled.items.length, 4)
+  assert.equal(new Set(recalled.items.map(item => item.memory_id)).size, 4)
+  assert.ok(recalled.items.every((item, index, items) => (
+    index === 0 || items[index - 1].rank_score >= item.rank_score
+  )))
+  assert.deepEqual(
+    repository.calls.find(call => call[0] === 'recallLexical')?.[2],
+    { query: '有界补充', limit: 3 },
+  )
+})
+
+test('a failed lexical supplement never downgrades a successful semantic recall', async () => {
+  const repository = new FakeRepository()
+  repository.semanticCandidates = [candidate({ content: '语义主路径结果', relevance: 0.9 })]
+  repository.recallLexical = async () => {
+    throw new Error('lexical supplement unavailable')
+  }
+  const vector = Array(1536).fill(0.01)
+  const service = createService(repository, {
+    embedding: { embed: async () => ({ vector, model: 'qwen3-embedding:4b' }) },
+  }).forActor('gpt')
+
+  const recalled = await service.recall({ query: '语义主路径', limit: 5 })
+
+  assert.equal(recalled.mode, 'semantic')
+  assert.equal(recalled.semantic_error, null)
+  assert.deepEqual(recalled.items.map(item => item.content), ['语义主路径结果'])
 })
 
 test('recall exposes semantic degradation and later recovery without a new status service', async () => {
