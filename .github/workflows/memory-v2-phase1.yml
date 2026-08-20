@@ -4,11 +4,15 @@ on:
   push:
     branches:
       - agent/memory-v2-phase1-20260820
+      - agent/memory-v2-history-source-descriptors-20260821
     paths:
       - "bridge/memory-v2/**"
       - "supabase/migrations/20260820110600_create_memory_v2_phase1.sql"
       - "supabase/rollback/20260820110600_create_memory_v2_phase1_rollback.sql"
       - "supabase/tests/memory_v2_phase1.sql"
+      - "supabase/migrations/20260820163417_memory_v2_history_source_descriptors.sql"
+      - "supabase/rollback/20260820163417_memory_v2_history_source_descriptors_rollback.sql"
+      - "supabase/tests/memory_v2_history_source_descriptors.sql"
       - ".github/workflows/memory-v2-phase1.yml"
   pull_request:
     paths:
@@ -16,6 +20,9 @@ on:
       - "supabase/migrations/20260820110600_create_memory_v2_phase1.sql"
       - "supabase/rollback/20260820110600_create_memory_v2_phase1_rollback.sql"
       - "supabase/tests/memory_v2_phase1.sql"
+      - "supabase/migrations/20260820163417_memory_v2_history_source_descriptors.sql"
+      - "supabase/rollback/20260820163417_memory_v2_history_source_descriptors_rollback.sql"
+      - "supabase/tests/memory_v2_history_source_descriptors.sql"
       - ".github/workflows/memory-v2-phase1.yml"
   workflow_dispatch:
 
@@ -46,17 +53,25 @@ jobs:
         run: |
           DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260820110600_create_memory_v2_phase1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260820163417_memory_v2_history_source_descriptors.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_v2_phase1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_v2_history_source_descriptors.sql
           supabase db lint --workdir .memory-v2-ci --local --schema public --level warning --fail-on error
 
       - name: Rollback and re-apply
         run: |
           DB=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260820163417_memory_v2_history_source_descriptors_rollback.sql
+          test "$(psql "$DB" -Atc "select position('''sources''' in pg_get_functiondef('public.memory_v2_history(uuid,text,uuid)'::regprocedure)) = 0;")" = "t"
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260820163417_memory_v2_history_source_descriptors.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_v2_history_source_descriptors.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/rollback/20260820110600_create_memory_v2_phase1_rollback.sql
           test "$(psql "$DB" -Atc "select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'memory_v2_%';")" = "0"
           test "$(psql "$DB" -Atc "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'memory_v2_%';")" = "0"
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260820110600_create_memory_v2_phase1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/migrations/20260820163417_memory_v2_history_source_descriptors.sql
           psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_v2_phase1.sql
+          psql "$DB" -v ON_ERROR_STOP=1 -f supabase/tests/memory_v2_history_source_descriptors.sql
 
       - name: Bridge full regression
         working-directory: bridge
