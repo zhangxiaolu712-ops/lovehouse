@@ -13,6 +13,7 @@ class FakeRepository {
   calls = []
   candidates = []
   semanticCandidates = []
+  starterCandidates = []
 
   async remember(actor, content, options) {
     this.calls.push(['remember', actor, content, options])
@@ -44,6 +45,11 @@ class FakeRepository {
   async recallSemantic(actor, input) {
     this.calls.push(['recallSemantic', actor, input])
     return this.semanticCandidates.filter(item => item.space_key === actor || item.space_key === 'shared')
+  }
+
+  async starterPackCandidates(actor) {
+    this.calls.push(['starterPackCandidates', actor])
+    return this.starterCandidates.filter(item => item.space_key === actor || item.space_key === 'shared')
   }
 
   async storeEmbedding(actor, revisionId, result) {
@@ -297,9 +303,13 @@ test('starter pack selects commitment then recent then random blindbox without i
     human_importance: index === 13 ? 5 : null,
     created_at: `2026-07-${String(31 - index).padStart(2, '0')}T10:00:00Z`,
   }))
-  repository.candidates = [...commitments, ...ordinary]
+  repository.starterCandidates = [
+    ...commitments.slice(0, 4).map(item => ({ ...item, starter_category: 'commitment' })),
+    ...ordinary.slice(0, 8).map(item => ({ ...item, starter_category: 'recent' })),
+    ...ordinary.slice(8, 11).map(item => ({ ...item, starter_category: 'blindbox' })),
+  ]
 
-  const pack = await createService(repository, { random: () => 0 }).forActor('gpt').starterPack({
+  const pack = await createService(repository).forActor('gpt').starterPack({
     softLimit: 15,
     tokenBudget: 4000,
   })
@@ -315,11 +325,24 @@ test('starter pack selects commitment then recent then random blindbox without i
   assert.ok(pack.items.every(item => item.summary.length <= 240))
   assert.ok(pack.items.every(item => !('quote_text' in item) && !('sources' in item)))
 
-  const tight = await createService(repository, { random: () => 0 }).forActor('gpt').starterPack({
+  assert.deepEqual(repository.calls[0], ['starterPackCandidates', 'gpt'])
+
+  const tight = await createService(repository).forActor('gpt').starterPack({
     softLimit: 15,
     tokenBudget: 180,
   })
   assert.ok(tight.items.length > 0)
   assert.ok(tight.items.every(item => item.starter_category === 'commitment'))
   assert.ok(tight.estimated_tokens <= 180)
+})
+
+test('starter pack failure stays isolated from remember and recall', async () => {
+  const repository = new FakeRepository()
+  repository.candidates = [candidate({ content: '普通召回仍可用' })]
+  repository.starterPackCandidates = async () => { throw new Error('blindbox unavailable') }
+  const gpt = createService(repository).forActor('gpt')
+
+  await assert.rejects(gpt.starterPack(), /blindbox unavailable/)
+  assert.equal((await gpt.remember('Starter Pack 故障不影响存储')).memory_id, 'gpt-memory')
+  assert.equal((await gpt.recall({ query: '普通召回' })).items[0].content, '普通召回仍可用')
 })

@@ -38,7 +38,8 @@ begin
   if has_table_privilege('anon', 'public.memory_v2_entries', 'select')
     or has_table_privilege('authenticated', 'public.memory_v2_entries', 'select')
     or has_function_privilege('anon', 'public.memory_v2_remember(uuid,text,text,jsonb)', 'execute')
-    or has_function_privilege('authenticated', 'public.memory_v2_recall_lexical(uuid,text,text,integer)', 'execute') then
+    or has_function_privilege('authenticated', 'public.memory_v2_recall_lexical(uuid,text,text,integer)', 'execute')
+    or has_function_privilege('anon', 'public.memory_v2_starter_pack_candidates(uuid,text)', 'execute') then
     raise exception 'anon/authenticated gained direct Memory V2 access';
   end if;
 end;
@@ -56,11 +57,25 @@ declare
   new_saved jsonb;
   chinese_saved jsonb;
   chinese_unrelated jsonb;
+  old_commitment jsonb;
+  revised_commitment_v1 jsonb;
+  revised_commitment_v2 jsonb;
+  inactive_commitment jsonb;
+  fulfilled_commitment jsonb;
+  revoked_source jsonb;
+  revoked_shared jsonb;
+  approved_source jsonb;
+  approved_commitment_shared jsonb;
+  claude_commitment jsonb;
+  generated jsonb;
+  starter jsonb;
   result jsonb;
   expanded jsonb;
   quote_source_id uuid;
   summary_source_id uuid;
   denied boolean;
+  item_index integer;
+  recent_floor timestamptz;
 begin
   gpt_saved := public.memory_v2_remember(owner_id, 'gpt', 'GPT only orchid memory', '{}'::jsonb);
   claude_saved := public.memory_v2_remember(owner_id, 'claude', 'Claude only cedar memory', '{}'::jsonb);
@@ -223,6 +238,169 @@ begin
     where item ->> 'memory_id' = chinese_unrelated ->> 'memory_id'
   ) then
     raise exception 'Chinese lexical fallback overmatched unrelated content';
+  end if;
+
+  old_commitment := public.memory_v2_remember(
+    owner_id,
+    'gpt',
+    '很旧但仍然有效的承诺',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'active'))
+  );
+  update public.memory_v2_revisions set created_at = '2018-01-01T00:00:00Z'
+  where id = (old_commitment ->> 'revision_id')::uuid;
+
+  revised_commitment_v1 := public.memory_v2_remember(
+    owner_id,
+    'gpt',
+    '承诺旧版本 A',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'active'))
+  );
+  revised_commitment_v2 := public.memory_v2_revise(
+    owner_id,
+    'gpt',
+    (revised_commitment_v1 ->> 'memory_id')::uuid,
+    '承诺当前版本 B',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'active'))
+  );
+
+  inactive_commitment := public.memory_v2_remember(
+    owner_id,
+    'gpt',
+    '已经失效的承诺',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'inactive'))
+  );
+  fulfilled_commitment := public.memory_v2_remember(
+    owner_id,
+    'gpt',
+    '已经完成的承诺',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'fulfilled'))
+  );
+
+  revoked_source := public.memory_v2_remember(
+    owner_id,
+    'gpt',
+    '稍后撤销的 Shared 承诺',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'active'))
+  );
+  revoked_shared := public.memory_v2_approve_shared(
+    owner_id, (revoked_source ->> 'memory_id')::uuid
+  );
+  update public.memory_v2_entries set shared_status = 'revoked'
+  where id = (revoked_shared ->> 'memory_id')::uuid;
+  perform public.memory_v2_revise(
+    owner_id,
+    'gpt',
+    (revoked_source ->> 'memory_id')::uuid,
+    'Shared 已撤销',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'inactive'))
+  );
+
+  approved_source := public.memory_v2_remember(
+    owner_id,
+    'gpt',
+    'GPT 与 Claude 都能看到的 approved Shared 承诺',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'active'))
+  );
+  approved_commitment_shared := public.memory_v2_approve_shared(
+    owner_id, (approved_source ->> 'memory_id')::uuid
+  );
+  perform public.memory_v2_revise(
+    owner_id,
+    'gpt',
+    (approved_source ->> 'memory_id')::uuid,
+    '已经复制到 Shared 的私有来源',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'inactive'))
+  );
+  claude_commitment := public.memory_v2_remember(
+    owner_id,
+    'claude',
+    'Claude private 当前承诺',
+    jsonb_build_object('metadata', jsonb_build_object('commitment_status', 'active'))
+  );
+
+  for item_index in 1..60 loop
+    generated := public.memory_v2_remember(
+      owner_id,
+      'gpt',
+      format('较新的普通记忆 %s', item_index),
+      '{}'::jsonb
+    );
+    update public.memory_v2_revisions
+    set created_at = '2026-08-20T00:00:00Z'::timestamptz + item_index * interval '1 minute'
+    where id = (generated ->> 'revision_id')::uuid;
+  end loop;
+
+  starter := public.memory_v2_starter_pack_candidates(owner_id, 'gpt');
+  if not exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'memory_id' = old_commitment ->> 'memory_id'
+      and item ->> 'starter_category' = 'commitment'
+  ) then
+    raise exception 'old active commitment was lost behind a recent-pool limit';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'memory_id' = old_saved ->> 'memory_id'
+      or item ->> 'revision_id' = revised_commitment_v1 ->> 'revision_id'
+      or item ->> 'content' = '承诺旧版本 A'
+      or item ->> 'memory_id' = revoked_shared ->> 'memory_id'
+      or item ->> 'memory_id' = claude_commitment ->> 'memory_id'
+  ) then
+    raise exception 'Starter Pack admitted superseded, historical, revoked Shared or cross-private data';
+  end if;
+  if not exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'revision_id' = revised_commitment_v2 ->> 'revision_id'
+      and item ->> 'content' = '承诺当前版本 B'
+  ) then
+    raise exception 'Starter Pack did not use the current revision';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'memory_id' in (
+      inactive_commitment ->> 'memory_id', fulfilled_commitment ->> 'memory_id'
+    )
+  ) then
+    raise exception 'inactive or fulfilled commitment entered Starter Pack';
+  end if;
+  if not exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'memory_id' = approved_commitment_shared ->> 'memory_id'
+      and item ->> 'space_key' = 'shared'
+  ) then
+    raise exception 'approved Shared was missing from GPT Starter Pack';
+  end if;
+  if jsonb_array_length(starter) <> (
+    select count(distinct item ->> 'memory_id') from jsonb_array_elements(starter) item
+  ) then
+    raise exception 'Starter Pack categories were not deduplicated';
+  end if;
+  select min((item ->> 'created_at')::timestamptz) into recent_floor
+  from jsonb_array_elements(starter) item
+  where item ->> 'starter_category' = 'recent';
+  if not exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'starter_category' = 'blindbox'
+      and (item ->> 'created_at')::timestamptz <= recent_floor
+  ) then
+    raise exception 'Blindbox did not draw from the older remaining eligible pool';
+  end if;
+
+  starter := public.memory_v2_starter_pack_candidates(owner_id, 'claude');
+  if not exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'memory_id' = claude_commitment ->> 'memory_id'
+      and item ->> 'space_key' = 'claude'
+  ) or not exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'memory_id' = approved_commitment_shared ->> 'memory_id'
+      and item ->> 'space_key' = 'shared'
+  ) or exists (
+    select 1 from jsonb_array_elements(starter) item
+    where item ->> 'memory_id' = old_commitment ->> 'memory_id'
+      or item ->> 'memory_id' = revoked_shared ->> 'memory_id'
+  ) then
+    raise exception 'Claude private / approved Shared Starter Pack isolation failed';
   end if;
 end;
 $$;

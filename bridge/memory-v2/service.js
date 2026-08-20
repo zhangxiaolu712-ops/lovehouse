@@ -5,12 +5,7 @@ const RESERVED_FIELDS = new Set([
 ])
 const OPTIONAL_METADATA_FIELDS = ['tag', 'tags', 'project', 'type', 'mood', 'stance']
 export const RECALL_IMPORTANCE_WEIGHTS = Object.freeze({ ai: 0.7, human: 0.3 })
-const STARTER_PACK_LIMITS = Object.freeze({
-  commitments: 4,
-  recent: 8,
-  blindbox: 3,
-  total: 15,
-})
+const STARTER_PACK_TOTAL_LIMIT = 15
 
 function fixedActor(actor) {
   if (!ACTORS.has(actor)) throw new TypeError('A fixed Memory V2 actor is required')
@@ -183,23 +178,6 @@ function shortMemory(candidate, maximum = 240) {
   return text.length <= maximum ? text : `${text.slice(0, maximum - 1)}…`
 }
 
-function newestFirst(left, right) {
-  return String(right.created_at || '').localeCompare(String(left.created_at || ''))
-}
-
-function isCurrentCommitment(candidate) {
-  return String(candidate.metadata?.commitment_status || '').toLowerCase() === 'active'
-}
-
-function randomOrder(candidates, random) {
-  const shuffled = [...candidates]
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const swapWith = Math.min(index, Math.floor(clamp(random()) * (index + 1)))
-    ;[shuffled[index], shuffled[swapWith]] = [shuffled[swapWith], shuffled[index]]
-  }
-  return shuffled
-}
-
 function starterItem(candidate, category) {
   return {
     memory_id: candidate.memory_id,
@@ -219,7 +197,6 @@ export class MemoryV2Service {
     embedding = null,
     clock = () => new Date(),
     utcOffsetMinutes = 480,
-    random = Math.random,
     onEmbeddingError = () => {},
   }) {
     if (!repository) throw new TypeError('Memory V2 repository is required')
@@ -227,7 +204,6 @@ export class MemoryV2Service {
     this.embedding = embedding
     this.clock = clock
     this.utcOffsetMinutes = utcOffsetMinutes
-    this.random = random
     this.onEmbeddingError = onEmbeddingError
   }
 
@@ -335,30 +311,11 @@ export class MemoryV2Service {
   async starterPack(actor, input = {}) {
     const trustedActor = fixedActor(actor)
     assertNoAuthorityFields(input)
-    const softLimit = boundedInteger(input.softLimit, STARTER_PACK_LIMITS.total, STARTER_PACK_LIMITS.total)
+    const softLimit = boundedInteger(input.softLimit, STARTER_PACK_TOTAL_LIMIT, STARTER_PACK_TOTAL_LIMIT)
     const tokenBudget = boundedInteger(input.tokenBudget, 1600, 4000)
     const currentTime = this.currentTime()
-    const candidates = await this.repository.recallLexical(trustedActor, {
-      query: '',
-      limit: Math.min(50, softLimit * 3),
-    })
-    const unique = [...new Map(candidates.map(candidate => [candidate.memory_id, candidate])).values()]
-    const commitments = unique.filter(isCurrentCommitment).sort(newestFirst)
-    const commitmentIds = new Set(commitments.map(candidate => candidate.memory_id))
-    const recent = unique.filter(candidate => !commitmentIds.has(candidate.memory_id)).sort(newestFirst)
-    const recentSelected = recent.slice(0, STARTER_PACK_LIMITS.recent)
-    const recentIds = new Set(recentSelected.map(candidate => candidate.memory_id))
-    const blindbox = randomOrder(
-      recent.filter(candidate => !recentIds.has(candidate.memory_id)),
-      this.random
-    )
-    const selections = [
-      ...commitments.slice(0, STARTER_PACK_LIMITS.commitments)
-        .map(candidate => starterItem(candidate, 'commitment')),
-      ...recentSelected.map(candidate => starterItem(candidate, 'recent')),
-      ...blindbox.slice(0, STARTER_PACK_LIMITS.blindbox)
-        .map(candidate => starterItem(candidate, 'blindbox')),
-    ]
+    const candidates = await this.repository.starterPackCandidates(trustedActor)
+    const selections = candidates.map(candidate => starterItem(candidate, candidate.starter_category))
     const items = []
     let estimatedTokens = 0
     for (const item of selections) {

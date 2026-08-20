@@ -5,6 +5,7 @@ drop function if exists public.memory_v2_history(uuid, text, uuid);
 drop function if exists public.memory_v2_record_recall(uuid, text, uuid[], timestamptz);
 drop function if exists public.memory_v2_store_embedding(uuid, text, uuid, text, real[]);
 drop function if exists public.memory_v2_recall_semantic(uuid, text, real[], text, integer);
+drop function if exists public.memory_v2_starter_pack_candidates(uuid, text);
 drop function if exists public.memory_v2_recall_lexical(uuid, text, text, integer);
 drop function if exists public.memory_v2_approve_shared(uuid, uuid);
 drop function if exists public.memory_v2_revise(uuid, text, uuid, text, jsonb);

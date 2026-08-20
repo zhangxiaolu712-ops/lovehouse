@@ -410,6 +410,91 @@ begin
 end;
 $$;
 
+create or replace function public.memory_v2_starter_pack_candidates(
+  p_owner_id uuid,
+  p_actor text
+)
+returns jsonb
+language sql
+volatile
+security invoker
+set search_path = pg_catalog, public, extensions
+as $$
+  with visible as materialized (
+    select
+      e.id as memory_id,
+      r.id as revision_id,
+      r.revision_number,
+      r.content,
+      r.event_time,
+      r.human_importance,
+      r.ai_importance,
+      r.metadata,
+      r.created_at,
+      e.space_key,
+      e.last_recalled_at,
+      e.recall_count,
+      (select count(*)::integer from public.memory_v2_revision_sources links
+        where links.revision_id = r.id) as source_count
+    from public.memory_v2_entries e
+    join public.memory_v2_revisions r on r.id = e.current_revision_id
+    where e.owner_id = p_owner_id
+      and p_actor in ('gpt', 'claude')
+      and e.status = 'active'
+      and e.superseded_by_id is null
+      and (
+        r.metadata ->> 'commitment_status' is null
+        or lower(r.metadata ->> 'commitment_status') = 'active'
+      )
+      and (
+        e.space_key = p_actor
+        or (e.space_key = 'shared' and e.shared_status = 'approved')
+      )
+  ), commitment_ranked as (
+    select visible.*, row_number() over (order by created_at desc, memory_id) as category_rank
+    from visible
+    where lower(coalesce(metadata ->> 'commitment_status', '')) = 'active'
+  ), commitments as (
+    select * from commitment_ranked where category_rank <= 4
+  ), recent_ranked as (
+    select visible.*, row_number() over (order by created_at desc, memory_id) as category_rank
+    from visible
+    where not exists (
+      select 1 from commitments selected where selected.memory_id = visible.memory_id
+    )
+  ), recent as (
+    select * from recent_ranked where category_rank <= 8
+  ), blindbox_ranked as (
+    select visible.*, row_number() over (order by random()) as category_rank
+    from visible
+    where not exists (
+      select 1 from commitments selected where selected.memory_id = visible.memory_id
+    )
+      and not exists (
+        select 1 from recent selected where selected.memory_id = visible.memory_id
+      )
+  ), blindbox as (
+    select * from blindbox_ranked where category_rank <= 3
+  ), selected as (
+    select commitments.*, 'commitment'::text as starter_category, 1 as category_order
+    from commitments
+    union all
+    select recent.*, 'recent'::text as starter_category, 2 as category_order
+    from recent
+    union all
+    select blindbox.*, 'blindbox'::text as starter_category, 3 as category_order
+    from blindbox
+  )
+  select coalesce(
+    jsonb_agg(
+      to_jsonb(selected) - 'category_order' - 'category_rank'
+      order by category_order, category_rank
+    ),
+    '[]'::jsonb
+  )
+  from selected;
+$$;
+
 create or replace function public.memory_v2_store_embedding(
   p_owner_id uuid,
   p_actor text,
@@ -734,6 +819,7 @@ revoke all on function public.memory_v2_remember(uuid, text, text, jsonb) from p
 revoke all on function public.memory_v2_revise(uuid, text, uuid, text, jsonb) from public, anon, authenticated;
 revoke all on function public.memory_v2_approve_shared(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.memory_v2_recall_lexical(uuid, text, text, integer) from public, anon, authenticated;
+revoke all on function public.memory_v2_starter_pack_candidates(uuid, text) from public, anon, authenticated;
 revoke all on function public.memory_v2_recall_semantic(uuid, text, real[], text, integer) from public, anon, authenticated;
 revoke all on function public.memory_v2_store_embedding(uuid, text, uuid, text, real[]) from public, anon, authenticated;
 revoke all on function public.memory_v2_record_recall(uuid, text, uuid[], timestamptz) from public, anon, authenticated;
@@ -745,6 +831,7 @@ grant execute on function public.memory_v2_materialize_sources(uuid, text, text,
 grant execute on function public.memory_v2_revise(uuid, text, uuid, text, jsonb) to service_role;
 grant execute on function public.memory_v2_approve_shared(uuid, uuid) to service_role;
 grant execute on function public.memory_v2_recall_lexical(uuid, text, text, integer) to service_role;
+grant execute on function public.memory_v2_starter_pack_candidates(uuid, text) to service_role;
 grant execute on function public.memory_v2_recall_semantic(uuid, text, real[], text, integer) to service_role;
 grant execute on function public.memory_v2_store_embedding(uuid, text, uuid, text, real[]) to service_role;
 grant execute on function public.memory_v2_record_recall(uuid, text, uuid[], timestamptz) to service_role;

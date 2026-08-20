@@ -60,6 +60,16 @@ export class SupabaseMemoryV2Repository {
     })
   }
 
+  starterPackCandidates(actor) {
+    return this.rest('POST', 'rpc/memory_v2_starter_pack_candidates', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedActor(actor),
+    }).then(payload => {
+      if (!Array.isArray(payload)) return []
+      return payload.length === 1 && Array.isArray(payload[0]) ? payload[0] : payload
+    })
+  }
+
   recallSemantic(actor, { vector, model, limit = 30 }) {
     return this.rpc('memory_v2_recall_semantic', {
       p_owner_id: this.ownerId,
