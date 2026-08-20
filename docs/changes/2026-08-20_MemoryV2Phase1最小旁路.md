@@ -10,7 +10,7 @@
 - 新增独立 `bridge/memory-v2/` Service/Repository；没有修改或注册现有 MCP、Bridge server、Chat 或前端入口。
 - `remember` 支持仅传正文；owner、GPT/Claude actor 与 private scope 由服务端 facade 固定。事件时间、tag/project/type/mood/stance、人类/AI 重要性及 source 全部可选。
 - remember/revise 成功后才 best-effort 写 embedding；provider 未配置、离线或失败不回滚正文。
-- recall 优先使用 semantic candidates；provider 错误或没有可用向量时自动走 PostgreSQL lexical + `pg_trgm.word_similarity` candidates，再使用同一个动态 Ranker。降级返回 `mode=lexical_fallback` 与明确 `semantic_error`，恢复后返回 `mode=semantic`。
+- recall 优先使用 semantic candidates；provider 错误或没有可用向量时自动走 PostgreSQL lexical + `pg_trgm.word_similarity` candidates；非 ASCII 查询另以相邻双字覆盖率补足中文插词命中，至少覆盖一半才进入候选。候选再使用同一个动态 Ranker。降级返回 `mode=lexical_fallback` 与明确 `semantic_error`，恢复后返回 `mode=semantic`。
 - Ranker 将相关性与权重分开：最终分为 `relevance × (0.75 + 0.15 × tide + 0.10 × importance)`；importance 使用可调实现常量 AI 70%、human 30%。Tide 只复用 created/event/last recalled 时间和有上限的 recall count，不新增 Tide 表。
 - revision append-only；普通 recall 只查 active/current，旧事实用一个 `superseded_by_id` 关联保留历史。
 - source 可省略；存在时绑定确定 revision，默认 recall 只返回 source count，原文由显式 expand 展开。

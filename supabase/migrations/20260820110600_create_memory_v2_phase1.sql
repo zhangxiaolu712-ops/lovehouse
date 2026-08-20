@@ -298,11 +298,31 @@ as $$
               + 0.25::double precision
                 * extensions.word_similarity(lower(btrim(p_query)), lower(r.content))::double precision
             else 0.0::double precision
+          end,
+          case
+            when lexical.cjk_pair_coverage >= 0.5
+            then 0.45::double precision
+              + 0.25::double precision * lexical.cjk_pair_coverage
+            else 0.0::double precision
           end
         )
       end as relevance
     from public.memory_v2_entries e
     join public.memory_v2_revisions r on r.id = e.current_revision_id
+    cross join lateral (
+      select case
+        when char_length(btrim(coalesce(p_query, ''))) >= 3
+          and octet_length(btrim(p_query)) > char_length(btrim(p_query))
+        then coalesce((
+          select avg(case
+            when strpos(lower(r.content), lower(substring(btrim(p_query) from pair_start for 2))) > 0
+            then 1.0::double precision else 0.0::double precision
+          end)
+          from generate_series(1, char_length(btrim(p_query)) - 1) pair_start
+        ), 0.0::double precision)
+        else 0.0::double precision
+      end as cjk_pair_coverage
+    ) lexical
     where e.owner_id = p_owner_id
       and p_actor in ('gpt', 'claude')
       and e.status = 'active'
