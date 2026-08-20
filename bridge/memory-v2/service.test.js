@@ -62,7 +62,19 @@ class FakeRepository {
 
   async history(actor, memoryId) {
     this.calls.push(['history', actor, memoryId])
-    return [{ revision_number: 1 }, { revision_number: 2 }]
+    return [
+      {
+        revision_number: 1,
+        sources: [{
+          source_id: 'source-1',
+          source_kind: 'manual_quote',
+          locator: { reference: 'selected text' },
+          provenance: { source_channel: 'manual' },
+          ordinal: 0,
+        }],
+      },
+      { revision_number: 2, sources: [] },
+    ]
   }
 
   async expandSource(actor, sourceId) {
@@ -297,8 +309,11 @@ test('revision, history and source expansion remain actor-bound', async () => {
   assert.deepEqual(repository.calls[0], [
     'revise', 'claude', 'memory-1', '第二版内容', { reason: '理解更新' },
   ])
-  assert.equal((await claude.history('memory-1')).length, 2)
-  assert.equal((await claude.expandSource('source-1')).quote_text, '原文')
+  const history = await claude.history('memory-1')
+  assert.equal(history.length, 2)
+  assert.equal(history[0].sources[0].source_id, 'source-1')
+  assert.equal('quote_text' in history[0].sources[0], false)
+  assert.equal((await claude.expandSource(history[0].sources[0].source_id)).quote_text, '原文')
 })
 
 test('Shared creation is unavailable without explicit owner approval', async () => {
