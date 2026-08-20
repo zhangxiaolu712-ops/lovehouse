@@ -15,7 +15,7 @@ class MemoryStorage {
   setItem(key, value) { this.values.set(key, String(value)) }
 }
 
-test('Codex window id remains stable when the page is refreshed', () => {
+test('Codex window id remains stable across refresh and browser reopen', () => {
   const storage = new MemoryStorage()
   const first = getCodexWindowId(storage)
   const reopened = getCodexWindowId(storage)
@@ -42,8 +42,17 @@ test('local fallback history is bounded and contains no thread identity', () => 
 test('router and 4x4 home expose the independent Codex entry', async () => {
   const router = await readFile(new URL('../../core/router.jsx', import.meta.url), 'utf8')
   const home = await readFile(new URL('../../shared/Home.jsx', import.meta.url), 'utf8')
+  const state = await readFile(new URL('./codexChatState.js', import.meta.url), 'utf8')
+  const service = await readFile(new URL('./codexChatService.js', import.meta.url), 'utf8')
+  const vite = await readFile(new URL('../../../vite.config.js', import.meta.url), 'utf8')
   assert.match(router, /path: 'codex-chat'/)
   assert.match(router, /CodexChatPage/)
   assert.match(home, /to="\/codex-chat"/)
   assert.match(home, /label="Codex"/)
+  assert.match(state, /globalThis\.localStorage/)
+  assert.doesNotMatch(state, /globalThis\.sessionStorage/)
+  assert.doesNotMatch(service, /tingtunehouse\.duckdns\.org/)
+  assert.match(vite, /'\/api\/codex'/)
+  assert.match(vite, /secureProtocol: 'TLSv1_2_method'/)
+  assert.match(vite, /keepAlive: true/)
 })

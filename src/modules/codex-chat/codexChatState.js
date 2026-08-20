@@ -11,7 +11,7 @@ function createWindowId() {
   return `codex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
-export function getCodexWindowId(storage = globalThis.sessionStorage) {
+export function getCodexWindowId(storage = globalThis.localStorage) {
   try {
     const stored = storage?.getItem(WINDOW_KEY)
     if (stored) return stored
@@ -40,7 +40,7 @@ export function boundCodexRecentHistory(value) {
   return result.reverse()
 }
 
-export function loadCodexRecentHistory(storage = globalThis.sessionStorage) {
+export function loadCodexRecentHistory(storage = globalThis.localStorage) {
   try {
     return boundCodexRecentHistory(JSON.parse(storage?.getItem(HISTORY_KEY) || '[]'))
   } catch {
@@ -48,7 +48,7 @@ export function loadCodexRecentHistory(storage = globalThis.sessionStorage) {
   }
 }
 
-export function saveCodexRecentHistory(messages, storage = globalThis.sessionStorage) {
+export function saveCodexRecentHistory(messages, storage = globalThis.localStorage) {
   const bounded = boundCodexRecentHistory(messages)
   try { storage?.setItem(HISTORY_KEY, JSON.stringify(bounded)) } catch {}
   return bounded
