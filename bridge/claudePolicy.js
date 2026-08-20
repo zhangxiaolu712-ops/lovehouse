@@ -6,20 +6,13 @@ export const CLAUDE_MCP_SERVER_NAME = 'lovehouse'
 // the equality test below must fail until this allowlist is deliberately
 // updated.
 export const CLAUDE_MCP_TOOL_NAMES = Object.freeze([
-  'read_livingroom_messages',
-  'send_livingroom_message',
-  'get_livingroom_context',
-  'get_starter_pack',
-  'open_memory_box',
-  'save_memory',
+  'wake_up',
+  'remember',
   'recall',
-  'load_memories',
-  'search_memories',
-  'save_to_memories',
-  'get_memory',
-  'revise_memory',
-  'propose_shared_candidate',
-  'expand_source',
+  'revise',
+  'open_memory',
+  'read_livingroom',
+  'say_livingroom',
 ])
 
 export const CLAUDE_ALLOWED_TOOLS = Object.freeze(

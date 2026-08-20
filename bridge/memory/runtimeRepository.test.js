@@ -1,15 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { MEMORY_ACTORS } from './model.js'
-import { MemoryService } from './service.js'
 import {
   createRuntimeMemoryRepository,
   DisabledMemoryRepository,
   MemorySystemDisabledError,
 } from './runtimeRepository.js'
-import { createLivingroomRest } from '../livingroom.js'
-import { createMcpToolHandler } from '../mcp/tools.js'
 
 test('disabled runtime repository fails closed for every operation without touching canonical storage', async () => {
   let canonicalCalls = 0
@@ -45,41 +41,4 @@ test('enabled runtime repository uses only the canonical repository', () => {
     createRuntimeMemoryRepository({ enabled: true, canonicalRepository }),
     canonicalRepository
   )
-})
-
-test('all eleven memory MCP tools fail closed while Memory System is disabled', async () => {
-  const memoryService = new MemoryService({
-    repository: createRuntimeMemoryRepository({ enabled: false }),
-    auditSink: { persistent: true, async record() {} },
-    writeEnabled: true,
-  })
-  let livingroomCalls = 0
-  const handler = createMcpToolHandler({
-    actor: MEMORY_ACTORS.GPT,
-    memoryService,
-    livingroomRest: createLivingroomRest({
-      rest: async () => { livingroomCalls += 1; return [] },
-    }),
-  })
-  const calls = [
-    ['get_starter_pack', {}],
-    ['open_memory_box', {}],
-    ['save_memory', { content: 'blocked' }],
-    ['recall', { query: 'blocked' }],
-    ['load_memories', {}],
-    ['search_memories', { keyword: 'blocked' }],
-    ['save_to_memories', { content: 'blocked' }],
-    ['get_memory', { memory_id: 1 }],
-    ['revise_memory', { memory_id: 1, content: 'blocked', reason: 'test' }],
-    ['propose_shared_candidate', { memory_id: 1, reason: 'test' }],
-    ['expand_source', { source_id: 1 }],
-  ]
-
-  for (const [name, args] of calls) {
-    await assert.rejects(
-      handler(name, args),
-      error => error.code === 'MEMORY_SYSTEM_DISABLED'
-    )
-  }
-  assert.equal(livingroomCalls, 0)
 })

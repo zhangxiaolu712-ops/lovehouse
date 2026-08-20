@@ -4,11 +4,11 @@ import { createMcpToolDefinitions, createMcpToolHandler } from './tools.js'
  * Binds one authenticated transport to one server-owned actor. Request body,
  * query, headers and tool arguments are deliberately not actor sources.
  */
-export function createMcpChannel({ actor, memoryService, livingroomRest }) {
+export function createMcpChannel({ actor, memoryV2Service, livingroomRest }) {
   const tools = createMcpToolDefinitions(actor)
   const fixedActorToolHandler = createMcpToolHandler({
     actor,
-    memoryService,
+    memoryV2Service,
     livingroomRest,
   })
 

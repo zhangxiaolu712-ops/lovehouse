@@ -1,298 +1,319 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import {
-  HouseRulesConfigurationError,
-  MEMORY_ACTORS,
-  MemoryService,
-} from '../memory/index.js'
 import { createLivingroomRest } from '../livingroom.js'
+import { MEMORY_ACTORS } from '../memory/index.js'
+import { MemoryV2Service } from '../memory-v2/index.js'
 import {
   createMcpToolDefinitions,
   createMcpToolHandler,
   MCP_TOOL_ROUTES,
 } from './tools.js'
 
+const MEMORY_ID = '11111111-1111-4111-8111-111111111111'
+const SOURCE_ID = '22222222-2222-4222-8222-222222222222'
+const REVISION_ID = '33333333-3333-4333-8333-333333333333'
+const NOW = new Date('2026-08-21T00:00:00.000Z')
+const TOOL_NAMES = [
+  'wake_up',
+  'remember',
+  'recall',
+  'revise',
+  'open_memory',
+  'read_livingroom',
+  'say_livingroom',
+]
+
 const livingroomFence = rest => createLivingroomRest({ rest })
 
-test('MCP schemas expose no author, authority, owner, revision, hash, space or Shared approval selector', () => {
+function facadeService(factory) {
+  return {
+    forActor(actor) {
+      return factory(actor)
+    },
+  }
+}
+
+function recordingFacade(calls, actor) {
+  return {
+    async starterPack(input) { calls.push(['starterPack', actor, input]); return { actor, items: [] } },
+    async remember(input) { calls.push(['remember', actor, input]); return { memory_id: MEMORY_ID } },
+    async recall(input) { calls.push(['recall', actor, input]); return { mode: 'semantic', items: [] } },
+    async revise(memoryId, input) {
+      calls.push(['revise', actor, memoryId, input])
+      return { memory_id: memoryId, revision_id: REVISION_ID }
+    },
+    async history(memoryId) {
+      calls.push(['history', actor, memoryId])
+      return [{ id: REVISION_ID, sources: [{ source_id: SOURCE_ID, ordinal: 1 }] }]
+    },
+    async expandSource(sourceId) {
+      calls.push(['expandSource', actor, sourceId])
+      return { source_id: sourceId, available: true, quote_text: '原文' }
+    },
+  }
+}
+
+function candidate(overrides = {}) {
+  return {
+    memory_id: MEMORY_ID,
+    revision_id: REVISION_ID,
+    content: 'current memory',
+    metadata: {},
+    relevance: 0.9,
+    space_key: 'gpt',
+    status: 'active',
+    created_at: '2026-08-20T00:00:00Z',
+    ...overrides,
+  }
+}
+
+test('formal MCP surface is exactly the seven reviewed tools', () => {
+  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+    const names = createMcpToolDefinitions(actor).map(tool => tool.name)
+    assert.deepEqual(names, TOOL_NAMES)
+    assert.equal(names.length, 7)
+  }
+  assert.deepEqual(Object.keys(MCP_TOOL_ROUTES), TOOL_NAMES)
+  assert.deepEqual(Object.values(MCP_TOOL_ROUTES), [
+    'memory-v2.starterPack',
+    'memory-v2.remember',
+    'memory-v2.recall',
+    'memory-v2.revise',
+    'memory-v2.open',
+    'livingroom.read',
+    'livingroom.write',
+  ])
+})
+
+test('schemas stay closed and expose no actor, owner, space or Shared approval controls', () => {
+  const forbidden = /^(actor|author|created_by_actor|owner|owner_id|permission|permissions|space|space_key|namespace|shared_status|approval_status)$/
   for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     for (const tool of createMcpToolDefinitions(actor)) {
-      const propertyNames = Object.keys(tool.inputSchema.properties || {})
-      assert.deepEqual(
-        propertyNames.filter(name => (
-          /^(actor|author|created_by_actor|owner|owner_id|permission|permissions|revision_id|revision_hash|source_revision_id|source_revision_hash|request_id|request_hash|idempotency_key|space_key|spaceKey|namespace|shared_status|approval_status)$/
-            .test(name)
-        )),
-        [],
-        tool.name
-      )
+      const schemas = tool.inputSchema.oneOf || [tool.inputSchema]
+      for (const schema of schemas) {
+        assert.equal(schema.additionalProperties, false, tool.name)
+        assert.deepEqual(Object.keys(schema.properties || {}).filter(name => forbidden.test(name)), [], tool.name)
+      }
     }
   }
 })
 
-test('all compatibility tools remain and all fourteen tools have an explicit adapter route', () => {
-  const toolNames = createMcpToolDefinitions(MEMORY_ACTORS.GPT).map(tool => tool.name)
-  assert.equal(toolNames.length, 14)
-  assert.deepEqual(Object.keys(MCP_TOOL_ROUTES), toolNames)
-  assert.deepEqual(
-    Object.values(MCP_TOOL_ROUTES).slice(3, 10),
-    [
-      'memory.starterPack',
-      'memory.memoryBox',
-      'memory.write',
-      'memory.recall',
-      'memory.list',
-      'memory.recall',
-      'memory.write',
-    ]
-  )
-})
-
-test('all fourteen adapter routes reach only MemoryService or livingroom REST', async () => {
+test('seven handler routes are thin Memory V2 or fenced LivingRoom calls', async () => {
   const calls = []
-  const memoryService = {
-    async write() { calls.push('memory.write'); return { id: 1 } },
-    async recall() { calls.push('memory.recall'); return [] },
-    async list() { calls.push('memory.list'); return [] },
-    async starterPack() { calls.push('memory.starterPack'); return {} },
-    async memoryBox() { calls.push('memory.memoryBox'); return {} },
-    async get() { calls.push('memory.get'); return null },
-    async revise() { calls.push('memory.revise'); return {} },
-    async proposeShared() { calls.push('memory.proposeShared'); return {} },
-    async expandSource() { calls.push('memory.expandSource'); return {} },
-  }
+  const memoryV2Service = facadeService(actor => recordingFacade(calls, actor))
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
-    memoryService,
-    livingroomRest: livingroomFence(async (method, path) => {
-      calls.push(method === 'POST'
-        ? 'livingroom.write'
-        : path.includes('limit=20') ? 'livingroom.context' : 'livingroom.read')
-      return method === 'POST' ? [{ id: 1 }] : []
+    memoryV2Service,
+    livingroomRest: livingroomFence(async (method, path, body) => {
+      calls.push([method === 'POST' ? 'livingroom.write' : 'livingroom.read', path, body])
+      return method === 'POST'
+        ? [{ id: 7, sender: 'GPT', message: body.message }]
+        : [{ id: 6, sender: 'CC', message: 'hello' }]
     }),
   })
 
-  await handler('read_livingroom_messages', {})
-  await handler('send_livingroom_message', { message: 'hello' })
-  await handler('get_livingroom_context', {})
-  await handler('get_starter_pack', {})
-  await handler('open_memory_box', {})
-  await handler('save_memory', { content: 'one' })
-  await handler('recall', { query: 'two' })
-  await handler('load_memories', {})
-  await handler('search_memories', { keyword: 'three' })
-  await handler('save_to_memories', { content: 'four' })
-  await handler('get_memory', { memory_id: 1 })
-  await handler('revise_memory', { memory_id: 1, content: 'five', reason: 'clarify' })
-  await handler('propose_shared_candidate', { memory_id: 1, reason: 'useful together' })
-  await handler('expand_source', { source_id: 1 })
+  await handler('wake_up', { soft_limit: 10, token_budget: 1200 })
+  await handler('remember', {
+    content: 'one',
+    event_time: '2026-08-20T12:00:00+08:00',
+    sources: [{ source_kind: 'manual_quote', quote_text: '原文' }],
+  })
+  await handler('recall', { query: 'two', limit: 3 })
+  await handler('revise', { memory_id: MEMORY_ID, content: 'three', reason: 'changed' })
+  const history = JSON.parse(await handler('open_memory', { memory_id: MEMORY_ID }))
+  const source = JSON.parse(await handler('open_memory', { source_id: SOURCE_ID }))
+  const room = JSON.parse(await handler('read_livingroom', { limit: 10 }))
+  const sent = JSON.parse(await handler('say_livingroom', { message: 'hi' }))
 
-  assert.deepEqual(calls, [
-    'livingroom.read',
-    'livingroom.write',
-    'livingroom.context',
-    'memory.starterPack',
-    'memory.memoryBox',
-    'memory.write',
-    'memory.recall',
-    'memory.list',
-    'memory.recall',
-    'memory.write',
-    'memory.get',
-    'memory.revise',
-    'memory.proposeShared',
-    'memory.expandSource',
+  assert.deepEqual(calls.slice(0, 6), [
+    ['starterPack', 'gpt', { softLimit: 10, tokenBudget: 1200 }],
+    ['remember', 'gpt', {
+      content: 'one',
+      eventTime: '2026-08-20T12:00:00+08:00',
+      sources: [{
+        sourceKind: 'manual_quote',
+        locator: undefined,
+        provenance: undefined,
+        quoteText: '原文',
+      }],
+    }],
+    ['recall', 'gpt', { query: 'two', limit: 3 }],
+    ['revise', 'gpt', MEMORY_ID, { content: 'three', reason: 'changed' }],
+    ['history', 'gpt', MEMORY_ID],
+    ['expandSource', 'gpt', SOURCE_ID],
   ])
+  assert.equal(history.mode, 'history')
+  assert.equal(history.revisions[0].sources[0].source_id, SOURCE_ID)
+  assert.equal(source.mode, 'source')
+  assert.equal(source.source.quote_text, '原文')
+  assert.deepEqual(room.messages.map(row => row.id), [6])
+  assert.equal(room.context, '[CC] hello')
+  assert.equal(sent.sender, 'GPT')
 })
 
-test('all MCP tool schemas reject unknown arguments', () => {
-  for (const tool of createMcpToolDefinitions(MEMORY_ACTORS.GPT)) {
-    assert.equal(tool.inputSchema.additionalProperties, false, tool.name)
+test('GPT and Claude channels select fixed facades and ignore actor spoofing', async () => {
+  const visible = {
+    gpt: [candidate({ content: 'gpt private', space_key: 'gpt' }), candidate({ content: 'shared', space_key: 'shared' })],
+    claude: [candidate({ content: 'claude private', space_key: 'claude' }), candidate({ content: 'shared', space_key: 'shared' })],
   }
-})
-
-test('starter pack describes the complete session-start contract to a new AI', () => {
   for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
-    const tool = createMcpToolDefinitions(actor).find(candidate => candidate.name === 'get_starter_pack')
-    assert.match(tool.description, /新对话开始时先调用/)
-    assert.match(tool.description, /House Rules/)
-    assert.match(tool.description, /无需预先了解 LoveHouse 历史/)
-    assert.match(tool.description, /不会返回另一 AI 的私有记忆或 Legacy Pending/)
-  }
-})
-
-test('Memory Box tool is understandable to a memoryless AI and exposes only a small limit', () => {
-  const tool = createMcpToolDefinitions(MEMORY_ACTORS.GPT)
-    .find(candidate => candidate.name === 'open_memory_box')
-  assert.deepEqual(Object.keys(tool.inputSchema.properties), ['limit'])
-  assert.equal(tool.inputSchema.properties.limit.default, 3)
-  assert.equal(tool.inputSchema.properties.limit.minimum, 1)
-  assert.equal(tool.inputSchema.properties.limit.maximum, 4)
-  assert.match(tool.description, /get_starter_pack/)
-  assert.match(tool.description, /不是相关性搜索/)
-  assert.match(tool.description, /接受旧理解、质疑它/)
-  assert.match(tool.description, /revise_memory/)
-  assert.match(tool.description, /暂时不处理/)
-})
-
-test('save_memory explains first-person AI diary semantics and the fixed server author', () => {
-  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
-    const tool = createMcpToolDefinitions(actor).find(candidate => candidate.name === 'save_memory')
-    assert.match(tool.description, /memory_type=diary/)
-    assert.match(tool.description, /第一人称记录自己的经历、判断、感受和变化/)
-    assert.match(tool.description, /不是对小婷的观察报告/)
-    assert.match(tool.description, new RegExp(`服务端固定为 ${actor}`))
-    assert.equal('author' in tool.inputSchema.properties, false)
-  }
-})
-
-test('GPT and Claude receive House Rules through the actual starter-pack MCP adapter', async () => {
-  const rows = [
-    { id: 1, space_key: 'gpt', content: 'gpt private' },
-    { id: 2, space_key: 'claude', content: 'claude private' },
-    { id: 3, space_key: 'shared', shared_status: 'approved', content: 'approved shared' },
-  ]
-  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
-    const memoryService = new MemoryService({
-      repository: { async list() { return rows } },
-      auditSink: { async record() {} },
-    })
+    const memoryV2Service = facadeService(fixed => ({
+      async recall() { return { mode: 'semantic', items: visible[fixed] } },
+      async remember() { return { actor: fixed, memory_id: MEMORY_ID } },
+    }))
     const handler = createMcpToolHandler({
       actor,
-      memoryService,
+      memoryV2Service,
       livingroomRest: livingroomFence(async () => []),
     })
-    const pack = JSON.parse(await handler('get_starter_pack', {}))
-    assert.equal(pack.actor, actor)
-    assert.equal(pack.house_rules.schema_version, 'lovehouse.house_rules.v1')
-    assert.deepEqual(pack.private_memories.map(memory => memory.space_key), [actor])
-    assert.deepEqual(pack.shared_memories.map(memory => memory.id), [3])
+    const forged = actor === 'gpt' ? 'claude' : 'gpt'
+    const saved = JSON.parse(await handler('remember', {
+      content: 'fixed actor wins',
+      actor: forged,
+      owner_id: 'forged',
+      space_key: forged,
+    }))
+    const recalled = JSON.parse(await handler('recall', { query: 'memory', actor: forged }))
+    assert.equal(saved.actor, actor)
+    assert.equal(recalled.items.some(item => item.space_key === forged), false)
+    assert.equal(recalled.items.some(item => item.space_key === 'shared'), true)
   }
 })
 
-test('House Rules failure is isolated to get_starter_pack and other MCP tools remain usable', async () => {
+test('MCP recall uses Memory V2 semantic mode and preserves current/Shared visibility', async () => {
   const repositoryCalls = []
-  const memoryService = new MemoryService({
-    repository: {
-      async list() {
-        repositoryCalls.push('list')
-        return []
-      },
-      async search() {
-        repositoryCalls.push('search')
-        return []
-      },
+  const repository = {
+    async recallSemantic(actor) {
+      repositoryCalls.push(['semantic', actor])
+      return [
+        candidate({ content: `${actor} current`, space_key: actor }),
+        candidate({ memory_id: '44444444-4444-4444-8444-444444444444', content: 'approved shared', space_key: 'shared' }),
+      ]
     },
-    houseRulesProvider: {
-      async getRules() {
-        throw new HouseRulesConfigurationError('missing')
-      },
-    },
-    auditSink: { async record() {} },
+    async recallLexical() { throw new Error('lexical should not run') },
+    async recordRecall() {},
+  }
+  const service = new MemoryV2Service({
+    repository,
+    embedding: { async embed() { return { vector: [0.1], model: 'test' } } },
+    clock: () => NOW,
   })
   const handler = createMcpToolHandler({
-    actor: MEMORY_ACTORS.GPT,
-    memoryService,
+    actor: MEMORY_ACTORS.CLAUDE,
+    memoryV2Service: service,
     livingroomRest: livingroomFence(async () => []),
   })
-
-  await assert.rejects(
-    handler('get_starter_pack', {}),
-    error => error.code === 'HOUSE_RULES_CONFIGURATION_INVALID'
-  )
-  assert.deepEqual(JSON.parse(await handler('recall', { query: 'still available' })), [])
-  assert.deepEqual(repositoryCalls, ['search'])
+  const result = JSON.parse(await handler('recall', { query: '近义问题' }))
+  assert.equal(result.mode, 'semantic')
+  assert.equal(result.semantic_error, null)
+  assert.deepEqual(result.items.map(item => item.content), ['claude current', 'approved shared'])
+  assert.deepEqual(repositoryCalls, [['semantic', 'claude']])
+  assert.equal(result.items.some(item => item.content.includes('old revision')), false)
 })
 
-test('GPT compatibility tools call one MemoryService with fixed GPT actor', async () => {
+test('Ollama failure falls back at Memory V2 and does not block remember, revise or LivingRoom', async () => {
   const calls = []
-  const memoryService = {
-    async write(...args) { calls.push(['write', ...args]); return { id: 1 } },
-    async recall(...args) { calls.push(['recall', ...args]); return [] },
-    async list(...args) { calls.push(['list', ...args]); return [] },
-    async starterPack(...args) { calls.push(['starterPack', ...args]); return {} },
-    async memoryBox(...args) { calls.push(['memoryBox', ...args]); return {} },
-    async get(...args) { calls.push(['get', ...args]); return null },
-    async revise(...args) { calls.push(['revise', ...args]); return {} },
-    async proposeShared(...args) { calls.push(['proposeShared', ...args]); return {} },
-    async expandSource(...args) { calls.push(['expandSource', ...args]); return {} },
+  const embedding = {
+    async embed() {
+      const error = new Error('offline')
+      error.code = 'MEMORY_V2_EMBEDDING_NETWORK_ERROR'
+      throw error
+    },
   }
+  const repository = {
+    async remember(actor, content) {
+      calls.push(['remember', actor, content])
+      return { memory_id: MEMORY_ID, revision_id: REVISION_ID }
+    },
+    async revise(actor, memoryId, content) {
+      calls.push(['revise', actor, memoryId, content])
+      return { memory_id: memoryId, revision_id: REVISION_ID }
+    },
+    async recallLexical(actor) {
+      calls.push(['lexical', actor])
+      return [candidate({ content: 'fallback result', space_key: actor })]
+    },
+    async recallSemantic() { throw new Error('semantic repository should not run') },
+    async storeEmbedding() {},
+    async recordRecall() {},
+  }
+  const service = new MemoryV2Service({ repository, embedding, clock: () => NOW })
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
-    memoryService,
-    livingroomRest: livingroomFence(async () => []),
+    memoryV2Service: service,
+    livingroomRest: livingroomFence(async (method, _path, body) => {
+      calls.push(['livingroom', method])
+      return method === 'POST' ? [{ id: 1, sender: 'GPT', message: body.message }] : []
+    }),
   })
 
-  await handler('save_memory', { content: 'one' })
-  await handler('save_to_memories', { content: 'two', category: '日常点滴' })
-  await handler('recall', { query: 'three' })
-  await handler('search_memories', { keyword: 'four' })
-  await handler('load_memories', { level: '固定' })
-  await handler('open_memory_box', { limit: 4 })
-
-  assert.deepEqual(calls.map(call => call[1]), [
-    MEMORY_ACTORS.GPT,
-    MEMORY_ACTORS.GPT,
-    MEMORY_ACTORS.GPT,
-    MEMORY_ACTORS.GPT,
-    MEMORY_ACTORS.GPT,
-    MEMORY_ACTORS.GPT,
-  ])
-})
-test('GPT and Claude livingroom senders are fixed by their adapters', async () => {
-  for (const [actor, expectedSender, forgedSender] of [
-    [MEMORY_ACTORS.GPT, 'GPT', 'CC'],
-    [MEMORY_ACTORS.CLAUDE, 'CC', 'GPT'],
-  ]) {
-    const restCalls = []
-    const handler = createMcpToolHandler({
-      actor,
-      memoryService: {},
-      livingroomRest: livingroomFence(async (...args) => {
-        restCalls.push(args)
-        return [{ id: 1 }]
-      }),
-    })
-
-    await handler('send_livingroom_message', { message: 'hello', sender: forgedSender })
-    assert.deepEqual(restCalls[0], [
-      'POST',
-      'livingroom',
-      { sender: expectedSender, message: 'hello' },
-    ])
-  }
+  assert.equal(JSON.parse(await handler('remember', { content: 'remember offline' })).memory_id, MEMORY_ID)
+  assert.equal(JSON.parse(await handler('revise', { memory_id: MEMORY_ID, content: 'revise offline' })).memory_id, MEMORY_ID)
+  const recalled = JSON.parse(await handler('recall', { query: 'offline query' }))
+  assert.equal(recalled.mode, 'lexical_fallback')
+  assert.equal(recalled.semantic_error, 'MEMORY_V2_EMBEDDING_NETWORK_ERROR')
+  assert.equal(recalled.items[0].content, 'fallback result')
+  assert.equal(JSON.parse(await handler('say_livingroom', { message: 'still works' })).message, 'still works')
 })
 
-test('MCP livingroom tools reject raw REST functions that bypass the fence', () => {
-  assert.throws(
-    () => createMcpToolHandler({
-      actor: MEMORY_ACTORS.GPT,
-      memoryService: {},
-      livingroomRest: async () => [],
-    }),
-    /fenced livingroom REST/
-  )
-})
-
-test('MCP livingroom tools surface upstream errors instead of returning empty or success fallbacks', async () => {
-  const livingroomRest = livingroomFence(async () => ({
-    status: 401,
-    error: { message: 'unauthorized' },
+test('open_memory keeps history descriptors separate from explicit source expansion', async () => {
+  const historyRows = [{
+    id: REVISION_ID,
+    revision_number: 1,
+    content: 'current content',
+    sources: [{
+      source_id: SOURCE_ID,
+      source_kind: 'manual_quote',
+      locator: {},
+      provenance: { channel: 'official_app' },
+      ordinal: 1,
+    }],
+  }]
+  const memoryV2Service = facadeService(() => ({
+    async history() { return historyRows },
+    async expandSource() {
+      return { source_id: SOURCE_ID, available: true, quote_text: 'selected quote' }
+    },
   }))
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
-    memoryService: {},
-    livingroomRest,
+    memoryV2Service,
+    livingroomRest: livingroomFence(async () => []),
   })
 
-  for (const [name, args] of [
-    ['read_livingroom_messages', {}],
-    ['send_livingroom_message', { message: 'hello' }],
-    ['get_livingroom_context', {}],
-  ]) {
+  const opened = JSON.parse(await handler('open_memory', { memory_id: MEMORY_ID }))
+  assert.equal(JSON.stringify(opened).includes('selected quote'), false)
+  assert.equal(opened.revisions[0].sources[0].source_id, SOURCE_ID)
+  const expanded = JSON.parse(await handler('open_memory', { source_id: SOURCE_ID }))
+  assert.equal(expanded.source.quote_text, 'selected quote')
+  await assert.rejects(handler('open_memory', {}), /exactly one/)
+  await assert.rejects(handler('open_memory', { memory_id: MEMORY_ID, source_id: SOURCE_ID }), /exactly one/)
+})
+
+test('LivingRoom sender stays fixed and upstream errors remain explicit', async () => {
+  for (const [actor, sender] of [['gpt', 'GPT'], ['claude', 'CC']]) {
+    const restCalls = []
+    const handler = createMcpToolHandler({
+      actor,
+      memoryV2Service: facadeService(() => ({})),
+      livingroomRest: livingroomFence(async (...args) => {
+        restCalls.push(args)
+        return [{ id: 1, sender, message: 'hello' }]
+      }),
+    })
+    await handler('say_livingroom', { message: 'hello', sender: sender === 'GPT' ? 'CC' : 'GPT' })
+    assert.deepEqual(restCalls[0], ['POST', 'livingroom', { sender, message: 'hello' }])
+  }
+
+  const failed = createMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryV2Service: facadeService(() => ({})),
+    livingroomRest: livingroomFence(async () => ({ status: 401, error: { message: 'unauthorized' } })),
+  })
+  for (const [name, args] of [['read_livingroom', {}], ['say_livingroom', { message: 'hello' }]]) {
     await assert.rejects(
-      handler(name, args),
+      failed(name, args),
       error => error.code === 'LIVINGROOM_UPSTREAM_ERROR'
         && error.status === 401
         && /unauthorized/.test(error.message)
@@ -300,26 +321,34 @@ test('MCP livingroom tools surface upstream errors instead of returning empty or
   }
 })
 
-test('MCP livingroom tools distinguish a real empty room from an upstream failure', async () => {
+test('LivingRoom empty reads are real and empty writes cannot become fake success', async () => {
   const handler = createMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
-    memoryService: {},
+    memoryV2Service: facadeService(() => ({})),
     livingroomRest: livingroomFence(async () => []),
   })
-
-  assert.equal(await handler('read_livingroom_messages', {}), '[]')
-  assert.equal(await handler('get_livingroom_context', {}), '')
+  assert.deepEqual(JSON.parse(await handler('read_livingroom', {})), { messages: [], context: '' })
+  await assert.rejects(
+    handler('say_livingroom', { message: 'hello' }),
+    error => error.code === 'LIVINGROOM_WRITE_NOT_CONFIRMED'
+  )
 })
 
-test('MCP livingroom send rejects an empty insert response instead of returning fake ok', async () => {
-  const handler = createMcpToolHandler({
-    actor: MEMORY_ACTORS.GPT,
-    memoryService: {},
-    livingroomRest: livingroomFence(async () => []),
-  })
-
-  await assert.rejects(
-    handler('send_livingroom_message', { message: 'hello' }),
-    error => error.code === 'LIVINGROOM_WRITE_NOT_CONFIRMED'
+test('MCP refuses a V1 service or raw LivingRoom REST function', () => {
+  assert.throws(
+    () => createMcpToolHandler({
+      actor: MEMORY_ACTORS.GPT,
+      memoryV2Service: { recall() {} },
+      livingroomRest: livingroomFence(async () => []),
+    }),
+    /MemoryV2Service/
+  )
+  assert.throws(
+    () => createMcpToolHandler({
+      actor: MEMORY_ACTORS.GPT,
+      memoryV2Service: facadeService(() => ({})),
+      livingroomRest: async () => [],
+    }),
+    /fenced livingroom REST/
   )
 })
