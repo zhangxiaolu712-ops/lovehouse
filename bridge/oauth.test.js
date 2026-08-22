@@ -7,7 +7,10 @@ import path from 'path'
 
 import express from 'express'
 
-import { installClaudeOAuth } from './oauth.js'
+import {
+  installClaudeOAuth,
+  OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY,
+} from './oauth.js'
 import {
   createFileOAuthClientRegistry,
   createMemoryOAuthClientRegistry,
@@ -44,6 +47,10 @@ async function startServer(overrides = {}) {
   const app = express()
   app.use(express.json())
   app.use(express.urlencoded({ extended: false }))
+  app.use('/oauth/authorize', (_req, res, next) => {
+    res.setHeader('Content-Security-Policy', OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY)
+    next()
+  })
   const verifyOAuth = installTestOAuth(app, overrides)
   app.get('/mcp/claude', verifyOAuth, (_req, res) => res.json({ ok: true }))
   const server = await new Promise(resolve => {
@@ -232,6 +239,43 @@ test('dynamic registration preserves the existing authorization-code-only public
   assert.match(body.client_id, /^lh_[a-f0-9]{32}$/)
   assert.deepEqual(body.grant_types, ['authorization_code'])
   assert.equal('client_secret' in body, false)
+})
+
+test('authorization page CSP allows Claude callback without weakening other directives or redirect validation', async t => {
+  const base = await createServer(t)
+  const { response, body } = await register(base, {
+    client_name: 'Claude',
+    redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+    application_type: 'web',
+    token_endpoint_auth_method: 'none',
+  })
+  assert.equal(response.status, 201)
+
+  const verifier = 'a'.repeat(64)
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
+  const authorizeRequest = redirectUri => nativeFetch(`${base}/oauth/authorize?${new URLSearchParams({
+    response_type: 'code',
+    client_id: body.client_id,
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    resource,
+    scope: 'mcp:tools',
+    state: 'test-state',
+  })}`)
+
+  const page = await authorizeRequest(body.redirect_uris[0])
+  assert.equal(page.status, 200)
+  assert.equal(
+    page.headers.get('content-security-policy'),
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai; frame-ancestors 'none'; base-uri 'none'",
+  )
+
+  const rejected = await authorizeRequest('https://attacker.example/callback')
+  assert.equal(rejected.status, 400)
+  assert.equal((await rejected.json()).error, 'invalid_client')
 })
 
 test('dynamic registration accepts the real Claude Code auth-code plus refresh contract', async t => {

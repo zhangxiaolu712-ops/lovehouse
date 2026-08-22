@@ -18,6 +18,8 @@ const AUTHORIZATION_CODE = 'authorization_code'
 const REFRESH_TOKEN = 'refresh_token'
 const MCP_SCOPE = 'mcp:tools'
 
+export const OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai; frame-ancestors 'none'; base-uri 'none'"
+
 function escapeHtml(value) {
   return String(value || '')
     .replaceAll('&', '&amp;')
