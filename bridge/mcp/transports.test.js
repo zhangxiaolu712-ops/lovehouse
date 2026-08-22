@@ -17,7 +17,7 @@ async function readUntil(reader, pattern, initial = '') {
   return text
 }
 
-test('real GPT SSE and Claude HTTP transports reach symmetric fixed actors', async t => {
+test('legacy GPT SSE plus OAuth GPT and Claude HTTP transports reach fixed actors', async t => {
   const calls = []
   const makeChannel = actor => ({
     actor,
@@ -37,6 +37,10 @@ test('real GPT SSE and Claude HTTP transports reach symmetric fixed actors', asy
     gptChannel: makeChannel('gpt'),
     claudeChannel: makeChannel('claude'),
     verifyGptRequest: () => true,
+    verifyGptOAuth(req, _res, next) {
+      req.oauth = { client_id: 'gpt-client', jti: 'gpt-signed-token-id' }
+      next()
+    },
     verifyClaudeOAuth(req, _res, next) {
       req.oauth = { client_id: 'claude-client', jti: 'signed-token-id' }
       next()
@@ -93,11 +97,21 @@ test('real GPT SSE and Claude HTTP transports reach symmetric fixed actors', asy
   assert.equal(claudePost.status, 200)
   assert.equal((await claudePost.json()).id, 77)
 
-  assert.deepEqual(calls.map(call => call.actor), ['gpt', 'gpt', 'claude'])
+  const gptOAuthPost = await fetch(`${base}/mcp/gpt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test' },
+    body: JSON.stringify(forged),
+  })
+  assert.equal(gptOAuthPost.status, 200)
+  assert.equal((await gptOAuthPost.json()).id, 77)
+
+  assert.deepEqual(calls.map(call => call.actor), ['gpt', 'gpt', 'claude', 'gpt'])
   assert.match(calls[0].context.requestId, /^[0-9a-f-]{36}$/)
   assert.equal(calls[0].context.requestId, calls[1].context.requestId)
   assert.match(calls[2].context.requestId, /^[0-9a-f-]{36}$/)
   assert.notEqual(calls[0].context.requestId, calls[2].context.requestId)
   assert.equal('actor' in calls[0].context, false)
   assert.equal('space_key' in calls[0].context, false)
+  assert.match(calls[3].context.requestId, /^[0-9a-f-]{36}$/)
+  assert.notEqual(calls[2].context.requestId, calls[3].context.requestId)
 })

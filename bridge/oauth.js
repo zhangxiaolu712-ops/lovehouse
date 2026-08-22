@@ -17,8 +17,13 @@ import {
 const AUTHORIZATION_CODE = 'authorization_code'
 const REFRESH_TOKEN = 'refresh_token'
 const MCP_SCOPE = 'mcp:tools'
+const OFFLINE_ACCESS_SCOPE = 'offline_access'
 
-export const OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai; frame-ancestors 'none'; base-uri 'none'"
+export function oauthAuthorizeContentSecurityPolicy(redirectUri = null) {
+  let formAction = "'self'"
+  if (redirectUri) formAction += ` ${new URL(redirectUri).origin}`
+  return `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`
+}
 
 function escapeHtml(value) {
   return String(value || '')
@@ -56,17 +61,61 @@ function validResponseTypes(value) {
 
 function requestedScope(value) {
   if (value === undefined || value === '') return MCP_SCOPE
-  return value === MCP_SCOPE ? value : null
+  if (typeof value !== 'string') return null
+  const scopes = value.split(/\s+/).filter(Boolean)
+  if (!scopes.includes(MCP_SCOPE)) return null
+  if (scopes.some(scope => ![MCP_SCOPE, OFFLINE_ACCESS_SCOPE].includes(scope))) return null
+  return scopes.includes(OFFLINE_ACCESS_SCOPE)
+    ? `${MCP_SCOPE} ${OFFLINE_ACCESS_SCOPE}`
+    : MCP_SCOPE
+}
+
+function setAuthorizationHeaders(res, redirectUri = null) {
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Content-Security-Policy', oauthAuthorizeContentSecurityPolicy(redirectUri))
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+}
+
+function normalizeResources(resources) {
+  if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
+    throw new Error('OAuth MCP resources are required')
+  }
+  const normalized = {}
+  for (const [name, config] of Object.entries(resources)) {
+    if (!config?.resource || !config?.resourceMetadataUrl || !config?.metadataPath) {
+      throw new Error('OAuth MCP resource configuration is incomplete')
+    }
+    let metadataUrl
+    try {
+      metadataUrl = new URL(config.resourceMetadataUrl)
+    } catch {
+      throw new Error('MCP resource metadata URL must be a valid HTTPS URL')
+    }
+    if (metadataUrl.protocol !== 'https:' || metadataUrl.hash || metadataUrl.username || metadataUrl.password) {
+      throw new Error('MCP resource metadata URL must be a valid HTTPS URL')
+    }
+    const resourceUrl = new URL(config.resource)
+    if (resourceUrl.protocol !== 'https:' || resourceUrl.hash || resourceUrl.username || resourceUrl.password) {
+      throw new Error('MCP resource URL must be a valid HTTPS URL')
+    }
+    normalized[name] = Object.freeze({
+      resource: resourceUrl.toString(),
+      resourceMetadataUrl: metadataUrl.toString(),
+      metadataPath: config.metadataPath,
+    })
+  }
+  if (!Object.keys(normalized).length) throw new Error('OAuth MCP resources are required')
+  return Object.freeze(normalized)
 }
 
 /**
  * CC's OAuth/PKCE flow, extracted from the old monolithic Bridge so the MCP
  * transport remains an adapter rather than becoming the Memory System.
  */
-export function installClaudeOAuth(app, {
+export function installMcpOAuth(app, {
   oauthBase,
-  resource,
-  resourceMetadataUrl,
+  resources,
   supabaseUrl,
   supabaseAnonKey,
   ownerUserId,
@@ -80,15 +129,8 @@ export function installClaudeOAuth(app, {
   if (!tokenSecret || tokenSecret.length < 32) {
     throw new Error('OAUTH_TOKEN_SECRET must contain at least 32 characters')
   }
-  let metadataUrl
-  try {
-    metadataUrl = new URL(resourceMetadataUrl)
-  } catch {
-    throw new Error('MCP_RESOURCE_METADATA_URL must be a valid HTTPS URL')
-  }
-  if (metadataUrl.protocol !== 'https:' || metadataUrl.hash || metadataUrl.username || metadataUrl.password) {
-    throw new Error('MCP_RESOURCE_METADATA_URL must be a valid HTTPS URL')
-  }
+  const resourceConfigs = normalizeResources(resources)
+  const resourcesByUri = new Map(Object.values(resourceConfigs).map(config => [config.resource, config]))
   if (!refreshTokenStore
     || typeof refreshTokenStore.issue !== 'function'
     || typeof refreshTokenStore.rotate !== 'function') {
@@ -99,7 +141,6 @@ export function installClaudeOAuth(app, {
     || typeof clientRegistry.get !== 'function') {
     throw new Error('OAuth client registry is required')
   }
-  const protectedResourceMetadataUrl = metadataUrl.toString()
   const codes = new Map()
 
   const cleanupTimer = setInterval(() => {
@@ -130,7 +171,7 @@ export function installClaudeOAuth(app, {
     const client = await getValidClient(input.client_id, input.redirect_uri)
     if (!client || !client.grant_types.includes(AUTHORIZATION_CODE)) return 'invalid_client'
     if (!validatePkce(input.code_challenge, input.code_challenge_method)) return 'invalid_request'
-    if (input.resource !== resource) return 'invalid_target'
+    if (!resourcesByUri.has(input.resource)) return 'invalid_target'
     if (!requestedScope(input.scope)) return 'invalid_scope'
     return null
   }
@@ -174,20 +215,20 @@ export function installClaudeOAuth(app, {
       grant_types_supported: [AUTHORIZATION_CODE, REFRESH_TOKEN],
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
-      scopes_supported: [MCP_SCOPE],
+      scopes_supported: [MCP_SCOPE, OFFLINE_ACCESS_SCOPE],
     })
   })
 
-  function protectedResourceMetadata(_req, res) {
-    res.json({
-      resource,
-      authorization_servers: [oauthBase],
-      bearer_methods_supported: ['header'],
-      scopes_supported: [MCP_SCOPE],
+  for (const config of Object.values(resourceConfigs)) {
+    app.get(config.metadataPath, (_req, res) => {
+      res.json({
+        resource: config.resource,
+        authorization_servers: [oauthBase],
+        bearer_methods_supported: ['header'],
+        scopes_supported: [MCP_SCOPE],
+      })
     })
   }
-  app.get('/.well-known/oauth-protected-resource', protectedResourceMetadata)
-  app.get('/.well-known/oauth-protected-resource/mcp/claude', protectedResourceMetadata)
 
   app.post('/oauth/register', async (req, res) => {
     if (!checkRate(`oauth-register:${req.ip}`, 10, 15 * 60_000)) {
@@ -257,6 +298,7 @@ export function installClaudeOAuth(app, {
   })
 
   app.get('/oauth/authorize', async (req, res) => {
+    setAuthorizationHeaders(res)
     let validationError
     let client
     try {
@@ -270,6 +312,7 @@ export function installClaudeOAuth(app, {
     if (typeof req.query.state === 'string' && req.query.state.length > 2048) {
       return oauthError(res, 400, 'invalid_request', 'state is too long')
     }
+    setAuthorizationHeaders(res, req.query.redirect_uri)
     const redirectOrigin = new URL(req.query.redirect_uri).origin
     const hidden = Object.entries({
       client_id: req.query.client_id,
@@ -283,10 +326,11 @@ export function installClaudeOAuth(app, {
     }).map(([name, value]) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`).join('')
 
     return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LoveHouse 授权</title>
-    <style>body{font-family:Georgia,"Noto Serif SC",serif;background:#f7f1e7;color:#302a24;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}.card{background:rgba(255,253,248,.94);border:1px solid #d8cdbd;border-radius:18px;padding:34px;box-shadow:0 12px 36px rgba(58,48,38,.09);max-width:380px;width:86%}h2{text-align:center}.info{background:#f2ebdf;border-radius:12px;padding:14px;margin:18px 0;font-size:14px}label{display:block;font-size:13px;margin:12px 0 6px}input[type=email],input[type=password]{width:100%;box-sizing:border-box;border:1px solid #d8cdbd;border-radius:10px;padding:12px;background:#fffdf8}button{width:100%;margin-top:20px;border:0;border-radius:11px;padding:13px;background:#9c7a3d;color:white;font-size:15px}</style></head><body><div class="card"><h2>LoveHouse</h2><div class="info"><b>${escapeHtml(client.client_name)}</b> 请求连接 Claude MCP。授权只确认连接身份，具体记忆空间仍由服务端固定权限决定。<br><br>完成后返回：<b>${escapeHtml(redirectOrigin)}</b></div><form method="POST" action="/oauth/authorize">${hidden}<label>LoveHouse 登录邮箱</label><input type="email" name="email" autocomplete="username" required><label>账号密码</label><input type="password" name="password" autocomplete="current-password" required><button type="submit">允许访问</button></form></div></body></html>`)
+    <style>body{font-family:Georgia,"Noto Serif SC",serif;background:#f7f1e7;color:#302a24;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}.card{background:rgba(255,253,248,.94);border:1px solid #d8cdbd;border-radius:18px;padding:34px;box-shadow:0 12px 36px rgba(58,48,38,.09);max-width:380px;width:86%}h2{text-align:center}.info{background:#f2ebdf;border-radius:12px;padding:14px;margin:18px 0;font-size:14px}label{display:block;font-size:13px;margin:12px 0 6px}input[type=email],input[type=password]{width:100%;box-sizing:border-box;border:1px solid #d8cdbd;border-radius:10px;padding:12px;background:#fffdf8}button{width:100%;margin-top:20px;border:0;border-radius:11px;padding:13px;background:#9c7a3d;color:white;font-size:15px}</style></head><body><div class="card"><h2>LoveHouse</h2><div class="info"><b>${escapeHtml(client.client_name)}</b> 请求连接 LoveHouse MCP。授权只确认连接身份，具体记忆空间仍由服务端固定权限决定。<br><br>完成后返回：<b>${escapeHtml(redirectOrigin)}</b></div><form method="POST" action="/oauth/authorize">${hidden}<label>LoveHouse 登录邮箱</label><input type="email" name="email" autocomplete="username" required><label>账号密码</label><input type="password" name="password" autocomplete="current-password" required><button type="submit">允许访问</button></form></div></body></html>`)
   })
 
   app.post('/oauth/authorize', async (req, res) => {
+    setAuthorizationHeaders(res)
     let validationError
     try {
       validationError = await validateAuthorizationRequest(req.body)
@@ -298,9 +342,7 @@ export function installClaudeOAuth(app, {
     if (typeof req.body.state === 'string' && req.body.state.length > 2048) {
       return oauthError(res, 400, 'invalid_request', 'state is too long')
     }
-    if (!checkRate(`oauth-approval:${req.ip}`, 5, 15 * 60_000)) {
-      return res.status(429).send(authorizationFailurePage('尝试次数太多，请十五分钟后再试。'))
-    }
+    setAuthorizationHeaders(res, req.body.redirect_uri)
     try {
       const approved = await verifyOwnerCredentials(req.body.email, req.body.password)
       if (!approved) return res.status(401).send(authorizationFailurePage('账号或密码不正确。'))
@@ -321,10 +363,10 @@ export function installClaudeOAuth(app, {
     const redirect = new URL(req.body.redirect_uri)
     redirect.searchParams.set('code', code)
     if (req.body.state) redirect.searchParams.set('state', req.body.state)
-    return res.redirect(redirect.toString())
+    return res.redirect(303, redirect.toString())
   })
 
-  function refreshRecord({ rawToken, client, familyId, generation, expiresAt }) {
+  function refreshRecord({ rawToken, client, familyId, generation, expiresAt, resource, scope }) {
     return {
       token_digest: digestRefreshToken(rawToken, tokenSecret),
       family_id: familyId,
@@ -335,7 +377,7 @@ export function installClaudeOAuth(app, {
         || (client.client_secret ? digestClientSecret(client.client_secret, tokenSecret) : null),
       owner_user_id: ownerUserId,
       resource,
-      scope: MCP_SCOPE,
+      scope,
       created_at: Date.now(),
       expires_at: expiresAt,
     }
@@ -348,10 +390,12 @@ export function installClaudeOAuth(app, {
     if (stored.client_id !== req.body.client_id || stored.redirect_uri !== req.body.redirect_uri) {
       return oauthError(res, 400, 'invalid_grant', 'client or redirect_uri does not match')
     }
-    if (req.body.resource !== stored.resource || stored.resource !== resource) {
+    const resourceConfig = resourcesByUri.get(stored.resource)
+    if (req.body.resource !== stored.resource || !resourceConfig) {
       return oauthError(res, 400, 'invalid_target', 'resource does not match')
     }
-    if (requestedScope(req.body.scope) !== stored.scope) {
+    const tokenScope = req.body.scope ? requestedScope(req.body.scope) : stored.scope
+    if (tokenScope !== stored.scope) {
       return oauthError(res, 400, 'invalid_scope', 'scope does not match')
     }
     let client
@@ -374,13 +418,14 @@ export function installClaudeOAuth(app, {
         access_token: issueAccessToken({
           clientId: req.body.client_id,
           ownerUserId,
-          audience: resource,
+          audience: stored.resource,
           secret: tokenSecret,
+          scope: stored.scope,
           ttlSeconds: tokenTtlSeconds,
         }),
         token_type: 'Bearer',
         expires_in: tokenTtlSeconds,
-        scope: MCP_SCOPE,
+        scope: stored.scope,
       }
       if (client.grant_types.includes(REFRESH_TOKEN)) {
         const rawToken = createRefreshToken()
@@ -391,6 +436,8 @@ export function installClaudeOAuth(app, {
           familyId: crypto.randomBytes(16).toString('hex'),
           generation: 0,
           expiresAt,
+          resource: stored.resource,
+          scope: stored.scope,
         }))
         response.refresh_token = rawToken
         response.refresh_token_expires_in = refreshTokenTtlSeconds
@@ -404,9 +451,9 @@ export function installClaudeOAuth(app, {
 
   async function exchangeRefreshToken(req, res) {
     const tokenDigest = digestRefreshToken(req.body.refresh_token, tokenSecret)
-    const scope = requestedScope(req.body.scope)
+    const scope = req.body.scope ? requestedScope(req.body.scope) : null
     if (!tokenDigest) return oauthError(res, 400, 'invalid_grant')
-    if (!scope) return oauthError(res, 400, 'invalid_scope')
+    if (req.body.scope && !scope) return oauthError(res, 400, 'invalid_scope')
     let registeredClient
     try {
       registeredClient = await getActiveClient(req.body.client_id)
@@ -419,7 +466,10 @@ export function installClaudeOAuth(app, {
       || !validClientAuthentication(registeredClient, req.body)) {
       return oauthError(res, 400, 'invalid_grant')
     }
-    const requestedResource = req.body.resource || resource
+    const requestedResource = req.body.resource || null
+    if (requestedResource && !resourcesByUri.has(requestedResource)) {
+      return oauthError(res, 400, 'invalid_target')
+    }
     const replacementToken = createRefreshToken()
     try {
       const rotated = await refreshTokenStore.rotate(
@@ -435,12 +485,13 @@ export function installClaudeOAuth(app, {
           familyId: current.family_id,
           generation: current.generation + 1,
           expiresAt: current.expires_at,
+          resource: current.resource,
+          scope: current.scope,
         }),
         current => current.owner_user_id === ownerUserId
-          && current.resource === resource
-          && requestedResource === current.resource
-          && current.scope === MCP_SCOPE
-          && scope === current.scope
+          && resourcesByUri.has(current.resource)
+          && (requestedResource === null || requestedResource === current.resource)
+          && (scope === null || scope === current.scope)
           && current.client_id === registeredClient.client_id
           && validClientAuthentication(current, req.body),
       )
@@ -452,6 +503,7 @@ export function installClaudeOAuth(app, {
           ownerUserId,
           audience: rotated.record.resource,
           secret: tokenSecret,
+          scope: rotated.record.scope,
           ttlSeconds: tokenTtlSeconds,
         }),
         token_type: 'Bearer',
@@ -475,21 +527,25 @@ export function installClaudeOAuth(app, {
     return oauthError(res, 400, 'unsupported_grant_type')
   })
 
-  return function verifyOAuthToken(req, res, next) {
-    const auth = req.headers.authorization
-    if (!auth?.startsWith('Bearer ')) {
-      res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${protectedResourceMetadataUrl}", scope="mcp:tools"`)
-      return res.status(401).json({ error: 'unauthorized' })
+  const verifiers = {}
+  for (const [name, config] of Object.entries(resourceConfigs)) {
+    verifiers[name] = function verifyOAuthToken(req, res, next) {
+      const auth = req.headers.authorization
+      if (!auth?.startsWith('Bearer ')) {
+        res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${config.resourceMetadataUrl}", scope="mcp:tools"`)
+        return res.status(401).json({ error: 'unauthorized' })
+      }
+      const payload = verifyAccessToken(auth.slice(7), tokenSecret, config.resource)
+      if (!payload || payload.sub !== ownerUserId) {
+        res.setHeader('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${config.resourceMetadataUrl}", scope="mcp:tools"`)
+        return res.status(401).json({ error: 'invalid_token' })
+      }
+      if (!checkRate(`${name}-mcp:${payload.client_id}`)) {
+        return res.status(429).json({ error: 'too many requests' })
+      }
+      req.oauth = payload
+      return next()
     }
-    const payload = verifyAccessToken(auth.slice(7), tokenSecret, resource)
-    if (!payload || payload.sub !== ownerUserId) {
-      res.setHeader('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${protectedResourceMetadataUrl}", scope="mcp:tools"`)
-      return res.status(401).json({ error: 'invalid_token' })
-    }
-    if (!checkRate(`claude-mcp:${payload.client_id}`)) {
-      return res.status(429).json({ error: 'too many requests' })
-    }
-    req.oauth = payload
-    return next()
   }
+  return Object.freeze(verifiers)
 }
