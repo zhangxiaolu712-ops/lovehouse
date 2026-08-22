@@ -464,7 +464,13 @@ test('OAuth access tokens reach MCP initialize, exact tools/list and fixed GPT/C
       name: 'wake_up',
       arguments: { actor: item.actor === 'gpt' ? 'claude' : 'gpt' },
     })
-    assert.deepEqual(JSON.parse(toolCall.result.content[0].text), { actor: item.actor })
+    const toolPayload = JSON.parse(toolCall.result.content[0].text)
+    assert.equal(toolPayload.actor, item.actor)
+    assert.match(
+      toolPayload.called_at,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00$/
+    )
+    assert.equal(Number.isNaN(Date.parse(toolPayload.called_at)), false)
   }
 })
 
