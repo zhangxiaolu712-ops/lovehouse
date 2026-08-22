@@ -191,7 +191,13 @@ test('MCP recall uses Memory V2 semantic mode and preserves current/Shared visib
         candidate({ memory_id: '44444444-4444-4444-8444-444444444444', content: 'approved shared', space_key: 'shared' }),
       ]
     },
-    async recallLexical() { throw new Error('lexical should not run') },
+    async recallLexical(actor, input) {
+      repositoryCalls.push(['lexical-supplement', actor, input])
+      return [
+        candidate({ content: `${actor} current`, space_key: actor }),
+        candidate({ memory_id: '44444444-4444-4444-8444-444444444444', content: 'approved shared', space_key: 'shared' }),
+      ]
+    },
     async recordRecall() {},
   }
   const service = new MemoryV2Service({
@@ -208,7 +214,10 @@ test('MCP recall uses Memory V2 semantic mode and preserves current/Shared visib
   assert.equal(result.mode, 'semantic')
   assert.equal(result.semantic_error, null)
   assert.deepEqual(result.items.map(item => item.content), ['claude current', 'approved shared'])
-  assert.deepEqual(repositoryCalls, [['semantic', 'claude']])
+  assert.deepEqual(repositoryCalls, [
+    ['semantic', 'claude'],
+    ['lexical-supplement', 'claude', { query: '近义问题', limit: 3 }],
+  ])
   assert.equal(result.items.some(item => item.content.includes('old revision')), false)
 })
 
