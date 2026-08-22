@@ -4,7 +4,55 @@ import http from 'node:http'
 
 import express from 'express'
 
-import { installMcpTransports } from './transports.js'
+import { handleMcpMessage, installMcpTransports } from './transports.js'
+
+const TOOL_NAMES = [
+  'wake_up',
+  'remember',
+  'recall',
+  'revise',
+  'open_memory',
+  'read_livingroom',
+  'say_livingroom',
+]
+
+function assertCalledAt(value) {
+  assert.equal(typeof value, 'string')
+  assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00$/)
+  assert.equal(Number.isNaN(Date.parse(value)), false)
+}
+
+test('all seven GPT and Claude tool results preserve fields and add UTC+8 called_at', async () => {
+  for (const actor of ['gpt', 'claude']) {
+    const channel = {
+      actor,
+      tools: TOOL_NAMES.map(name => ({ name })),
+      async callTool(name) {
+        return JSON.stringify({ ok: true, actor, tool: name, nested: { preserved: true } })
+      },
+    }
+
+    for (const [index, name] of TOOL_NAMES.entries()) {
+      const response = await handleMcpMessage({
+        jsonrpc: '2.0',
+        id: `${actor}-${index}`,
+        method: 'tools/call',
+        params: { name, arguments: {} },
+      }, {
+        channel,
+        serverName: `lovehouse-${actor}-mcp`,
+        transportIdentity: `${actor}-test`,
+      })
+      const payload = JSON.parse(response.result.content[0].text)
+
+      assert.equal(payload.ok, true)
+      assert.equal(payload.actor, actor)
+      assert.equal(payload.tool, name)
+      assert.deepEqual(payload.nested, { preserved: true })
+      assertCalledAt(payload.called_at)
+    }
+  }
+})
 
 async function readUntil(reader, pattern, initial = '') {
   const decoder = new TextDecoder()
@@ -24,6 +72,7 @@ test('legacy GPT SSE plus OAuth GPT and Claude HTTP transports reach fixed actor
     tools: [{ name: 'remember', inputSchema: { type: 'object' } }],
     async callTool(name, args, context) {
       calls.push({ actor, name, args, context })
+      if (name === 'explode') throw new Error('tool exploded')
       return JSON.stringify({ ok: true, actor })
     },
   })
@@ -103,9 +152,31 @@ test('legacy GPT SSE plus OAuth GPT and Claude HTTP transports reach fixed actor
     body: JSON.stringify(forged),
   })
   assert.equal(gptOAuthPost.status, 200)
-  assert.equal((await gptOAuthPost.json()).id, 77)
+  const gptOAuthResponse = await gptOAuthPost.json()
+  assert.equal(gptOAuthResponse.id, 77)
+  const gptToolPayload = JSON.parse(gptOAuthResponse.result.content[0].text)
+  assert.deepEqual(
+    { ok: gptToolPayload.ok, actor: gptToolPayload.actor },
+    { ok: true, actor: 'gpt' }
+  )
+  assertCalledAt(gptToolPayload.called_at)
 
-  assert.deepEqual(calls.map(call => call.actor), ['gpt', 'gpt', 'claude', 'gpt'])
+  const failedToolPost = await fetch(`${base}/mcp/claude`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 78,
+      method: 'tools/call',
+      params: { name: 'explode', arguments: {} },
+    }),
+  })
+  const failedToolResponse = await failedToolPost.json()
+  assert.equal(failedToolResponse.id, 78)
+  assert.equal(failedToolResponse.error.message, 'tool exploded')
+  assertCalledAt(failedToolResponse.error.data.called_at)
+
+  assert.deepEqual(calls.map(call => call.actor), ['gpt', 'gpt', 'claude', 'gpt', 'claude'])
   assert.match(calls[0].context.requestId, /^[0-9a-f-]{36}$/)
   assert.equal(calls[0].context.requestId, calls[1].context.requestId)
   assert.match(calls[2].context.requestId, /^[0-9a-f-]{36}$/)

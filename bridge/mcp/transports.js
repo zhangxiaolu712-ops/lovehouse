@@ -6,6 +6,31 @@ function mcpResult(id, result) {
   return { jsonrpc: '2.0', id, result }
 }
 
+function createCalledAt() {
+  const utcPlusEight = new Date(Date.now() + 8 * 60 * 60 * 1000)
+  return utcPlusEight.toISOString().replace('Z', '+08:00')
+}
+
+function addCalledAt(text, calledAt) {
+  const payload = JSON.parse(text)
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new TypeError('MCP tool result must be a JSON object')
+  }
+  return JSON.stringify({ ...payload, called_at: calledAt })
+}
+
+function mcpExecutionError(id, error) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    error: {
+      code: -32000,
+      message: error.message,
+      ...(error.calledAt ? { data: { called_at: error.calledAt } } : {}),
+    },
+  }
+}
+
 export async function handleMcpMessage(message, {
   channel,
   serverName,
@@ -21,6 +46,7 @@ export async function handleMcpMessage(message, {
   if (message.method === 'notifications/initialized') return null
   if (message.method === 'tools/list') return mcpResult(message.id, { tools: channel.tools })
   if (message.method === 'tools/call') {
+    const calledAt = createCalledAt()
     const toolName = message.params?.name
     const requestId = createTrustedRequestId({
       actor: channel.actor,
@@ -28,12 +54,20 @@ export async function handleMcpMessage(message, {
       protocolRequestId: message.id,
       toolName,
     })
-    const text = await channel.callTool(
-      toolName,
-      message.params?.arguments || {},
-      { requestId }
-    )
-    return mcpResult(message.id, { content: [{ type: 'text', text }] })
+    try {
+      const text = await channel.callTool(
+        toolName,
+        message.params?.arguments || {},
+        { requestId }
+      )
+      return mcpResult(message.id, {
+        content: [{ type: 'text', text: addCalledAt(text, calledAt) }],
+      })
+    } catch (error) {
+      const executionError = error instanceof Error ? error : new Error(String(error))
+      executionError.calledAt = calledAt
+      throw executionError
+    }
   }
   if (message.method === 'ping') return mcpResult(message.id, {})
   return {
@@ -89,11 +123,9 @@ export function installMcpTransports(app, {
       if (response) stream.write(`event: message\ndata: ${JSON.stringify(response)}\n\n`)
       return res.status(202).end()
     } catch (error) {
-      stream.write(`event: message\ndata: ${JSON.stringify({
-        jsonrpc: '2.0',
-        id: req.body?.id,
-        error: { code: -32000, message: error.message },
-      })}\n\n`)
+      stream.write(`event: message\ndata: ${JSON.stringify(
+        mcpExecutionError(req.body?.id, error)
+      )}\n\n`)
       return res.status(202).end()
     }
   })
@@ -114,11 +146,7 @@ export function installMcpTransports(app, {
         })
         return response ? res.json(response) : res.status(204).end()
       } catch (error) {
-        return res.json({
-          jsonrpc: '2.0',
-          id: req.body.id,
-          error: { code: -32000, message: error.message },
-        })
+        return res.json(mcpExecutionError(req.body.id, error))
       }
     })
 
