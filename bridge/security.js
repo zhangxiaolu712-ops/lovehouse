@@ -44,7 +44,14 @@ export function hashPkceVerifier(verifier) {
   return crypto.createHash('sha256').update(verifier).digest('base64url')
 }
 
-export function issueAccessToken({ clientId, ownerUserId, audience, secret, ttlSeconds = 30 * 24 * 60 * 60 }) {
+export function issueAccessToken({
+  clientId,
+  ownerUserId,
+  audience,
+  secret,
+  scope = 'mcp:tools',
+  ttlSeconds = 30 * 24 * 60 * 60,
+}) {
   if (!secret || secret.length < 32) {
     throw new Error('OAUTH_TOKEN_SECRET must contain at least 32 characters')
   }
@@ -55,7 +62,7 @@ export function issueAccessToken({ clientId, ownerUserId, audience, secret, ttlS
     sub: ownerUserId,
     aud: audience,
     client_id: clientId,
-    scope: 'mcp:tools',
+    scope,
     iat: now,
     exp: now + ttlSeconds,
     jti: crypto.randomBytes(16).toString('hex'),
@@ -77,7 +84,9 @@ export function verifyAccessToken(token, secret, expectedAudience) {
     const now = Math.floor(Date.now() / 1000)
     if (payload.iss !== 'lovehouse-bridge') return null
     if (!expectedAudience || payload.aud !== expectedAudience) return null
-    if (!payload.sub || !payload.client_id || payload.scope !== 'mcp:tools') return null
+    const scopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : []
+    if (!payload.sub || !payload.client_id || !scopes.includes('mcp:tools')) return null
+    if (scopes.some(scope => !['mcp:tools', 'offline_access'].includes(scope))) return null
     if (!Number.isInteger(payload.iat) || !Number.isInteger(payload.exp)) return null
     if (payload.iat > now + 60 || payload.exp <= now) return null
     return payload

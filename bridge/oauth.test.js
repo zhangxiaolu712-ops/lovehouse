@@ -8,8 +8,7 @@ import path from 'path'
 import express from 'express'
 
 import {
-  installClaudeOAuth,
-  OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY,
+  installMcpOAuth,
 } from './oauth.js'
 import {
   createFileOAuthClientRegistry,
@@ -20,18 +19,32 @@ import {
   createMemoryRefreshTokenStore,
   digestRefreshToken,
 } from './oauthRefreshStore.js'
+import { installMcpTransports } from './mcp/transports.js'
+import { createMcpToolDefinitions } from './mcp/tools.js'
 
 const oauthBase = 'https://tingtunehouse.example'
 const resource = `${oauthBase}/api/mcp/claude`
 const resourceMetadataUrl = `${oauthBase}/api/.well-known/oauth-protected-resource/mcp/claude`
+const gptResource = `${oauthBase}/api/mcp/gpt`
+const gptResourceMetadataUrl = `${oauthBase}/api/.well-known/oauth-protected-resource/mcp/gpt`
 const tokenSecret = 'test-oauth-signing-secret-that-is-long-enough'
 const nativeFetch = globalThis.fetch
 
 function installTestOAuth(app, overrides = {}) {
-  return installClaudeOAuth(app, {
+  return installMcpOAuth(app, {
     oauthBase,
-    resource,
-    resourceMetadataUrl,
+    resources: {
+      gpt: {
+        resource: gptResource,
+        resourceMetadataUrl: gptResourceMetadataUrl,
+        metadataPath: '/.well-known/oauth-protected-resource/mcp/gpt',
+      },
+      claude: {
+        resource,
+        resourceMetadataUrl,
+        metadataPath: '/.well-known/oauth-protected-resource/mcp/claude',
+      },
+    },
     supabaseUrl: 'https://project.example.supabase.co',
     supabaseAnonKey: 'test-anon-key',
     ownerUserId: 'owner-1',
@@ -47,12 +60,9 @@ async function startServer(overrides = {}) {
   const app = express()
   app.use(express.json())
   app.use(express.urlencoded({ extended: false }))
-  app.use('/oauth/authorize', (_req, res, next) => {
-    res.setHeader('Content-Security-Policy', OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY)
-    next()
-  })
   const verifyOAuth = installTestOAuth(app, overrides)
-  app.get('/mcp/claude', verifyOAuth, (_req, res) => res.json({ ok: true }))
+  app.get('/mcp/gpt', verifyOAuth.gpt, (_req, res) => res.json({ ok: true, actor: 'gpt' }))
+  app.get('/mcp/claude', verifyOAuth.claude, (_req, res) => res.json({ ok: true, actor: 'claude' }))
   const server = await new Promise(resolve => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening))
   })
@@ -105,7 +115,7 @@ async function register(base, metadata = claudeCodeRegistration()) {
   return { response, body: await response.json() }
 }
 
-async function authorize(base, registration, { scope = 'mcp:tools' } = {}) {
+async function authorize(base, registration, { scope = 'mcp:tools', targetResource = resource } = {}) {
   const verifier = 'a'.repeat(64)
   const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
   const fields = {
@@ -114,13 +124,13 @@ async function authorize(base, registration, { scope = 'mcp:tools' } = {}) {
     redirect_uri: registration.redirect_uris[0],
     code_challenge: challenge,
     code_challenge_method: 'S256',
-    resource,
+    resource: targetResource,
     scope,
     state: 'test-state',
   }
   const page = await nativeFetch(`${base}/oauth/authorize?${new URLSearchParams(fields)}`)
   assert.equal(page.status, 200)
-  assert.match(await page.text(), /Claude Code|Claude/)
+  assert.match(await page.text(), /LoveHouse MCP/)
 
   const approval = await nativeFetch(`${base}/oauth/authorize`, {
     method: 'POST',
@@ -128,10 +138,10 @@ async function authorize(base, registration, { scope = 'mcp:tools' } = {}) {
     body: new URLSearchParams({ ...fields, email: 'owner@example.com', password: 'correct' }),
     redirect: 'manual',
   })
-  assert.equal(approval.status, 302)
+  assert.equal(approval.status, 303)
   const callback = new URL(approval.headers.get('location'))
   assert.equal(callback.searchParams.get('state'), 'test-state')
-  return { code: callback.searchParams.get('code'), verifier }
+  return { code: callback.searchParams.get('code'), verifier, resource: targetResource }
 }
 
 async function exchangeCode(base, registration, authorization, overrides = {}) {
@@ -144,7 +154,7 @@ async function exchangeCode(base, registration, authorization, overrides = {}) {
       redirect_uri: registration.redirect_uris[0],
       code: authorization.code,
       code_verifier: authorization.verifier,
-      resource,
+      resource: authorization.resource || resource,
       ...overrides,
     }),
   })
@@ -180,7 +190,7 @@ async function issueClaudeCodeTokens(t, base, metadata) {
   return { registration: registrationResult.body, tokens: tokenResult.body }
 }
 
-test('Claude OAuth discovery and protected-resource metadata match the implemented contract', async t => {
+test('ChatGPT and Claude OAuth discovery publish separate resource identities', async t => {
   const base = await createServer(t)
   const response = await nativeFetch(`${base}/mcp/claude`)
 
@@ -212,12 +222,26 @@ test('Claude OAuth discovery and protected-resource metadata match the implement
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
-    scopes_supported: ['mcp:tools'],
+    scopes_supported: ['mcp:tools', 'offline_access'],
   })
 
   const protectedMetadata = await nativeFetch(`${base}/.well-known/oauth-protected-resource/mcp/claude`)
   assert.deepEqual(await protectedMetadata.json(), {
     resource,
+    authorization_servers: [oauthBase],
+    bearer_methods_supported: ['header'],
+    scopes_supported: ['mcp:tools'],
+  })
+
+  const gptResponse = await nativeFetch(`${base}/mcp/gpt`)
+  assert.equal(gptResponse.status, 401)
+  assert.equal(
+    gptResponse.headers.get('www-authenticate'),
+    `Bearer resource_metadata="${gptResourceMetadataUrl}", scope="mcp:tools"`,
+  )
+  const gptMetadata = await nativeFetch(`${base}/.well-known/oauth-protected-resource/mcp/gpt`)
+  assert.deepEqual(await gptMetadata.json(), {
+    resource: gptResource,
     authorization_servers: [oauthBase],
     bearer_methods_supported: ['header'],
     scopes_supported: ['mcp:tools'],
@@ -241,7 +265,7 @@ test('dynamic registration preserves the existing authorization-code-only public
   assert.equal('client_secret' in body, false)
 })
 
-test('authorization page CSP allows Claude callback without weakening other directives or redirect validation', async t => {
+test('authorization page CSP derives form-action from each validated callback origin', async t => {
   const base = await createServer(t)
   const { response, body } = await register(base, {
     client_name: 'Claude',
@@ -273,9 +297,232 @@ test('authorization page CSP allows Claude callback without weakening other dire
     "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai; frame-ancestors 'none'; base-uri 'none'",
   )
 
+  const chatGptRegistration = await register(base, {
+    client_name: 'ChatGPT',
+    redirect_uris: ['https://chatgpt.com/connector/oauth/test-callback'],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    application_type: 'native',
+    token_endpoint_auth_method: 'none',
+  })
+  assert.equal(chatGptRegistration.response.status, 201)
+  const chatGptPage = await nativeFetch(`${base}/oauth/authorize?${new URLSearchParams({
+    response_type: 'code',
+    client_id: chatGptRegistration.body.client_id,
+    redirect_uri: chatGptRegistration.body.redirect_uris[0],
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    resource: gptResource,
+    scope: 'mcp:tools offline_access',
+    state: 'chatgpt-state',
+  })}`)
+  assert.equal(chatGptPage.status, 200)
+  assert.equal(
+    chatGptPage.headers.get('content-security-policy'),
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'",
+  )
+
   const rejected = await authorizeRequest('https://attacker.example/callback')
   assert.equal(rejected.status, 400)
   assert.equal((await rejected.json()).error, 'invalid_client')
+})
+
+test('ChatGPT completes DCR, 303 callback, token exchange, refresh and GPT-only audience binding', async t => {
+  const base = await createServer(t)
+  mockOwnerLogin(t)
+  const registered = await register(base, {
+    client_name: 'ChatGPT',
+    redirect_uris: ['https://chatgpt.com/connector/oauth/live-test'],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    application_type: 'native',
+    token_endpoint_auth_method: 'none',
+  })
+  assert.equal(registered.response.status, 201)
+
+  const authorization = await authorize(base, registered.body, {
+    scope: 'mcp:tools offline_access',
+    targetResource: gptResource,
+  })
+  const tokens = await exchangeCode(base, registered.body, authorization)
+  assert.equal(tokens.response.status, 200)
+  assert.equal(tokens.body.scope, 'mcp:tools offline_access')
+  assert.match(tokens.body.refresh_token, /^lh_rt_/)
+
+  const gptAccess = await nativeFetch(`${base}/mcp/gpt`, {
+    headers: { Authorization: `Bearer ${tokens.body.access_token}` },
+  })
+  assert.equal(gptAccess.status, 200)
+  assert.equal((await gptAccess.json()).actor, 'gpt')
+  const claudeCrossUse = await nativeFetch(`${base}/mcp/claude`, {
+    headers: { Authorization: `Bearer ${tokens.body.access_token}` },
+  })
+  assert.equal(claudeCrossUse.status, 401)
+
+  const codeReplay = await exchangeCode(base, registered.body, authorization)
+  assert.equal(codeReplay.response.status, 400)
+  assert.equal(codeReplay.body.error, 'invalid_grant')
+  const refreshed = await refresh(base, registered.body, tokens.body.refresh_token, {
+    resource: gptResource,
+  })
+  assert.equal(refreshed.response.status, 200)
+  assert.equal(refreshed.body.scope, 'mcp:tools offline_access')
+})
+
+test('OAuth access tokens reach MCP initialize, exact tools/list and fixed GPT/Claude actors', async t => {
+  const app = express()
+  app.use(express.json())
+  app.use(express.urlencoded({ extended: false }))
+  const verifiers = installTestOAuth(app)
+  const channel = actor => ({
+    actor,
+    tools: createMcpToolDefinitions(actor),
+    async callTool() {
+      return JSON.stringify({ actor })
+    },
+  })
+  installMcpTransports(app, {
+    gptChannel: channel('gpt'),
+    claudeChannel: channel('claude'),
+    verifyGptRequest: () => false,
+    verifyGptOAuth: verifiers.gpt,
+    verifyClaudeOAuth: verifiers.claude,
+    checkRate: () => true,
+    mcpBase: oauthBase,
+  })
+  const server = await new Promise(resolve => {
+    const listening = app.listen(0, '127.0.0.1', () => resolve(listening))
+  })
+  t.after(() => new Promise(resolve => server.close(resolve)))
+  const base = `http://127.0.0.1:${server.address().port}`
+  mockOwnerLogin(t)
+
+  const cases = [
+    {
+      actor: 'gpt',
+      targetResource: gptResource,
+      endpoint: '/mcp/gpt',
+      registration: {
+        client_name: 'ChatGPT',
+        redirect_uris: ['https://chatgpt.com/connector/oauth/transport-test'],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        application_type: 'native',
+        token_endpoint_auth_method: 'none',
+      },
+    },
+    {
+      actor: 'claude',
+      targetResource: resource,
+      endpoint: '/mcp/claude',
+      registration: {
+        client_name: 'Claude',
+        redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        application_type: 'web',
+        token_endpoint_auth_method: 'client_secret_post',
+      },
+    },
+  ]
+
+  for (const item of cases) {
+    const registered = await register(base, item.registration)
+    assert.equal(registered.response.status, 201)
+    const authorization = await authorize(base, registered.body, {
+      targetResource: item.targetResource,
+    })
+    const tokens = await exchangeCode(base, registered.body, authorization, {
+      ...(registered.body.client_secret ? { client_secret: registered.body.client_secret } : {}),
+    })
+    assert.equal(tokens.response.status, 200)
+    const call = async (method, id, params) => {
+      const response = await nativeFetch(`${base}${item.endpoint}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tokens.body.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }),
+      })
+      assert.equal(response.status, 200)
+      return response.json()
+    }
+    const initialized = await call('initialize', 1)
+    assert.equal(initialized.result.protocolVersion, '2024-11-05')
+    const tools = await call('tools/list', 2)
+    assert.deepEqual(tools.result.tools.map(tool => tool.name), [
+      'wake_up',
+      'remember',
+      'recall',
+      'revise',
+      'open_memory',
+      'read_livingroom',
+      'say_livingroom',
+    ])
+    const toolCall = await call('tools/call', 3, {
+      name: 'wake_up',
+      arguments: { actor: item.actor === 'gpt' ? 'claude' : 'gpt' },
+    })
+    assert.deepEqual(JSON.parse(toolCall.result.content[0].text), { actor: item.actor })
+  }
+})
+
+test('owner credential failure is explicit 401 and approval is not subject to the retired cooldown', async t => {
+  const base = await createServer(t, {
+    checkRate: key => key.startsWith('oauth-register:'),
+  })
+  const registered = await register(base)
+  assert.equal(registered.response.status, 201)
+
+  globalThis.fetch = async input => {
+    if (String(input).startsWith('https://project.example.supabase.co/auth/v1/token')) {
+      return new Response(JSON.stringify({ error: 'invalid_grant' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return nativeFetch(input)
+  }
+  t.after(() => { globalThis.fetch = nativeFetch })
+  const verifier = 'a'.repeat(64)
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
+  const fields = {
+    response_type: 'code',
+    client_id: registered.body.client_id,
+    redirect_uri: registered.body.redirect_uris[0],
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    resource,
+    scope: 'mcp:tools',
+    state: 'owner-failure',
+  }
+  const rejected = await nativeFetch(`${base}/oauth/authorize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ ...fields, email: 'owner@example.com', password: 'wrong' }),
+    redirect: 'manual',
+  })
+  assert.equal(rejected.status, 401)
+
+  globalThis.fetch = async input => {
+    if (String(input).startsWith('https://project.example.supabase.co/auth/v1/token')) {
+      return new Response(JSON.stringify({ user: { id: 'owner-1' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return nativeFetch(input)
+  }
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const approved = await nativeFetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ ...fields, state: `approval-${attempt}`, email: 'owner@example.com', password: 'correct' }),
+      redirect: 'manual',
+    })
+    assert.equal(approved.status, 303)
+  }
 })
 
 test('dynamic registration accepts the real Claude Code auth-code plus refresh contract', async t => {
@@ -702,8 +949,16 @@ test('OAuth refuses unsafe startup configuration', () => {
     /OAUTH_TOKEN_SECRET must contain at least 32 characters/,
   )
   assert.throws(
-    () => installTestOAuth(app, { resourceMetadataUrl: 'http://example.com/metadata' }),
-    /MCP_RESOURCE_METADATA_URL must be a valid HTTPS URL/,
+    () => installTestOAuth(app, {
+      resources: {
+        claude: {
+          resource,
+          resourceMetadataUrl: 'http://example.com/metadata',
+          metadataPath: '/.well-known/oauth-protected-resource/mcp/claude',
+        },
+      },
+    }),
+    /MCP resource metadata URL must be a valid HTTPS URL/,
   )
   assert.throws(
     () => installTestOAuth(app, { refreshTokenStore: null }),

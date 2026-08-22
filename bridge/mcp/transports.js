@@ -47,6 +47,7 @@ export function installMcpTransports(app, {
   gptChannel,
   claudeChannel,
   verifyGptRequest,
+  verifyGptOAuth,
   verifyClaudeOAuth,
   checkRate,
   mcpBase,
@@ -97,38 +98,53 @@ export function installMcpTransports(app, {
     }
   })
 
-  app.post('/mcp/claude', verifyClaudeOAuth, async (req, res) => {
-    if (!req.body?.jsonrpc) {
-      return res.status(400).json({
-        jsonrpc: '2.0',
-        error: { code: -32700, message: 'invalid JSON-RPC' },
-      })
-    }
-    try {
-      const response = await handleMcpMessage(req.body, {
-        channel: claudeChannel,
-        serverName: 'lovehouse-claude-mcp',
-        transportIdentity: `claude-http:${req.oauth.client_id}:${req.oauth.jti}`,
-      })
-      return response ? res.json(response) : res.status(204).end()
-    } catch (error) {
-      return res.json({
-        jsonrpc: '2.0',
-        id: req.body.id,
-        error: { code: -32000, message: error.message },
-      })
-    }
-  })
+  function installAuthenticatedHttpTransport({ path, actorName, channel, verifyOAuth }) {
+    app.post(path, verifyOAuth, async (req, res) => {
+      if (!req.body?.jsonrpc) {
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          error: { code: -32700, message: 'invalid JSON-RPC' },
+        })
+      }
+      try {
+        const response = await handleMcpMessage(req.body, {
+          channel,
+          serverName: `lovehouse-${actorName}-mcp`,
+          transportIdentity: `${actorName}-http:${req.oauth.client_id}:${req.oauth.jti}`,
+        })
+        return response ? res.json(response) : res.status(204).end()
+      } catch (error) {
+        return res.json({
+          jsonrpc: '2.0',
+          id: req.body.id,
+          error: { code: -32000, message: error.message },
+        })
+      }
+    })
 
-  app.get('/mcp/claude', verifyClaudeOAuth, (_req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream')
-    res.setHeader('Cache-Control', 'no-cache')
-    res.setHeader('Connection', 'keep-alive')
-    const keepAlive = setInterval(() => res.write(': ping\n\n'), 30_000)
-    keepAlive.unref?.()
-    res.on('close', () => clearInterval(keepAlive))
+    app.get(path, verifyOAuth, (_req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
+      const keepAlive = setInterval(() => res.write(': ping\n\n'), 30_000)
+      keepAlive.unref?.()
+      res.on('close', () => clearInterval(keepAlive))
+    })
+    app.delete(path, verifyOAuth, (_req, res) => res.status(204).end())
+  }
+
+  installAuthenticatedHttpTransport({
+    path: '/mcp/gpt',
+    actorName: 'gpt',
+    channel: gptChannel,
+    verifyOAuth: verifyGptOAuth,
   })
-  app.delete('/mcp/claude', verifyClaudeOAuth, (_req, res) => res.status(204).end())
+  installAuthenticatedHttpTransport({
+    path: '/mcp/claude',
+    actorName: 'claude',
+    channel: claudeChannel,
+    verifyOAuth: verifyClaudeOAuth,
+  })
 
   return { gptSessions }
 }

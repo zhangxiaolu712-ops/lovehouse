@@ -2,8 +2,7 @@ import cors from 'cors'
 import express from 'express'
 
 import {
-  installClaudeOAuth,
-  OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY,
+  installMcpOAuth,
 } from './oauth.js'
 import { createFileOAuthClientRegistry } from './oauthClientRegistry.js'
 import { createFileRefreshTokenStore } from './oauthRefreshStore.js'
@@ -49,13 +48,6 @@ app.use((req, res, next) => {
 })
 app.use(express.json({ limit: '1mb' }))
 app.use(express.urlencoded({ extended: false }))
-app.use('/oauth/authorize', (_req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store')
-  res.setHeader('Content-Security-Policy', OAUTH_AUTHORIZE_CONTENT_SECURITY_POLICY)
-  res.setHeader('Referrer-Policy', 'no-referrer')
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  next()
-})
 app.use(['/oauth/token', '/oauth/register'], (_req, res, next) => {
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Content-Type-Options', 'nosniff')
@@ -74,9 +66,12 @@ const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
 const OAUTH_CLIENT_REGISTRY_PATH = process.env.OAUTH_CLIENT_REGISTRY_PATH || ''
 const OAUTH_REFRESH_STORE_PATH = process.env.OAUTH_REFRESH_STORE_PATH || ''
 const MCP_BASE = process.env.MCP_BASE_URL || `${OAUTH_BASE}/api`
-const MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
-const MCP_RESOURCE_METADATA = process.env.MCP_RESOURCE_METADATA_URL
+const CLAUDE_MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
+const CLAUDE_MCP_RESOURCE_METADATA = process.env.MCP_RESOURCE_METADATA_URL
   || `${MCP_BASE.replace(/\/+$/, '')}/.well-known/oauth-protected-resource/mcp/claude`
+const GPT_MCP_RESOURCE = process.env.GPT_MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/gpt`
+const GPT_MCP_RESOURCE_METADATA = process.env.GPT_MCP_RESOURCE_METADATA_URL
+  || `${MCP_BASE.replace(/\/+$/, '')}/.well-known/oauth-protected-resource/mcp/gpt`
 const MEMORY_SYSTEM_ENABLED = process.env.MEMORY_SYSTEM_ENABLED === 'true'
 const MEMORY_SEMANTIC_ENABLED = MEMORY_SYSTEM_ENABLED
   && process.env.MEMORY_SEMANTIC_ENABLED === 'true'
@@ -410,10 +405,20 @@ function verifyMcpKey(req) {
   return Boolean(key && LIVINGROOM_KEY && safeEqual(key, LIVINGROOM_KEY))
 }
 
-const verifyClaudeOAuth = installClaudeOAuth(app, {
+const oauthVerifiers = installMcpOAuth(app, {
   oauthBase: OAUTH_BASE,
-  resource: MCP_RESOURCE,
-  resourceMetadataUrl: MCP_RESOURCE_METADATA,
+  resources: {
+    gpt: {
+      resource: GPT_MCP_RESOURCE,
+      resourceMetadataUrl: GPT_MCP_RESOURCE_METADATA,
+      metadataPath: '/.well-known/oauth-protected-resource/mcp/gpt',
+    },
+    claude: {
+      resource: CLAUDE_MCP_RESOURCE,
+      resourceMetadataUrl: CLAUDE_MCP_RESOURCE_METADATA,
+      metadataPath: '/.well-known/oauth-protected-resource/mcp/claude',
+    },
+  },
   supabaseUrl: SUPABASE_URL,
   supabaseAnonKey: SUPABASE_ANON_KEY,
   ownerUserId: OWNER_USER_ID,
@@ -427,7 +432,8 @@ installMcpTransports(app, {
   gptChannel,
   claudeChannel,
   verifyGptRequest: verifyMcpKey,
-  verifyClaudeOAuth,
+  verifyGptOAuth: oauthVerifiers.gpt,
+  verifyClaudeOAuth: oauthVerifiers.claude,
   checkRate,
   mcpBase: MCP_BASE,
 })
