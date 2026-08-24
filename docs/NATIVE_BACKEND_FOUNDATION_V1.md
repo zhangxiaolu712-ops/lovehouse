@@ -112,18 +112,23 @@ release 路径证明 deployment SHA 时返回 `null`，不会拿可能漂移的 
 - `source_platform/source_conversation_id/source_message_id/imported_at` 可放在 thread 请求层或
   message 层，经验证后向 adapter 传递；当前没有 Archive Repository，因此不持久化。
 
-统一 SSE 事件按顺序为：
+统一 SSE 事件表面扩展为：
 
 ```text
-message_start { request_id, thread_id, persona_id, runtime, scene, message_type }
-text_delta   { request_id, thread_id, persona_id, delta }
-usage        { request_id, thread_id, persona_id, usage }  # 有真实 usage 时才出现
-error        { ok:false, error:{ code, message, stage, request_id, retryable } }
-message_end  { request_id, thread_id, persona_id, ok }
+message_start
+text_delta
+reasoning_status
+tool_call / tool_result / tool_error
+usage
+quota
+context_breakdown
+error
+message_end
 ```
 
 Claude/Codex 的 provider session、thinking 事件和内部 sidecar 协议均不暴露给客户端。
 Claude 额度耗尽会成为 `PROVIDER_QUOTA_EXHAUSTED` provider error，不会冒充 Bridge 故障。
+Codex 新主干的完整事件字段见 `docs/CODEX_CLI_CHAT_MAINLINE_V1.md`。
 
 ### `POST /api/v1/chat/reset`
 

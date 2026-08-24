@@ -38,6 +38,14 @@ export function createClaudeAdapter({
 
   return Object.freeze({
     runtime: 'claude',
+    getCapabilities() {
+      return {
+        runtime_type: 'claude_cli',
+        adapter_id: 'legacy-claude-frozen',
+        enabled: true,
+        capabilities: { stable_chat_v1: false },
+      }
+    },
     async health() {
       return { status: 'configured' }
     },
@@ -144,7 +152,7 @@ async function responseError(response) {
       detail?.code || 'PROVIDER_UNAVAILABLE',
       detail?.message || 'Codex provider rejected the request',
       {
-        stage: detail?.type || 'provider',
+        stage: detail?.stage || detail?.type || 'runtime',
         status: response.status,
         retryable: detail?.retryable === true,
       },
@@ -154,6 +162,107 @@ async function responseError(response) {
       stage: 'provider', status: response.status || 503, retryable: true, cause,
     })
   }
+}
+
+const RUNTIME_ERROR_CODES = new Map([
+  ['provider_unavailable', 'RUNTIME_UNAVAILABLE'],
+  ['provider_resume_failed', 'SESSION_RECOVERY_FAILED'],
+  ['provider_turn_failed', 'STREAM_INTERRUPTED'],
+  ['provider_exit', 'STREAM_INTERRUPTED'],
+  ['provider_aborted', 'STREAM_INTERRUPTED'],
+  ['auth_required', 'AUTH_FAILED'],
+])
+
+function stableRuntimeErrorCode(value) {
+  if (typeof value !== 'string') return 'STREAM_INTERRUPTED'
+  if (/^[A-Z][A-Z0-9_]{2,63}$/.test(value)) return value
+  return RUNTIME_ERROR_CODES.get(value) || 'STREAM_INTERRUPTED'
+}
+
+function finiteOrNull(value) {
+  return Number.isFinite(value) ? value : null
+}
+
+function safeRuntimeEvent(event, data) {
+  if (event === 'runtime_status') {
+    return {
+      status: ['ready', 'recovering', 'unavailable'].includes(data?.status) ? data.status : 'unavailable',
+      runtime_type: data?.runtime_type === 'codex_cli' ? 'codex_cli' : 'codex_cli',
+      adapter_id: data?.adapter_id === 'codex-cli-v1' ? 'codex-cli-v1' : 'codex-cli-v1',
+      capabilities: data?.capabilities && typeof data.capabilities === 'object'
+        ? {
+            streaming_text: data.capabilities.streaming_text === true,
+            reasoning_summary: ['conditional', 'unavailable'].includes(data.capabilities.reasoning_summary)
+              ? data.capabilities.reasoning_summary
+              : 'conditional',
+            tool_events: data.capabilities.tool_events === true,
+            actual_usage: data.capabilities.actual_usage === true,
+            quota: data.capabilities.quota === true,
+            context_breakdown: 'basic',
+          }
+        : null,
+    }
+  }
+  if (event === 'reasoning_status') {
+    return {
+      available: data?.available === true,
+      status: ['streaming', 'completed', 'unavailable'].includes(data?.status)
+        ? data.status
+        : 'unavailable',
+      summary: typeof data?.summary === 'string' ? data.summary.slice(0, 1_500) : null,
+      source: 'codex_cli',
+    }
+  }
+  if (['tool_call', 'tool_result', 'tool_error'].includes(event)) {
+    return {
+      call_id: typeof data?.call_id === 'string' ? data.call_id.slice(0, 128) : 'unknown',
+      tool_type: ['command', 'file_change', 'mcp', 'web_search'].includes(data?.tool_type)
+        ? data.tool_type
+        : 'command',
+      name: typeof data?.name === 'string' ? data.name.slice(0, 128) : 'tool',
+      status: event === 'tool_call' ? 'running' : (event === 'tool_result' ? 'success' : 'failed'),
+      ...(event === 'tool_call'
+        ? {}
+        : { summary: typeof data?.summary === 'string' ? data.summary.slice(0, 500) : null }),
+    }
+  }
+  if (event === 'usage') {
+    return {
+      estimated_input_tokens: finiteOrNull(data?.estimated_input_tokens),
+      actual_input_tokens: finiteOrNull(data?.actual_input_tokens),
+      actual_output_tokens: finiteOrNull(data?.actual_output_tokens),
+      total_tokens: finiteOrNull(data?.total_tokens),
+      usage_source: data?.usage_source === 'codex_cli' ? 'codex_cli' : 'estimate',
+    }
+  }
+  if (event === 'quota') {
+    return {
+      status: ['available', 'exhausted', 'unknown'].includes(data?.status) ? data.status : 'unknown',
+      remaining: finiteOrNull(data?.remaining),
+      unit: typeof data?.unit === 'string' ? data.unit.slice(0, 32) : null,
+      reset_at: typeof data?.reset_at === 'string' ? data.reset_at.slice(0, 64) : null,
+      source: typeof data?.source === 'string' ? data.source.slice(0, 64) : 'codex_cli_unavailable',
+    }
+  }
+  if (event === 'context_breakdown') {
+    const section = (name, defaultEnabled = false) => ({
+      enabled: data?.[name]?.enabled === true || defaultEnabled,
+      available: data?.[name]?.available === true,
+      estimated_tokens: finiteOrNull(data?.[name]?.estimated_tokens),
+      ...(name === 'recent_chat' && typeof data?.[name]?.source === 'string'
+        ? { source: data[name].source.slice(0, 64) }
+        : {}),
+    })
+    return {
+      recent_chat: section('recent_chat', true),
+      memory: section('memory'),
+      worldbook: section('worldbook'),
+      persona: section('persona'),
+      current_message: section('current_message', true),
+      estimated_tokens: finiteOrNull(data?.estimated_tokens),
+    }
+  }
+  return null
 }
 
 export function createCodexAdapter({
@@ -166,6 +275,21 @@ export function createCodexAdapter({
 
   return Object.freeze({
     runtime: 'codex',
+    getCapabilities() {
+      return {
+        runtime_type: 'codex_cli',
+        adapter_id: 'codex-cli-v1',
+        enabled: true,
+        capabilities: {
+          streaming_text: true,
+          reasoning_summary: 'conditional',
+          tool_events: true,
+          actual_usage: true,
+          quota: false,
+          context_breakdown: 'basic',
+        },
+      }
+    },
     async health() {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), healthTimeoutMs)
@@ -179,7 +303,7 @@ export function createCodexAdapter({
         clearTimeout(timeout)
       }
     },
-    async chat({ threadId, text, authorization, onText, signal }) {
+    async chat({ threadId, text, authorization, onText, onEvent, signal }) {
       let response
       try {
         response = await fetchImpl(`${normalizedBase}/chat`, {
@@ -188,7 +312,7 @@ export function createCodexAdapter({
             'Content-Type': 'application/json',
             Authorization: authorization,
           },
-          body: JSON.stringify({ window_id: threadId, message: text }),
+          body: JSON.stringify({ thread_id: threadId, window_id: threadId, message: text }),
           signal,
         })
       } catch (error) {
@@ -205,15 +329,28 @@ export function createCodexAdapter({
       let buffer = ''
       let done = false
       let streamError = null
+      let reasoningReported = false
+      let quotaReported = false
+      let contextReported = false
       const onFrame = (event, data) => {
         if (event === 'text' && data?.text) onText?.(data.text)
+        if ([
+          'runtime_status', 'reasoning_status', 'tool_call', 'tool_result', 'tool_error',
+          'usage', 'quota', 'context_breakdown',
+        ].includes(event)) {
+          const safe = safeRuntimeEvent(event, data)
+          if (safe) onEvent?.(event, safe)
+          if (event === 'reasoning_status') reasoningReported = true
+          if (event === 'quota') quotaReported = true
+          if (event === 'context_breakdown') contextReported = true
+        }
         if (event === 'error') {
           streamError = new ClientApiError(
-            data?.code || 'PROVIDER_UNAVAILABLE',
+            stableRuntimeErrorCode(data?.code),
             data?.message || 'Codex provider failed',
             {
-              stage: data?.type || 'provider',
-              status: 503,
+              stage: data?.stage || data?.type || 'runtime',
+              status: data?.code === 'QUOTA_EXHAUSTED' ? 429 : 503,
               retryable: data?.retryable === true,
             },
           )
@@ -227,6 +364,27 @@ export function createCodexAdapter({
       }
       buffer += decoder.decode()
       parseSseFrames(buffer, onFrame, true)
+      if (!reasoningReported) {
+        onEvent?.('reasoning_status', {
+          available: false, status: 'unavailable', summary: null, source: 'codex_cli',
+        })
+      }
+      if (!quotaReported) {
+        onEvent?.('quota', {
+          status: 'unknown', remaining: null, unit: null, reset_at: null,
+          source: 'codex_cli_unavailable',
+        })
+      }
+      if (!contextReported) {
+        onEvent?.('context_breakdown', {
+          recent_chat: { enabled: true, available: true, estimated_tokens: null },
+          memory: { enabled: false, available: false, estimated_tokens: 0 },
+          worldbook: { enabled: false, available: false, estimated_tokens: 0 },
+          persona: { enabled: false, available: false, estimated_tokens: 0 },
+          current_message: { enabled: true, available: true, estimated_tokens: null },
+          estimated_tokens: null,
+        })
+      }
       if (streamError) throw streamError
       if (!done) {
         throw new ClientApiError('PROVIDER_STREAM_INCOMPLETE', 'Codex stream ended unexpectedly', {
@@ -250,11 +408,13 @@ export function createProviderRouter({ personaRegistry, adapters }) {
   const byRuntime = new Map(Object.entries(adapters || {}))
 
   function describe(persona) {
+    const adapter = byRuntime.get(persona.default_runtime)
     return {
       ...persona,
-      runtime_status: persona.enabled && byRuntime.has(persona.default_runtime)
+      runtime_status: persona.enabled && adapter
         ? 'configured'
         : 'unavailable',
+      runtime: adapter?.getCapabilities?.() || null,
     }
   }
 

@@ -21,6 +21,7 @@ import StatsPage from '../modules/stats/StatsPage'
 import StatusPage from '../modules/settings/StatusPage'
 import LivingroomPage from '../modules/livingroom/LivingroomPage'
 import AutobiographyPage from '../modules/autobiography/AutobiographyPage'
+import CodexChatV1Page from '../modules/codex-chat-v1/CodexChatV1Page'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
@@ -65,6 +66,7 @@ export const router = createHashRouter([
       { path: 'settings/status', element: <StatusPage /> },
       { path: 'livingroom', element: <LivingroomPage /> },
       { path: 'autobiography', element: <AutobiographyPage /> },
+      { path: 'codex-chat-v1', element: <CodexChatV1Page /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },

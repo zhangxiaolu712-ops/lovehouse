@@ -4,6 +4,22 @@ import { ClientApiError, normalizeClientApiError } from './errors.js'
 import { SCENES } from './personas.js'
 
 export const CLIENT_API_VERSION = 1
+export const CLIENT_STREAM_EVENTS = Object.freeze([
+  'message_start',
+  'text_delta',
+  'reasoning_status',
+  'tool_call',
+  'tool_result',
+  'tool_error',
+  'usage',
+  'quota',
+  'context_breakdown',
+  'error',
+  'message_end',
+])
+const ADAPTER_STREAM_EVENTS = new Set(CLIENT_STREAM_EVENTS.filter(event => ![
+  'message_start', 'text_delta', 'error', 'message_end',
+].includes(event)))
 export const CLIENT_MESSAGE_TYPES = Object.freeze([
   'text',
   'audio',
@@ -292,8 +308,13 @@ export function installClientApi(app, {
     }
     emitSse(res, 'message_start', {
       ...base,
-      runtime: resolved.persona.default_runtime,
+      runtime: resolved.persona.runtime?.runtime_type || resolved.persona.default_runtime,
+      adapter_id: resolved.persona.runtime?.adapter_id || null,
       scene,
+      reply_policy: {
+        default_modality: 'text',
+        voice_enabled: false,
+      },
       message_type: normalized.message.type,
     })
 
@@ -310,6 +331,11 @@ export function installClientApi(app, {
         signal: controller.signal,
         onText(delta) {
           if (!ended) emitSse(res, 'text_delta', { ...base, delta })
+        },
+        onEvent(event, payload) {
+          if (!ended && ADAPTER_STREAM_EVENTS.has(event) && payload && typeof payload === 'object') {
+            emitSse(res, event, { ...payload, ...base })
+          }
         },
       })
       if (result?.usage && !ended) emitSse(res, 'usage', { ...base, usage: result.usage })

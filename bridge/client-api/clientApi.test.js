@@ -178,6 +178,70 @@ test('Claude and Codex share the same stable SSE contract without exposing provi
   }
 })
 
+test('Codex runtime metadata crosses the handler only through the unified safe event surface', async t => {
+  const base = await startHarness(t, {
+    adapters: {
+      claude: fakeAdapter('claude'),
+      codex: fakeAdapter('codex', {
+        getCapabilities() {
+          return {
+            runtime_type: 'codex_cli', adapter_id: 'codex-cli-v1', enabled: true,
+            capabilities: { reasoning_summary: 'conditional', tool_events: true },
+          }
+        },
+        async chat({ onText, onEvent }) {
+          onEvent('reasoning_status', {
+            available: false, status: 'unavailable', summary: null, source: 'codex_cli',
+          })
+          onEvent('tool_call', {
+            call_id: 'item-1', tool_type: 'command', name: 'shell', status: 'running',
+          })
+          onEvent('tool_result', {
+            call_id: 'item-1', tool_type: 'command', name: 'shell', status: 'success',
+            summary: 'Command completed',
+          })
+          onEvent('usage', {
+            estimated_input_tokens: 2, actual_input_tokens: 3, actual_output_tokens: 4,
+            total_tokens: 7, usage_source: 'codex_cli',
+          })
+          onEvent('quota', {
+            status: 'unknown', remaining: null, unit: null, reset_at: null,
+            source: 'codex_cli_unavailable',
+          })
+          onEvent('context_breakdown', {
+            recent_chat: { enabled: true, available: true, estimated_tokens: null },
+            memory: { enabled: false, available: false, estimated_tokens: 0 },
+            worldbook: { enabled: false, available: false, estimated_tokens: 0 },
+            persona: { enabled: false, available: false, estimated_tokens: 0 },
+            current_message: { enabled: true, available: true, estimated_tokens: 2 },
+            estimated_tokens: 2,
+          })
+          onText('reply')
+          return { usage: null }
+        },
+      }),
+    },
+  })
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify(chatBody({ persona_id: 'codex', scene: 'work' })),
+  })
+  const events = parseSse(await response.text())
+  assert.deepEqual(events.map(item => item.event), [
+    'message_start', 'reasoning_status', 'tool_call', 'tool_result', 'usage',
+    'quota', 'context_breakdown', 'text_delta', 'message_end',
+  ])
+  assert.equal(events[0].data.runtime, 'codex_cli')
+  assert.equal(events[0].data.adapter_id, 'codex-cli-v1')
+  assert.deepEqual(events[0].data.reply_policy, {
+    default_modality: 'text', voice_enabled: false,
+  })
+  assert.equal(events[1].data.thread_id, THREAD_ID)
+  assert.equal(events[5].data.status, 'unknown')
+  assert.equal(events[6].data.memory.enabled, false)
+  assert.equal(JSON.stringify(events).includes('session_id'), false)
+})
+
 test('provider quota failures stay observable as a provider-stage stream error', async t => {
   const base = await startHarness(t, {
     adapters: {
@@ -333,23 +397,40 @@ test('Codex adapter forwards owner auth and translates sidecar SSE without leaki
     fetchImpl: async (url, options) => {
       request = { url, options }
       return new Response([
+        'event: runtime_status\ndata: {"status":"ready","runtime_type":"codex_cli","adapter_id":"codex-cli-v1","capabilities":{"streaming_text":true,"reasoning_summary":"conditional","tool_events":true,"actual_usage":true,"quota":false,"context_breakdown":"basic"}}',
+        'event: quota\ndata: {"status":"unknown","remaining":null,"unit":null,"reset_at":null,"source":"codex_cli_unavailable"}',
+        'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"codex_native_thread","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"estimated_tokens":2}',
         'event: session\ndata: {"session_id":"22222222-2222-4222-8222-222222222222"}',
+        'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","command":"must-not-pass"}',
+        'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","summary":"Command completed","aggregated_output":"must-not-pass"}',
         'event: text\ndata: {"text":"hello"}',
+        'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"codex_cli"}',
+        'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"actual_output_tokens":4,"total_tokens":7,"usage_source":"codex_cli"}',
         'event: done\ndata: {"ok":true}',
         '',
       ].join('\n\n'), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
     },
   })
   const text = []
+  const events = []
   const result = await adapter.chat({
     threadId: THREAD_ID,
     text: 'hi',
     authorization: 'Bearer owner-token',
     onText: delta => text.push(delta),
+    onEvent: (event, data) => events.push({ event, data }),
   })
   assert.match(request.url, /\/api\/codex\/chat$/)
   assert.equal(request.options.headers.Authorization, 'Bearer owner-token')
-  assert.deepEqual(JSON.parse(request.options.body), { window_id: THREAD_ID, message: 'hi' })
+  assert.deepEqual(JSON.parse(request.options.body), {
+    thread_id: THREAD_ID, window_id: THREAD_ID, message: 'hi',
+  })
   assert.deepEqual(text, ['hello'])
+  assert.deepEqual(events.map(item => item.event), [
+    'runtime_status', 'quota', 'context_breakdown', 'tool_call', 'tool_result',
+    'reasoning_status', 'usage',
+  ])
+  assert.equal(JSON.stringify(events).includes('must-not-pass'), false)
+  assert.equal(JSON.stringify(events).includes('session_id'), false)
   assert.deepEqual(result, { usage: null })
 })
