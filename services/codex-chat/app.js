@@ -1,6 +1,6 @@
 import http from 'node:http'
 
-import { createContextBreakdown } from './contextBreakdown.js'
+import { createContextBreakdown, withReasoningContext } from './contextBreakdown.js'
 import { ChatRuntimeError, publicRuntimeError } from './errors.js'
 import { assertRuntimeAdapter } from './runtimeContract.js'
 import { SessionStore } from './sessionStore.js'
@@ -87,10 +87,11 @@ export function createCodexChatHandler({
     let owner
     let input
     let session
+    let persisted
     try {
       owner = await authenticate(req.headers.authorization)
       input = normalizeBody(await readJson(req))
-      const persisted = await threadBindings.get({
+      persisted = await threadBindings.get({
         ownerUserId: owner.userId,
         threadId: input.threadId,
       })
@@ -131,17 +132,19 @@ export function createCodexChatHandler({
       capabilities: capabilities.capabilities,
     })
     emit('quota', runtime.getQuota())
-    emit('context_breakdown', createContextBreakdown({
+    let contextBreakdown = createContextBreakdown({
       history: session.history,
       message: input.message,
       resumed: session.resumed,
-    }))
+    })
+    emit('context_breakdown', contextBreakdown)
 
     try {
       const result = await runtime.streamEvents({
         message: input.message,
         history: session.history,
         sessionId: runtimeSessionId,
+        previousUsage: persisted?.cumulative_usage || null,
         signal: controller.signal,
         getContinuationContext: async () => session.history,
         onRuntimeBinding: value => {
@@ -161,8 +164,27 @@ export function createCodexChatHandler({
           })
         },
         onText: text => emit('text', { text }),
-        onEvent: emit,
+        onEvent: (event, payload) => {
+          emit(event, payload)
+          if (event === 'reasoning_status') {
+            contextBreakdown = withReasoningContext(contextBreakdown, payload)
+            emit('context_breakdown', contextBreakdown)
+          }
+        },
       })
+      if (Number.isFinite(result.usage?.cumulative_input_tokens)
+        || Number.isFinite(result.usage?.cumulative_output_tokens)) {
+        bindingWrite = bindingWrite.then(() => threadBindings.save({
+          ownerUserId: owner.userId,
+          threadId: input.threadId,
+          runtimeSessionId: result.sessionId,
+          cumulativeUsage: {
+            input_tokens: result.usage.cumulative_input_tokens,
+            output_tokens: result.usage.cumulative_output_tokens,
+            cached_input_tokens: result.usage.cumulative_cached_input_tokens,
+          },
+        }))
+      }
       await bindingWrite
       sessions.bind(session.key, result.sessionId)
       sessions.complete(session.key, input.message, result.text)

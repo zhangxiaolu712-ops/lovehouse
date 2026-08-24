@@ -5,6 +5,7 @@ import Markdown from '../../shared/Markdown'
 import { streamCodexV1 } from './codexChatV1Service'
 import {
   boundCodexV1History,
+  deriveCurrentTurnUsage,
   getCodexV1Identity,
   loadCodexV1History,
   saveCodexV1History,
@@ -80,7 +81,7 @@ export default function CodexChatV1Page() {
           else if (name === 'reasoning_status') setReasoning(data)
           else if (['tool_call', 'tool_result', 'tool_error'].includes(name)) {
             setTools(current => upsertTool(current, name, data))
-          } else if (name === 'usage') setUsage(data)
+          } else if (name === 'usage') setUsage(deriveCurrentTurnUsage(data))
           else if (name === 'quota') setQuota(data)
           else if (name === 'context_breakdown') setContext(data)
           else if (name === 'message_end') {
@@ -165,22 +166,23 @@ export default function CodexChatV1Page() {
 
         <aside className="codex-v1-observability">
           <section>
-            <h2>Reasoning</h2>
+            <h2>我的思路</h2>
             <p><strong>{reasoning.available ? 'available' : 'unavailable'}</strong> · {reasoning.status}</p>
-            <small>{reasoning.summary || '没有真实 reasoning summary，本轮不生成旁白。'}</small>
+            <small>{reasoning.summary || '本轮没有 CLI 原生 reasoning summary，不补写旁白。'}</small>
           </section>
           <section>
-            <h2>Tools</h2>
+            <h2>正在做</h2>
             {!tools.length && <small>本轮没有真实工具事件。</small>}
             <ul>{tools.map(tool => (
               <li key={tool.call_id}>
-                <strong>{tool.name}</strong><span>{tool.status}</span>
+                <strong>{tool.name}</strong><span>{tool.lifecycle || tool.status}</span>
+                <small>{tool.tool_type} · {tool.status}</small>
                 {tool.summary && <small>{tool.summary}</small>}
               </li>
             ))}</ul>
           </section>
           <section>
-            <h2>Tokens</h2>
+            <h2>本轮 Token</h2>
             <dl>
               <dt>estimate input</dt><dd>{usage?.estimated_input_tokens ?? '—'}</dd>
               <dt>actual input</dt><dd>{usage?.actual_input_tokens ?? '—'}</dd>
@@ -188,6 +190,9 @@ export default function CodexChatV1Page() {
               <dt>total</dt><dd>{usage?.total_tokens ?? '—'}</dd>
               <dt>source</dt><dd>{usage?.usage_source ?? '—'}</dd>
             </dl>
+            {usage?.baseline_status === 'establishing' && (
+              <small>本轮只建立累计基线；下一轮开始显示准确差值。</small>
+            )}
           </section>
           <section>
             <h2>Quota</h2>
@@ -200,10 +205,17 @@ export default function CodexChatV1Page() {
               <ul>
                 <ContextLine name="recent_chat" value={context.recent_chat} />
                 <ContextLine name="current_message" value={context.current_message} />
+                <ContextLine name="reasoning" value={context.reasoning} />
                 <ContextLine name="memory" value={context.memory} />
                 <ContextLine name="worldbook" value={context.worldbook} />
                 <ContextLine name="persona" value={context.persona} />
               </ul>
+            )}
+            {context?.reasoning && (
+              <small>
+                reasoning 由 Codex 原生 thread 管理，会随 resume 续传并参与原生 compaction。
+                {context.reasoning.summary ? ` 当前摘要：${context.reasoning.summary}` : ''}
+              </small>
             )}
           </section>
         </aside>

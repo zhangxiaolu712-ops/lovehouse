@@ -192,7 +192,7 @@ function safeRuntimeEvent(event, data) {
       capabilities: data?.capabilities && typeof data.capabilities === 'object'
         ? {
             streaming_text: data.capabilities.streaming_text === true,
-            reasoning_summary: ['conditional', 'unavailable'].includes(data.capabilities.reasoning_summary)
+            reasoning_summary: ['detailed', 'conditional', 'unavailable'].includes(data.capabilities.reasoning_summary)
               ? data.capabilities.reasoning_summary
               : 'conditional',
             tool_events: data.capabilities.tool_events === true,
@@ -206,7 +206,7 @@ function safeRuntimeEvent(event, data) {
   if (event === 'reasoning_status') {
     return {
       available: data?.available === true,
-      status: ['streaming', 'completed', 'unavailable'].includes(data?.status)
+      status: ['started', 'updated', 'streaming', 'completed', 'unavailable'].includes(data?.status)
         ? data.status
         : 'unavailable',
       summary: typeof data?.summary === 'string' ? data.summary.slice(0, 1_500) : null,
@@ -221,6 +221,9 @@ function safeRuntimeEvent(event, data) {
         : 'command',
       name: typeof data?.name === 'string' ? data.name.slice(0, 128) : 'tool',
       status: event === 'tool_call' ? 'running' : (event === 'tool_result' ? 'success' : 'failed'),
+      lifecycle: ['started', 'updated', 'completed'].includes(data?.lifecycle)
+        ? data.lifecycle
+        : (event === 'tool_call' ? 'started' : 'completed'),
       ...(event === 'tool_call'
         ? {}
         : { summary: typeof data?.summary === 'string' ? data.summary.slice(0, 500) : null }),
@@ -232,7 +235,17 @@ function safeRuntimeEvent(event, data) {
       actual_input_tokens: finiteOrNull(data?.actual_input_tokens),
       actual_output_tokens: finiteOrNull(data?.actual_output_tokens),
       total_tokens: finiteOrNull(data?.total_tokens),
-      usage_source: data?.usage_source === 'codex_cli' ? 'codex_cli' : 'estimate',
+      cumulative_input_tokens: finiteOrNull(data?.cumulative_input_tokens),
+      cumulative_output_tokens: finiteOrNull(data?.cumulative_output_tokens),
+      cumulative_total_tokens: finiteOrNull(data?.cumulative_total_tokens),
+      previous_cumulative_input_tokens: finiteOrNull(data?.previous_cumulative_input_tokens),
+      previous_cumulative_output_tokens: finiteOrNull(data?.previous_cumulative_output_tokens),
+      baseline_status: ['known', 'establishing', 'reset', 'unavailable'].includes(data?.baseline_status)
+        ? data.baseline_status
+        : 'unavailable',
+      usage_source: [
+        'codex_cli_cumulative_delta', 'codex_cli_cumulative_baseline', 'codex_cli', 'estimate',
+      ].includes(data?.usage_source) ? data.usage_source : 'estimate',
     }
   }
   if (event === 'quota') {
@@ -259,6 +272,21 @@ function safeRuntimeEvent(event, data) {
       worldbook: section('worldbook'),
       persona: section('persona'),
       current_message: section('current_message', true),
+      reasoning: {
+        enabled: data?.reasoning?.enabled === true,
+        available: data?.reasoning?.available === true
+          ? true
+          : (data?.reasoning?.available === false ? false : null),
+        status: ['pending', 'resumed', 'started', 'updated', 'completed', 'unavailable']
+          .includes(data?.reasoning?.status) ? data.reasoning.status : 'unavailable',
+        summary: typeof data?.reasoning?.summary === 'string'
+          ? data.reasoning.summary.slice(0, 1_500)
+          : null,
+        source: 'codex_native_thread',
+        active_context: data?.reasoning?.active_context === true,
+        resumes_with_thread: data?.reasoning?.resumes_with_thread === true,
+        compaction: 'codex_native',
+      },
       estimated_tokens: finiteOrNull(data?.estimated_tokens),
     }
   }
@@ -382,6 +410,16 @@ export function createCodexAdapter({
           worldbook: { enabled: false, available: false, estimated_tokens: 0 },
           persona: { enabled: false, available: false, estimated_tokens: 0 },
           current_message: { enabled: true, available: true, estimated_tokens: null },
+          reasoning: {
+            enabled: true,
+            available: false,
+            status: 'unavailable',
+            summary: null,
+            source: 'codex_native_thread',
+            active_context: true,
+            resumes_with_thread: true,
+            compaction: 'codex_native',
+          },
           estimated_tokens: null,
         })
       }

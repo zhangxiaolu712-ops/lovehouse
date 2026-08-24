@@ -27,6 +27,26 @@ function key({ ownerUserId, threadId }) {
   return `${ownerUserId}:${threadId}`
 }
 
+function normalizeCumulativeUsage(value) {
+  if (!value || typeof value !== 'object') return null
+  const token = item => (Number.isFinite(item) && item >= 0 ? item : null)
+  const normalized = {
+    input_tokens: token(value.input_tokens),
+    output_tokens: token(value.output_tokens),
+    cached_input_tokens: token(value.cached_input_tokens),
+  }
+  return Object.values(normalized).some(item => item !== null) ? normalized : null
+}
+
+function nextCumulativeUsage(binding, existing) {
+  if (binding.cumulativeUsage !== undefined) {
+    return normalizeCumulativeUsage(binding.cumulativeUsage)
+  }
+  return existing?.runtime_session_id === binding.runtimeSessionId
+    ? existing.cumulative_usage || null
+    : null
+}
+
 export class InMemoryThreadBindingStore {
   constructor() { this.bindings = new Map() }
 
@@ -37,10 +57,12 @@ export class InMemoryThreadBindingStore {
 
   async save(binding) {
     validate(binding)
+    const existing = this.bindings.get(key(binding)) || null
     const value = {
       runtime_session_id: binding.runtimeSessionId,
       runtime_type: 'codex_cli',
       updated_at: new Date().toISOString(),
+      cumulative_usage: nextCumulativeUsage(binding, existing),
     }
     this.bindings.set(key(binding), value)
     return { ...value }
@@ -101,6 +123,7 @@ export class FileThreadBindingStore {
       runtime_session_id: runtimeSessionId,
       runtime_type: value.runtime_type || 'codex_cli',
       updated_at: value.updated_at || value.updatedAt || null,
+      cumulative_usage: normalizeCumulativeUsage(value.lastUsage || value.cumulative_usage),
     } : null
   }
 
@@ -108,12 +131,21 @@ export class FileThreadBindingStore {
     validate(binding)
     const operation = this.#queue.then(async () => {
       const state = await this.#read()
+      const existingValue = state.bindings[binding.ownerUserId]?.[binding.threadId]
+      const existing = existingValue ? {
+        runtime_session_id: existingValue.runtime_session_id || existingValue.codexThreadId,
+        cumulative_usage: normalizeCumulativeUsage(
+          existingValue.lastUsage || existingValue.cumulative_usage,
+        ),
+      } : null
+      const cumulativeUsage = nextCumulativeUsage(binding, existing)
       const value = {
         // Preserve the production v1 file shape so this experiment can be
         // rolled back without migrating or invalidating existing bindings.
         codexThreadId: binding.runtimeSessionId,
         runtime_type: 'codex_cli',
         updatedAt: new Date().toISOString(),
+        ...(cumulativeUsage ? { lastUsage: cumulativeUsage } : {}),
       }
       state.bindings[binding.ownerUserId] ||= {}
       state.bindings[binding.ownerUserId][binding.threadId] = value
@@ -122,6 +154,7 @@ export class FileThreadBindingStore {
         runtime_session_id: value.codexThreadId,
         runtime_type: value.runtime_type,
         updated_at: value.updatedAt,
+        cumulative_usage: cumulativeUsage,
       }
     })
     this.#queue = operation.catch(() => {})

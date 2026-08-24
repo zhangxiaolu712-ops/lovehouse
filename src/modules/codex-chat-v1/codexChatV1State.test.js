@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   CODEX_V1_STORAGE_KEYS,
   boundCodexV1History,
+  deriveCurrentTurnUsage,
   getCodexV1Identity,
   loadCodexV1History,
   saveCodexV1History,
@@ -40,4 +41,36 @@ test('recent UI history is bounded and strips runtime/session metadata', () => {
   assert.deepEqual(loadCodexV1History(local), saved)
   assert.equal(JSON.stringify(saved).includes('runtime_session_id'), false)
   assert.deepEqual(boundCodexV1History(null), [])
+})
+
+test('web current-turn tokens subtract the previous cumulative thread usage', () => {
+  const usage = deriveCurrentTurnUsage({
+    estimated_input_tokens: 8,
+    actual_input_tokens: 150,
+    actual_output_tokens: 35,
+    total_tokens: 185,
+    cumulative_input_tokens: 150,
+    cumulative_output_tokens: 35,
+    previous_cumulative_input_tokens: 100,
+    previous_cumulative_output_tokens: 20,
+    usage_source: 'codex_cli_cumulative_delta',
+    baseline_status: 'known',
+  })
+  assert.equal(usage.actual_input_tokens, 50)
+  assert.equal(usage.actual_output_tokens, 15)
+  assert.equal(usage.total_tokens, 65)
+  assert.equal(usage.cumulative_input_tokens, 150)
+})
+
+test('web never invents a delta while a resumed thread is only establishing its baseline', () => {
+  const usage = deriveCurrentTurnUsage({
+    cumulative_input_tokens: 500,
+    cumulative_output_tokens: 80,
+    previous_cumulative_input_tokens: null,
+    previous_cumulative_output_tokens: null,
+    baseline_status: 'establishing',
+  })
+  assert.equal(usage.actual_input_tokens, null)
+  assert.equal(usage.actual_output_tokens, null)
+  assert.equal(usage.total_tokens, null)
 })

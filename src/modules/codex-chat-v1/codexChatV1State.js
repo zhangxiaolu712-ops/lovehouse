@@ -63,4 +63,32 @@ export function saveCodexV1History(messages, storage = globalThis.localStorage) 
   return bounded
 }
 
+function tokenDelta(current, previous) {
+  if (!Number.isFinite(current) || !Number.isFinite(previous) || current < previous) return null
+  return current - previous
+}
+
+export function deriveCurrentTurnUsage(value) {
+  if (!value || typeof value !== 'object') return null
+  const hasCumulative = Number.isFinite(value.cumulative_input_tokens)
+    || Number.isFinite(value.cumulative_output_tokens)
+  if (!hasCumulative) return { ...value }
+  const actualInput = tokenDelta(
+    value.cumulative_input_tokens,
+    value.previous_cumulative_input_tokens,
+  )
+  const actualOutput = tokenDelta(
+    value.cumulative_output_tokens,
+    value.previous_cumulative_output_tokens,
+  )
+  return {
+    ...value,
+    actual_input_tokens: actualInput,
+    actual_output_tokens: actualOutput,
+    total_tokens: actualInput !== null && actualOutput !== null
+      ? actualInput + actualOutput
+      : null,
+  }
+}
+
 export const CODEX_V1_STORAGE_KEYS = Object.freeze({ THREAD_KEY, WINDOW_KEY, HISTORY_KEY })

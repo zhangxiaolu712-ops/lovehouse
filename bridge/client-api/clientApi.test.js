@@ -186,7 +186,7 @@ test('Codex runtime metadata crosses the handler only through the unified safe e
         getCapabilities() {
           return {
             runtime_type: 'codex_cli', adapter_id: 'codex-cli-v1', enabled: true,
-            capabilities: { reasoning_summary: 'conditional', tool_events: true },
+            capabilities: { reasoning_summary: 'detailed', tool_events: true },
           }
         },
         async chat({ onText, onEvent }) {
@@ -195,14 +195,22 @@ test('Codex runtime metadata crosses the handler only through the unified safe e
           })
           onEvent('tool_call', {
             call_id: 'item-1', tool_type: 'command', name: 'shell', status: 'running',
+            lifecycle: 'started',
           })
           onEvent('tool_result', {
             call_id: 'item-1', tool_type: 'command', name: 'shell', status: 'success',
-            summary: 'Command completed',
+            lifecycle: 'completed', summary: 'Command completed',
           })
           onEvent('usage', {
             estimated_input_tokens: 2, actual_input_tokens: 3, actual_output_tokens: 4,
-            total_tokens: 7, usage_source: 'codex_cli',
+            total_tokens: 7,
+            cumulative_input_tokens: 103,
+            cumulative_output_tokens: 24,
+            cumulative_total_tokens: 127,
+            previous_cumulative_input_tokens: 100,
+            previous_cumulative_output_tokens: 20,
+            baseline_status: 'known',
+            usage_source: 'codex_cli_cumulative_delta',
           })
           onEvent('quota', {
             status: 'unknown', remaining: null, unit: null, reset_at: null,
@@ -214,6 +222,11 @@ test('Codex runtime metadata crosses the handler only through the unified safe e
             worldbook: { enabled: false, available: false, estimated_tokens: 0 },
             persona: { enabled: false, available: false, estimated_tokens: 0 },
             current_message: { enabled: true, available: true, estimated_tokens: 2 },
+            reasoning: {
+              enabled: true, available: false, status: 'unavailable', summary: null,
+              source: 'codex_native_thread', active_context: true,
+              resumes_with_thread: true, compaction: 'codex_native',
+            },
             estimated_tokens: 2,
           })
           onText('reply')
@@ -239,6 +252,11 @@ test('Codex runtime metadata crosses the handler only through the unified safe e
   assert.equal(events[1].data.thread_id, THREAD_ID)
   assert.equal(events[5].data.status, 'unknown')
   assert.equal(events[6].data.memory.enabled, false)
+  assert.equal(events[2].data.lifecycle, 'started')
+  assert.equal(events[3].data.lifecycle, 'completed')
+  assert.equal(events[4].data.actual_input_tokens, 3)
+  assert.equal(events[4].data.cumulative_input_tokens, 103)
+  assert.equal(events[6].data.reasoning.resumes_with_thread, true)
   assert.equal(JSON.stringify(events).includes('session_id'), false)
 })
 
@@ -397,15 +415,15 @@ test('Codex adapter forwards owner auth and translates sidecar SSE without leaki
     fetchImpl: async (url, options) => {
       request = { url, options }
       return new Response([
-        'event: runtime_status\ndata: {"status":"ready","runtime_type":"codex_cli","adapter_id":"codex-cli-v1","capabilities":{"streaming_text":true,"reasoning_summary":"conditional","tool_events":true,"actual_usage":true,"quota":false,"context_breakdown":"basic"}}',
+        'event: runtime_status\ndata: {"status":"ready","runtime_type":"codex_cli","adapter_id":"codex-cli-v1","capabilities":{"streaming_text":true,"reasoning_summary":"detailed","tool_events":true,"actual_usage":true,"quota":false,"context_breakdown":"basic"}}',
         'event: quota\ndata: {"status":"unknown","remaining":null,"unit":null,"reset_at":null,"source":"codex_cli_unavailable"}',
-        'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"codex_native_thread","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"estimated_tokens":2}',
+        'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"codex_native_thread","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"reasoning":{"enabled":true,"available":true,"status":"completed","summary":"Native summary","source":"codex_native_thread","active_context":true,"resumes_with_thread":true,"compaction":"codex_native"},"estimated_tokens":2}',
         'event: session\ndata: {"session_id":"22222222-2222-4222-8222-222222222222"}',
-        'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","command":"must-not-pass"}',
-        'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","summary":"Command completed","aggregated_output":"must-not-pass"}',
+        'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","lifecycle":"updated","command":"must-not-pass"}',
+        'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","aggregated_output":"must-not-pass"}',
         'event: text\ndata: {"text":"hello"}',
         'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"codex_cli"}',
-        'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"actual_output_tokens":4,"total_tokens":7,"usage_source":"codex_cli"}',
+        'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"actual_output_tokens":4,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_output_tokens":24,"cumulative_total_tokens":127,"previous_cumulative_input_tokens":100,"previous_cumulative_output_tokens":20,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
         'event: done\ndata: {"ok":true}',
         '',
       ].join('\n\n'), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
@@ -432,5 +450,9 @@ test('Codex adapter forwards owner auth and translates sidecar SSE without leaki
   ])
   assert.equal(JSON.stringify(events).includes('must-not-pass'), false)
   assert.equal(JSON.stringify(events).includes('session_id'), false)
+  assert.equal(events[0].data.capabilities.reasoning_summary, 'detailed')
+  assert.equal(events[2].data.reasoning.summary, 'Native summary')
+  assert.equal(events[3].data.lifecycle, 'updated')
+  assert.equal(events[6].data.actual_input_tokens, 3)
   assert.deepEqual(result, { usage: null })
 })

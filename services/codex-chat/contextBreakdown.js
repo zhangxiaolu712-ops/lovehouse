@@ -21,7 +21,29 @@ export function createContextBreakdown({ history = [], message, resumed }) {
       available: true,
       estimated_tokens: currentMessageTokens,
     },
+    reasoning: {
+      enabled: true,
+      available: null,
+      status: resumed ? 'resumed' : 'pending',
+      summary: null,
+      source: 'codex_native_thread',
+      active_context: true,
+      resumes_with_thread: true,
+      compaction: 'codex_native',
+    },
     estimated_tokens: resumed ? currentMessageTokens : recentChatTokens + currentMessageTokens,
+  }
+}
+
+export function withReasoningContext(context, reasoning) {
+  return {
+    ...context,
+    reasoning: {
+      ...context.reasoning,
+      available: reasoning?.available === true,
+      status: typeof reasoning?.status === 'string' ? reasoning.status : 'unavailable',
+      summary: typeof reasoning?.summary === 'string' ? reasoning.summary : null,
+    },
   }
 }
 

@@ -46,7 +46,7 @@ Web experiment / future Android
   "enabled": true,
   "capabilities": {
     "streaming_text": true,
-    "reasoning_summary": "conditional",
+    "reasoning_summary": "detailed",
     "tool_events": true,
     "actual_usage": true,
     "quota": false,
@@ -81,21 +81,32 @@ Web experiment / future Android
 
 ### Reasoning
 
-只有 Codex JSONL 真正出现 user-visible `item.type=reasoning` 时才返回 summary。summary 有长度
-上限并做常见凭证模式裁剪。没有 reasoning item 时固定：
+每次 `codex exec --json` 和 `codex exec resume --json` 都显式附加：
+
+```text
+-c model_reasoning_summary="detailed"
+-c hide_agent_reasoning=false
+```
+
+只有 Codex JSONL 真正出现 user-visible `item.type=reasoning` 时才返回原生 summary。适配器不发
+第二次模型请求、不把 assistant text 改写成旁白；只做长度边界与常见凭证模式裁剪。唯一的语气提示是
+一条短句：自然、亲近、略带碎碎念，同时忠于实际推理且不补写步骤。没有 reasoning item 时固定：
 
 ```json
 {"available":false,"status":"unavailable","summary":null,"source":"codex_cli"}
 ```
 
-2026-08-24 对 VPS `codex-cli 0.146.0` 的两次只读 JSONL smoke 均没有 reasoning item；因此
-不能把普通 assistant text 或额外 prompt 生成的旁白冒充 reasoning。
+页面的「我的思路」只展示上述原生 summary。本轮仍使用 `exec --json` 的 item 级事件，不承诺逐字
+reasoning delta。Codex 原生 thread 在 resume 时继续携带 reasoning item；它属于 runtime active
+context，并由 Codex 原生 compaction 管理。LoveHouse 不把 summary 再次拼进 prompt。
 
 ### Tool
 
-实测 CLI 事件：`item.started/item.completed`，工具 item 至少包含
-`command_execution`。adapter 只返回 `shell/file_change/mcp/web_search` 等工具身份、状态和
-简短结果；不返回 command、arguments、stdout、diff、环境变量或 Secret。
+CLI 工具事件支持 `item.started/item.updated/item.completed`，至少覆盖 `command_execution`、
+`file_change`、`mcp_tool_call`。adapter 统一增加 `lifecycle=started|updated|completed`；页面的
+「正在做」只显示工具身份、生命周期、成功/失败与简短结果，不返回 command、arguments、stdout、
+diff、环境变量或 Secret。
+未知 JSONL event/item 继续忽略，stderr 只用于服务端错误分类，不进入前端事件。
 Codex 子进程只继承运行所需的 HOME/CODEX_HOME/PATH/locale/proxy/certificate/temp allowlist，
 不会继承 sidecar 的 Supabase 或其他业务凭证。
 
@@ -111,8 +122,11 @@ Codex 子进程只继承运行所需的 HOME/CODEX_HOME/PATH/locale/proxy/certif
 }
 ```
 
-实际值来自 `turn.completed.usage`。CLI 未返回 actual 时只保留 estimate，且
-`usage_source=estimate`。
+`turn.completed.usage` 是 Codex thread 累计值，不可直接冒充“本轮 Token”。sidecar 在同一
+LoveHouse Thread binding 中持久保存上一轮累计基线；事件同时返回当前累计值与上一轮累计值，网页
+明确执行 `current - previous` 后才显示本轮 input/output/total。已有旧 binding 第一次没有基线时只
+标记 `baseline_status=establishing`，不显示错误的大累计数；下一轮起正常做差。CLI 没有 usage 时只
+保留 estimate，且 `usage_source=estimate`。
 
 ### Quota
 
@@ -126,8 +140,10 @@ Token 与 quota 不互相推算。
 
 ### Context
 
-当前仅报告 native runtime/recovery 所需的 `recent_chat` 与 `current_message`。`memory`、
-`worldbook`、`persona` 明确 `enabled=false/available=false`。本阶段不读取它们，也不伪造 token。
+当前报告 native runtime/recovery 所需的 `recent_chat`、`current_message` 与 `reasoning` active
+context。reasoning context 明确标记 `resumes_with_thread=true`、`compaction=codex_native`，summary
+仍只来自当前原生 reasoning item。`memory`、`worldbook`、`persona` 明确
+`enabled=false/available=false`。本阶段不读取它们，也不伪造 token。
 
 ## 5. Thread 与 restart
 
@@ -165,9 +181,9 @@ Thread 在上述错误后继续存在。
 
 路由：`/#/codex-chat-v1`
 
-页面显示 Persona、runtime/adapter、LoveHouse Thread、work/text policy、reasoning、工具、
-estimate/actual tokens、quota、context breakdown 与错误 stage/code。它不访问 sidecar 私有接口，
-不保存 JWT/session id，不接 Archive。
+页面显示 Persona、runtime/adapter、LoveHouse Thread、work/text policy，以及独立的「我的思路」和
+「正在做」区块；本轮 Token 来自累计差值，另显示 quota、context breakdown 与错误 stage/code。
+它不访问 sidecar 私有接口，不保存 JWT/session id，不接 Archive。
 
 ## 8. 真实实现与预留
 

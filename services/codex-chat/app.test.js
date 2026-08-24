@@ -27,17 +27,34 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
     sendMessage() {},
     resetRuntime() { return { reset: true } },
     async streamEvents(input) {
-      observed.push({ sessionId: input.sessionId, message: input.message })
+      observed.push({
+        sessionId: input.sessionId,
+        message: input.message,
+        previousUsage: input.previousUsage,
+      })
       input.onRuntimeBinding(input.sessionId || sessionId)
       input.onEvent('reasoning_status', {
         available: false, status: 'unavailable', summary: null, source: 'codex_cli',
       })
-      input.onEvent('usage', {
-        estimated_input_tokens: 2, actual_input_tokens: 3, actual_output_tokens: 4,
-        total_tokens: 7, usage_source: 'codex_cli',
-      })
+      const previousInput = input.previousUsage?.input_tokens || 0
+      const previousOutput = input.previousUsage?.output_tokens || 0
+      const usage = {
+        estimated_input_tokens: 2,
+        actual_input_tokens: 10,
+        actual_output_tokens: 2,
+        total_tokens: 12,
+        cumulative_input_tokens: previousInput + 10,
+        cumulative_output_tokens: previousOutput + 2,
+        cumulative_cached_input_tokens: 0,
+        cumulative_total_tokens: previousInput + previousOutput + 12,
+        previous_cumulative_input_tokens: previousInput,
+        previous_cumulative_output_tokens: previousOutput,
+        usage_source: 'codex_cli_cumulative_delta',
+        baseline_status: 'known',
+      }
+      input.onEvent('usage', usage)
       input.onText('reply')
-      return { text: 'reply', sessionId: input.sessionId || sessionId }
+      return { text: 'reply', sessionId: input.sessionId || sessionId, usage }
     },
   }
 }
@@ -105,13 +122,17 @@ test('owner auth fails before runtime and successful stream exposes normalized m
   const events = parseSse(await response.text())
   assert.deepEqual(events.map(item => item.event), [
     'runtime_status', 'quota', 'context_breakdown', 'session',
-    'reasoning_status', 'usage', 'text', 'done',
+    'reasoning_status', 'context_breakdown', 'usage', 'text', 'done',
   ])
   assert.equal(events[0].data.runtime_type, 'codex_cli')
   assert.equal(events[1].data.status, 'unknown')
   assert.equal(events[2].data.memory.enabled, false)
   assert.equal(events[2].data.worldbook.enabled, false)
   assert.equal(events[2].data.current_message.enabled, true)
+  assert.equal(events[2].data.reasoning.status, 'pending')
+  assert.equal(events[5].data.reasoning.status, 'unavailable')
+  assert.equal(events[5].data.reasoning.resumes_with_thread, true)
+  assert.equal(events[5].data.reasoning.compaction, 'codex_native')
 })
 
 test('same LoveHouse thread survives sidecar restart while runtime session stays separate', async t => {
@@ -129,6 +150,10 @@ test('same LoveHouse thread survives sidecar restart while runtime session stays
     assert.equal(parseSse(await response.text()).at(-1).data.ok, true)
   }
   assert.deepEqual(firstObserved.map(item => item.sessionId), [null, SESSION_ID])
+  assert.equal(firstObserved[0].previousUsage, null)
+  assert.deepEqual(firstObserved[1].previousUsage, {
+    input_tokens: 10, output_tokens: 2, cached_input_tokens: 0,
+  })
   await server1.close()
 
   const secondObserved = []
@@ -141,9 +166,15 @@ test('same LoveHouse thread survives sidecar restart while runtime session stays
   const events = parseSse(await third.text())
   assert.equal(events.at(-1).data.ok, true)
   assert.equal(secondObserved[0].sessionId, SESSION_ID)
+  assert.deepEqual(secondObserved[0].previousUsage, {
+    input_tokens: 20, output_tokens: 4, cached_input_tokens: 0,
+  })
   assert.notEqual(THREAD_ID, SESSION_ID)
   const persisted = JSON.parse(await fs.readFile(filePath, 'utf8'))
   assert.equal(persisted.bindings.owner[THREAD_ID].codexThreadId, SESSION_ID)
+  assert.deepEqual(persisted.bindings.owner[THREAD_ID].lastUsage, {
+    input_tokens: 30, output_tokens: 6, cached_input_tokens: 0,
+  })
 })
 
 test('runtime failure does not delete the persistent LoveHouse thread binding', async t => {
