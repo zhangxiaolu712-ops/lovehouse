@@ -2,14 +2,22 @@ function estimateTokens(text) {
   return Math.max(0, Math.ceil(Array.from(String(text || '')).length / 4))
 }
 
-export function createContextBreakdown({ history = [], message, resumed }) {
+export function createContextBreakdown({
+  history = [], message, resumed, runtimeType = 'codex_cli',
+}) {
+  const nativeContext = runtimeType === 'claude_cli'
+    ? 'claude_native_session'
+    : 'codex_native_thread'
+  const nativeCompaction = runtimeType === 'claude_cli'
+    ? 'claude_native'
+    : 'codex_native'
   const recentChatTokens = history.reduce((sum, item) => sum + estimateTokens(item?.content), 0)
   const currentMessageTokens = estimateTokens(message)
   return {
     recent_chat: {
       enabled: true,
       available: true,
-      source: resumed ? 'codex_native_thread' : 'bounded_client_fallback',
+      source: resumed ? nativeContext : 'bounded_client_fallback',
       message_count: resumed ? null : history.length,
       estimated_tokens: resumed ? null : recentChatTokens,
     },
@@ -26,10 +34,10 @@ export function createContextBreakdown({ history = [], message, resumed }) {
       available: null,
       status: resumed ? 'resumed' : 'pending',
       summary: null,
-      source: 'codex_native_thread',
+      source: nativeContext,
       active_context: true,
       resumes_with_thread: true,
-      compaction: 'codex_native',
+      compaction: nativeCompaction,
     },
     estimated_tokens: resumed ? currentMessageTokens : recentChatTokens + currentMessageTokens,
   }

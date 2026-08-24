@@ -1,0 +1,10 @@
+{
+  "name": "lovehouse-claude-chat",
+  "private": true,
+  "version": "1.0.0-experiment.1",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
