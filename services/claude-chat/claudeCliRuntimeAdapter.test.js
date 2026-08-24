@@ -74,7 +74,12 @@ test('new Claude session streams text and usage while MCP is empty', async () =>
   let bound = null
   const adapter = new ClaudeCliRuntimeAdapter({
     createSessionId: () => SESSION_ID,
-    env: { HOME: '/root', PATH: '/usr/bin', SUPABASE_SECRET_KEY: 'must-not-pass' },
+    env: {
+      HOME: '/root',
+      PATH: '/usr/bin',
+      CLAUDE_CODE_OAUTH_TOKEN: 'official-headless-token',
+      SUPABASE_SECRET_KEY: 'must-not-pass',
+    },
     spawnImpl: fakeSpawn(successEvents(), { calls }),
   })
   const result = await adapter.streamEvents({
@@ -98,7 +103,10 @@ test('new Claude session streams text and usage while MCP is empty', async () =>
   assert.ok(calls[0].args.includes('--strict-mcp-config'))
   assert.equal(calls[0].args[calls[0].args.indexOf('--mcp-config') + 1], '{"mcpServers":{}}')
   assert.equal(calls[0].args[calls[0].args.indexOf('--tools') + 1], '')
-  assert.deepEqual(calls[0].options.env, { HOME: '/root', PATH: '/usr/bin' })
+  assert.deepEqual(calls[0].options.env, {
+    HOME: '/root', PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'official-headless-token',
+  })
+  assert.equal(JSON.stringify(events).includes('official-headless-token'), false)
 })
 
 test('only a native Claude reasoning summary is exposed; thinking text is not republished', async () => {

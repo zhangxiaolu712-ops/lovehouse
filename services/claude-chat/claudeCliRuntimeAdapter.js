@@ -15,7 +15,7 @@ const CHAT_GUARDRAIL = [
 const ENV_ALLOWLIST = Object.freeze([
   'HOME', 'PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TMPDIR', 'TMP', 'TEMP',
   'USER', 'LOGNAME', 'SHELL', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
-  'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR',
+  'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN',
 ])
 const SESSION_MISSING = /(?:no conversation found|session(?: id)?.*(?:not found|missing|invalid)|failed to (?:load|resume)|unable to resume)/i
 
