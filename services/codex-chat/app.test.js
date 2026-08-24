@@ -38,6 +38,7 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
       })
       const previousInput = input.previousUsage?.input_tokens || 0
       const previousOutput = input.previousUsage?.output_tokens || 0
+      const previousReasoning = input.previousUsage?.reasoning_output_tokens || 0
       const usage = {
         estimated_input_tokens: 2,
         actual_input_tokens: 10,
@@ -46,6 +47,7 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
         cumulative_input_tokens: previousInput + 10,
         cumulative_output_tokens: previousOutput + 2,
         cumulative_cached_input_tokens: 0,
+        cumulative_reasoning_output_tokens: previousReasoning + 1,
         cumulative_total_tokens: previousInput + previousOutput + 12,
         previous_cumulative_input_tokens: previousInput,
         previous_cumulative_output_tokens: previousOutput,
@@ -153,6 +155,7 @@ test('same LoveHouse thread survives sidecar restart while runtime session stays
   assert.equal(firstObserved[0].previousUsage, null)
   assert.deepEqual(firstObserved[1].previousUsage, {
     input_tokens: 10, output_tokens: 2, cached_input_tokens: 0,
+    reasoning_output_tokens: 1,
   })
   await server1.close()
 
@@ -168,12 +171,14 @@ test('same LoveHouse thread survives sidecar restart while runtime session stays
   assert.equal(secondObserved[0].sessionId, SESSION_ID)
   assert.deepEqual(secondObserved[0].previousUsage, {
     input_tokens: 20, output_tokens: 4, cached_input_tokens: 0,
+    reasoning_output_tokens: 2,
   })
   assert.notEqual(THREAD_ID, SESSION_ID)
   const persisted = JSON.parse(await fs.readFile(filePath, 'utf8'))
   assert.equal(persisted.bindings.owner[THREAD_ID].codexThreadId, SESSION_ID)
   assert.deepEqual(persisted.bindings.owner[THREAD_ID].lastUsage, {
     input_tokens: 30, output_tokens: 6, cached_input_tokens: 0,
+    reasoning_output_tokens: 3,
   })
 })
 

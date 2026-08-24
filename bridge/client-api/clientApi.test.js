@@ -203,12 +203,16 @@ test('Codex runtime metadata crosses the handler only through the unified safe e
           })
           onEvent('usage', {
             estimated_input_tokens: 2, actual_input_tokens: 3, actual_output_tokens: 4,
-            total_tokens: 7,
+            cached_input_tokens: 2, reasoning_output_tokens: 1, total_tokens: 7,
             cumulative_input_tokens: 103,
+            cumulative_cached_input_tokens: 82,
             cumulative_output_tokens: 24,
+            cumulative_reasoning_output_tokens: 6,
             cumulative_total_tokens: 127,
             previous_cumulative_input_tokens: 100,
+            previous_cumulative_cached_input_tokens: 80,
             previous_cumulative_output_tokens: 20,
+            previous_cumulative_reasoning_output_tokens: 5,
             baseline_status: 'known',
             usage_source: 'codex_cli_cumulative_delta',
           })
@@ -255,6 +259,8 @@ test('Codex runtime metadata crosses the handler only through the unified safe e
   assert.equal(events[2].data.lifecycle, 'started')
   assert.equal(events[3].data.lifecycle, 'completed')
   assert.equal(events[4].data.actual_input_tokens, 3)
+  assert.equal(events[4].data.cached_input_tokens, 2)
+  assert.equal(events[4].data.reasoning_output_tokens, 1)
   assert.equal(events[4].data.cumulative_input_tokens, 103)
   assert.equal(events[6].data.reasoning.resumes_with_thread, true)
   assert.equal(JSON.stringify(events).includes('session_id'), false)
@@ -423,7 +429,7 @@ test('Codex adapter forwards owner auth and translates sidecar SSE without leaki
         'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","aggregated_output":"must-not-pass"}',
         'event: text\ndata: {"text":"hello"}',
         'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"codex_cli"}',
-        'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"actual_output_tokens":4,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_output_tokens":24,"cumulative_total_tokens":127,"previous_cumulative_input_tokens":100,"previous_cumulative_output_tokens":20,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
+        'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"cached_input_tokens":2,"actual_output_tokens":4,"reasoning_output_tokens":1,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_cached_input_tokens":82,"cumulative_output_tokens":24,"cumulative_reasoning_output_tokens":6,"cumulative_total_tokens":127,"previous_cumulative_input_tokens":100,"previous_cumulative_cached_input_tokens":80,"previous_cumulative_output_tokens":20,"previous_cumulative_reasoning_output_tokens":5,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
         'event: done\ndata: {"ok":true}',
         '',
       ].join('\n\n'), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
@@ -454,5 +460,7 @@ test('Codex adapter forwards owner auth and translates sidecar SSE without leaki
   assert.equal(events[2].data.reasoning.summary, 'Native summary')
   assert.equal(events[3].data.lifecycle, 'updated')
   assert.equal(events[6].data.actual_input_tokens, 3)
+  assert.equal(events[6].data.cached_input_tokens, 2)
+  assert.equal(events[6].data.reasoning_output_tokens, 1)
   assert.deepEqual(result, { usage: null })
 })

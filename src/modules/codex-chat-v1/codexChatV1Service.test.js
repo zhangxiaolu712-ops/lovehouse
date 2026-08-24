@@ -25,7 +25,7 @@ test('frontend consumes the unified stream without any Codex CLI private schema'
         'event: reasoning_status\ndata: {"available":true,"status":"completed","summary":"Native summary"}',
         'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","lifecycle":"updated"}',
         'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed"}',
-        'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"actual_output_tokens":4,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_output_tokens":24,"previous_cumulative_input_tokens":100,"previous_cumulative_output_tokens":20,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
+        'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"cached_input_tokens":2,"actual_output_tokens":4,"reasoning_output_tokens":1,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_cached_input_tokens":82,"cumulative_output_tokens":24,"cumulative_reasoning_output_tokens":6,"previous_cumulative_input_tokens":100,"previous_cumulative_cached_input_tokens":80,"previous_cumulative_output_tokens":20,"previous_cumulative_reasoning_output_tokens":5,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
         'event: quota\ndata: {"status":"unknown","remaining":null,"unit":null,"reset_at":null,"source":"codex_cli_unavailable"}',
         'event: context_breakdown\ndata: {"recent_chat":{"enabled":true},"memory":{"enabled":false},"worldbook":{"enabled":false},"persona":{"enabled":false},"current_message":{"enabled":true},"reasoning":{"enabled":true,"available":true,"status":"completed","summary":"Native summary","active_context":true,"resumes_with_thread":true,"compaction":"codex_native"},"estimated_tokens":2}',
         'event: text_delta\ndata: {"delta":"hel"}',
@@ -51,6 +51,8 @@ test('frontend consumes the unified stream without any Codex CLI private schema'
   assert.equal(events[1].data.summary, 'Native summary')
   assert.equal(events[2].data.lifecycle, 'updated')
   assert.equal(events[4].data.cumulative_input_tokens, 103)
+  assert.equal(events[4].data.cached_input_tokens, 2)
+  assert.equal(events[4].data.reasoning_output_tokens, 1)
   assert.equal(events[6].data.reasoning.resumes_with_thread, true)
 })
 

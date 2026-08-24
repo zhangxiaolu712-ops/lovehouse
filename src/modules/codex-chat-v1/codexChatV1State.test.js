@@ -50,14 +50,20 @@ test('web current-turn tokens subtract the previous cumulative thread usage', ()
     actual_output_tokens: 35,
     total_tokens: 185,
     cumulative_input_tokens: 150,
+    cumulative_cached_input_tokens: 40,
     cumulative_output_tokens: 35,
+    cumulative_reasoning_output_tokens: 12,
     previous_cumulative_input_tokens: 100,
+    previous_cumulative_cached_input_tokens: 30,
     previous_cumulative_output_tokens: 20,
+    previous_cumulative_reasoning_output_tokens: 7,
     usage_source: 'codex_cli_cumulative_delta',
     baseline_status: 'known',
   })
   assert.equal(usage.actual_input_tokens, 50)
+  assert.equal(usage.cached_input_tokens, 10)
   assert.equal(usage.actual_output_tokens, 15)
+  assert.equal(usage.reasoning_output_tokens, 5)
   assert.equal(usage.total_tokens, 65)
   assert.equal(usage.cumulative_input_tokens, 150)
 })
@@ -65,12 +71,18 @@ test('web current-turn tokens subtract the previous cumulative thread usage', ()
 test('web never invents a delta while a resumed thread is only establishing its baseline', () => {
   const usage = deriveCurrentTurnUsage({
     cumulative_input_tokens: 500,
+    cumulative_cached_input_tokens: 300,
     cumulative_output_tokens: 80,
+    cumulative_reasoning_output_tokens: 20,
     previous_cumulative_input_tokens: null,
+    previous_cumulative_cached_input_tokens: null,
     previous_cumulative_output_tokens: null,
+    previous_cumulative_reasoning_output_tokens: null,
     baseline_status: 'establishing',
   })
   assert.equal(usage.actual_input_tokens, null)
+  assert.equal(usage.cached_input_tokens, null)
   assert.equal(usage.actual_output_tokens, null)
+  assert.equal(usage.reasoning_output_tokens, null)
   assert.equal(usage.total_tokens, null)
 })

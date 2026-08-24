@@ -81,10 +81,20 @@ export function deriveCurrentTurnUsage(value) {
     value.cumulative_output_tokens,
     value.previous_cumulative_output_tokens,
   )
+  const cachedInput = tokenDelta(
+    value.cumulative_cached_input_tokens,
+    value.previous_cumulative_cached_input_tokens,
+  )
+  const reasoningOutput = tokenDelta(
+    value.cumulative_reasoning_output_tokens,
+    value.previous_cumulative_reasoning_output_tokens,
+  )
   return {
     ...value,
     actual_input_tokens: actualInput,
+    cached_input_tokens: cachedInput,
     actual_output_tokens: actualOutput,
+    reasoning_output_tokens: reasoningOutput,
     total_tokens: actualInput !== null && actualOutput !== null
       ? actualInput + actualOutput
       : null,

@@ -70,6 +70,7 @@ test('real Codex 0.146 JSONL shape maps text, safe tool events, usage and unavai
       { type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: 'Done.' } },
       { type: 'turn.completed', usage: {
         input_tokens: 32062, cached_input_tokens: 26112, output_tokens: 52,
+        reasoning_output_tokens: 9,
       } },
     ], { calls }),
   })
@@ -102,8 +103,11 @@ test('real Codex 0.146 JSONL shape maps text, safe tool events, usage and unavai
   assert.deepEqual(emitted[4].data, {
     available: false, status: 'unavailable', summary: null, source: 'codex_cli',
   })
-  assert.deepEqual(calls[0].args.slice(0, 6), [
+  assert.equal(emitted[3].data.cached_input_tokens, 26112)
+  assert.equal(emitted[3].data.reasoning_output_tokens, 9)
+  assert.deepEqual(calls[0].args.slice(0, 8), [
     'exec', '--json', '-c', 'model_reasoning_summary="detailed"',
+    '-c', 'model_supports_reasoning_summaries=true',
     '-c', 'hide_agent_reasoning=false',
   ])
   assert.deepEqual(calls[0].options.env, { HOME: '/root', PATH: '/usr/bin' })
@@ -233,13 +237,15 @@ test('confirmed missing resume recovers with bounded context but keeps caller th
     onEvent(event, data) { emitted.push({ event, data }) },
   })
   assert.equal(calls.length, 2)
-  assert.deepEqual(calls[0].args.slice(0, 7), [
+  assert.deepEqual(calls[0].args.slice(0, 10), [
     'exec', 'resume', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', '--json',
-    '-c', 'model_reasoning_summary="detailed"', '-c',
+    '-c', 'model_reasoning_summary="detailed"',
+    '-c', 'model_supports_reasoning_summaries=true',
+    '-c', 'hide_agent_reasoning=false',
   ])
-  assert.equal(calls[0].args[7], 'hide_agent_reasoning=false')
-  assert.deepEqual(calls[1].args.slice(0, 6), [
+  assert.deepEqual(calls[1].args.slice(0, 8), [
     'exec', '--json', '-c', 'model_reasoning_summary="detailed"',
+    '-c', 'model_supports_reasoning_summaries=true',
     '-c', 'hide_agent_reasoning=false',
   ])
   assert.equal(result.sessionId, SESSION_ID)
@@ -269,6 +275,7 @@ test('resume usage is cumulative and emits a per-turn delta from the persisted b
       { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'OK' } },
       { type: 'turn.completed', usage: {
         input_tokens: 150, cached_input_tokens: 40, output_tokens: 35,
+        reasoning_output_tokens: 12,
       } },
     ]),
   })
@@ -276,7 +283,10 @@ test('resume usage is cumulative and emits a per-turn delta from the persisted b
     message: 'next turn',
     history: [],
     sessionId: SESSION_ID,
-    previousUsage: { input_tokens: 100, cached_input_tokens: 30, output_tokens: 20 },
+    previousUsage: {
+      input_tokens: 100, cached_input_tokens: 30, output_tokens: 20,
+      reasoning_output_tokens: 7,
+    },
     onRuntimeBinding() {}, onText() {},
     onEvent(event, data) { emitted.push({ event, data }) },
   })
@@ -285,6 +295,8 @@ test('resume usage is cumulative and emits a per-turn delta from the persisted b
   assert.equal(usage.actual_output_tokens, 15)
   assert.equal(usage.total_tokens, 65)
   assert.equal(usage.cached_input_tokens, 10)
+  assert.equal(usage.reasoning_output_tokens, 5)
+  assert.equal(usage.cumulative_reasoning_output_tokens, 12)
   assert.equal(usage.cumulative_total_tokens, 185)
   assert.equal(usage.usage_source, 'codex_cli_cumulative_delta')
   assert.equal(usage.baseline_status, 'known')

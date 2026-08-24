@@ -182,6 +182,7 @@ export function createCodexChatHandler({
             input_tokens: result.usage.cumulative_input_tokens,
             output_tokens: result.usage.cumulative_output_tokens,
             cached_input_tokens: result.usage.cumulative_cached_input_tokens,
+            reasoning_output_tokens: result.usage.cumulative_reasoning_output_tokens,
           },
         }))
       }

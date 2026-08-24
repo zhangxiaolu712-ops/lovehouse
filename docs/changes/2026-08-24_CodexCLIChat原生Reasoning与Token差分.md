@@ -2,12 +2,14 @@
 
 ## 做了什么
 
-- `codex exec/resume --json` 显式设置 `model_reasoning_summary="detailed"` 与
-  `hide_agent_reasoning=false`。
+- `codex exec/resume --json` 显式设置 `model_reasoning_summary="detailed"`、
+  `model_supports_reasoning_summaries=true` 与 `hide_agent_reasoning=false`。真实 CLI A/B 证明，在
+  `--ignore-user-config` 下缺少 capability override 会产生 reasoning tokens、却不输出 reasoning item。
 - 原生 reasoning item 映射到「我的思路」；没有 item 时保持 unavailable，不生成第二份旁白。
 - command/file/MCP 工具事件保留 started/updated/completed lifecycle，前端显示为「正在做」。
 - 将 `turn.completed.usage` 视为 thread 累计值，持久保存上一轮累计基线；网页用当前减上一轮显示
-  本轮 Token。旧 binding 首轮没有基线时明确 establishing，不冒充准确本轮值。
+  本轮 input/output/cached input/reasoning output Token。旧 binding 首轮没有基线时明确
+  establishing，不冒充准确本轮值。
 - Context 增加 reasoning active context，标明由 Codex thread resume 续传并参与原生 compaction。
 
 ## 为什么

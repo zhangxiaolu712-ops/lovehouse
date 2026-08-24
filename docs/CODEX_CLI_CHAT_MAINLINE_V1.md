@@ -85,6 +85,7 @@ Web experiment / future Android
 
 ```text
 -c model_reasoning_summary="detailed"
+-c model_supports_reasoning_summaries=true
 -c hide_agent_reasoning=false
 ```
 
@@ -116,7 +117,9 @@ Codex 子进程只继承运行所需的 HOME/CODEX_HOME/PATH/locale/proxy/certif
 {
   "estimated_input_tokens": 123,
   "actual_input_tokens": 456,
+  "cached_input_tokens": 300,
   "actual_output_tokens": 78,
+  "reasoning_output_tokens": 12,
   "total_tokens": 534,
   "usage_source": "codex_cli"
 }
@@ -124,9 +127,11 @@ Codex 子进程只继承运行所需的 HOME/CODEX_HOME/PATH/locale/proxy/certif
 
 `turn.completed.usage` 是 Codex thread 累计值，不可直接冒充“本轮 Token”。sidecar 在同一
 LoveHouse Thread binding 中持久保存上一轮累计基线；事件同时返回当前累计值与上一轮累计值，网页
-明确执行 `current - previous` 后才显示本轮 input/output/total。已有旧 binding 第一次没有基线时只
-标记 `baseline_status=establishing`，不显示错误的大累计数；下一轮起正常做差。CLI 没有 usage 时只
-保留 estimate，且 `usage_source=estimate`。
+明确执行 `current - previous` 后才显示本轮 input/output/cached input/reasoning output/total。
+cached input 是 input 的子集，reasoning output 是 output 的明细，二者不重复加入 total。已有旧
+binding 第一次没有基线时只标记 `baseline_status=establishing`，不显示错误的大累计数；下一轮起
+正常做差。旧 binding 若只缺新增明细字段，则该字段首轮保持空值并建立自己的累计基线。CLI 没有
+usage 时只保留 estimate，且 `usage_source=estimate`。
 
 ### Quota
 

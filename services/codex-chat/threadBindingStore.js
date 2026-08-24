@@ -34,6 +34,7 @@ function normalizeCumulativeUsage(value) {
     input_tokens: token(value.input_tokens),
     output_tokens: token(value.output_tokens),
     cached_input_tokens: token(value.cached_input_tokens),
+    reasoning_output_tokens: token(value.reasoning_output_tokens),
   }
   return Object.values(normalized).some(item => item !== null) ? normalized : null
 }

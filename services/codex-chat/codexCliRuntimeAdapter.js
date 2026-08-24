@@ -14,6 +14,7 @@ const CHAT_GUARDRAIL = [
 const DISPLAY_LIMIT = 1_500
 const REASONING_CONFIG = Object.freeze([
   '-c', 'model_reasoning_summary="detailed"',
+  '-c', 'model_supports_reasoning_summaries=true',
   '-c', 'hide_agent_reasoning=false',
 ])
 const ENV_ALLOWLIST = Object.freeze([
@@ -149,8 +150,14 @@ function normalizedCumulativeUsage(value) {
   const input = finiteTokenCount(value.input_tokens)
   const output = finiteTokenCount(value.output_tokens)
   const cached = finiteTokenCount(value.cached_input_tokens)
-  if (input === null && output === null && cached === null) return null
-  return { input_tokens: input, output_tokens: output, cached_input_tokens: cached }
+  const reasoning = finiteTokenCount(value.reasoning_output_tokens)
+  if (input === null && output === null && cached === null && reasoning === null) return null
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cached_input_tokens: cached,
+    reasoning_output_tokens: reasoning,
+  }
 }
 
 function usageDelta(current, previous, baselineKnown) {
@@ -210,12 +217,19 @@ export class CodexCliRuntimeAdapter {
         cumulative_total_tokens: null,
         previous_cumulative_input_tokens: null,
         previous_cumulative_output_tokens: null,
+        cached_input_tokens: null,
+        reasoning_output_tokens: null,
+        cumulative_cached_input_tokens: null,
+        cumulative_reasoning_output_tokens: null,
+        previous_cumulative_cached_input_tokens: null,
+        previous_cumulative_reasoning_output_tokens: null,
         baseline_status: 'unavailable',
       }
     }
     const previous = baselineKnown
       ? (normalizedCumulativeUsage(previousUsage) || {
           input_tokens: 0, output_tokens: 0, cached_input_tokens: 0,
+          reasoning_output_tokens: 0,
         })
       : null
     const actualInput = usageDelta(current.input_tokens, previous?.input_tokens ?? null, baselineKnown)
@@ -223,6 +237,11 @@ export class CodexCliRuntimeAdapter {
     const actualCached = usageDelta(
       current.cached_input_tokens,
       previous?.cached_input_tokens ?? null,
+      baselineKnown,
+    )
+    const actualReasoning = usageDelta(
+      current.reasoning_output_tokens,
+      previous?.reasoning_output_tokens ?? null,
       baselineKnown,
     )
     const monotonic = baselineKnown
@@ -236,15 +255,18 @@ export class CodexCliRuntimeAdapter {
       total_tokens: actualInput !== null && actualOutput !== null ? actualInput + actualOutput : null,
       usage_source: monotonic ? 'codex_cli_cumulative_delta' : 'codex_cli_cumulative_baseline',
       cached_input_tokens: actualCached,
+      reasoning_output_tokens: actualReasoning,
       cumulative_input_tokens: current.input_tokens,
       cumulative_output_tokens: current.output_tokens,
       cumulative_cached_input_tokens: current.cached_input_tokens,
+      cumulative_reasoning_output_tokens: current.reasoning_output_tokens,
       cumulative_total_tokens: current.input_tokens !== null && current.output_tokens !== null
         ? current.input_tokens + current.output_tokens
         : null,
       previous_cumulative_input_tokens: previous?.input_tokens ?? null,
       previous_cumulative_output_tokens: previous?.output_tokens ?? null,
       previous_cumulative_cached_input_tokens: previous?.cached_input_tokens ?? null,
+      previous_cumulative_reasoning_output_tokens: previous?.reasoning_output_tokens ?? null,
       baseline_status: baselineStatus,
     }
   }

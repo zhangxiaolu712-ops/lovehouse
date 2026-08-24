@@ -233,13 +233,19 @@ function safeRuntimeEvent(event, data) {
     return {
       estimated_input_tokens: finiteOrNull(data?.estimated_input_tokens),
       actual_input_tokens: finiteOrNull(data?.actual_input_tokens),
+      cached_input_tokens: finiteOrNull(data?.cached_input_tokens),
       actual_output_tokens: finiteOrNull(data?.actual_output_tokens),
+      reasoning_output_tokens: finiteOrNull(data?.reasoning_output_tokens),
       total_tokens: finiteOrNull(data?.total_tokens),
       cumulative_input_tokens: finiteOrNull(data?.cumulative_input_tokens),
+      cumulative_cached_input_tokens: finiteOrNull(data?.cumulative_cached_input_tokens),
       cumulative_output_tokens: finiteOrNull(data?.cumulative_output_tokens),
+      cumulative_reasoning_output_tokens: finiteOrNull(data?.cumulative_reasoning_output_tokens),
       cumulative_total_tokens: finiteOrNull(data?.cumulative_total_tokens),
       previous_cumulative_input_tokens: finiteOrNull(data?.previous_cumulative_input_tokens),
+      previous_cumulative_cached_input_tokens: finiteOrNull(data?.previous_cumulative_cached_input_tokens),
       previous_cumulative_output_tokens: finiteOrNull(data?.previous_cumulative_output_tokens),
+      previous_cumulative_reasoning_output_tokens: finiteOrNull(data?.previous_cumulative_reasoning_output_tokens),
       baseline_status: ['known', 'establishing', 'reset', 'unavailable'].includes(data?.baseline_status)
         ? data.baseline_status
         : 'unavailable',

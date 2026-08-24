@@ -186,7 +186,9 @@ export default function CodexChatV1Page() {
             <dl>
               <dt>estimate input</dt><dd>{usage?.estimated_input_tokens ?? '—'}</dd>
               <dt>actual input</dt><dd>{usage?.actual_input_tokens ?? '—'}</dd>
+              <dt>cached input</dt><dd>{usage?.cached_input_tokens ?? '—'}</dd>
               <dt>actual output</dt><dd>{usage?.actual_output_tokens ?? '—'}</dd>
+              <dt>reasoning output</dt><dd>{usage?.reasoning_output_tokens ?? '—'}</dd>
               <dt>total</dt><dd>{usage?.total_tokens ?? '—'}</dd>
               <dt>source</dt><dd>{usage?.usage_source ?? '—'}</dd>
             </dl>
