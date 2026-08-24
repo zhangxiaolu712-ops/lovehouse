@@ -117,6 +117,8 @@ export default function Home() {
             <AppIcon to="/profile"     icon="heart"   label="Us" />
             <AppIcon to="/stats"       icon="calendar" label="Stats" />
             <AppIcon to="/settings/status" icon="workbench" label="Config" />
+            <AppIcon to="/codex-chat-v1" icon="workbench" label="Codex v1" />
+            <AppIcon to="/claude-chat-v1" icon="message" label="Claude v1" />
           </div>
         </div>
       </div>

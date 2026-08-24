@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { ChatRuntimeError } from './errors.js'
+import { RUNTIME_TYPES } from './runtimeContract.js'
 
 const THREAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const LEGACY_WINDOW_ID_RE = /^[A-Za-z0-9_-]{8,128}$/
@@ -49,7 +50,11 @@ function nextCumulativeUsage(binding, existing) {
 }
 
 export class InMemoryThreadBindingStore {
-  constructor() { this.bindings = new Map() }
+  constructor({ runtimeType = 'codex_cli' } = {}) {
+    if (!RUNTIME_TYPES.includes(runtimeType)) throw new TypeError('Binding runtime type is unsupported')
+    this.bindings = new Map()
+    this.runtimeType = runtimeType
+  }
 
   async get(query) {
     validate(query)
@@ -61,7 +66,7 @@ export class InMemoryThreadBindingStore {
     const existing = this.bindings.get(key(binding)) || null
     const value = {
       runtime_session_id: binding.runtimeSessionId,
-      runtime_type: 'codex_cli',
+      runtime_type: this.runtimeType,
       updated_at: new Date().toISOString(),
       cumulative_usage: nextCumulativeUsage(binding, existing),
     }
@@ -78,9 +83,11 @@ export class InMemoryThreadBindingStore {
 export class FileThreadBindingStore {
   #queue = Promise.resolve()
 
-  constructor({ filePath }) {
+  constructor({ filePath, runtimeType = 'codex_cli' }) {
     if (!path.isAbsolute(filePath || '')) throw new TypeError('Thread binding path must be absolute')
+    if (!RUNTIME_TYPES.includes(runtimeType)) throw new TypeError('Binding runtime type is unsupported')
     this.filePath = filePath
+    this.runtimeType = runtimeType
   }
 
   async #read() {
@@ -122,7 +129,7 @@ export class FileThreadBindingStore {
     const runtimeSessionId = value?.runtime_session_id || value?.codexThreadId
     return runtimeSessionId ? {
       runtime_session_id: runtimeSessionId,
-      runtime_type: value.runtime_type || 'codex_cli',
+      runtime_type: value.runtime_type || this.runtimeType,
       updated_at: value.updated_at || value.updatedAt || null,
       cumulative_usage: normalizeCumulativeUsage(value.lastUsage || value.cumulative_usage),
     } : null
@@ -140,21 +147,28 @@ export class FileThreadBindingStore {
         ),
       } : null
       const cumulativeUsage = nextCumulativeUsage(binding, existing)
-      const value = {
-        // Preserve the production v1 file shape so this experiment can be
-        // rolled back without migrating or invalidating existing bindings.
-        codexThreadId: binding.runtimeSessionId,
-        runtime_type: 'codex_cli',
-        updatedAt: new Date().toISOString(),
-        ...(cumulativeUsage ? { lastUsage: cumulativeUsage } : {}),
-      }
+      const value = this.runtimeType === 'codex_cli'
+        ? {
+            // Preserve the production v1 file shape so this experiment can be
+            // rolled back without migrating or invalidating existing bindings.
+            codexThreadId: binding.runtimeSessionId,
+            runtime_type: this.runtimeType,
+            updatedAt: new Date().toISOString(),
+            ...(cumulativeUsage ? { lastUsage: cumulativeUsage } : {}),
+          }
+        : {
+            runtime_session_id: binding.runtimeSessionId,
+            runtime_type: this.runtimeType,
+            updated_at: new Date().toISOString(),
+            ...(cumulativeUsage ? { cumulative_usage: cumulativeUsage } : {}),
+          }
       state.bindings[binding.ownerUserId] ||= {}
       state.bindings[binding.ownerUserId][binding.threadId] = value
       await this.#write(state)
       return {
-        runtime_session_id: value.codexThreadId,
+        runtime_session_id: value.runtime_session_id || value.codexThreadId,
         runtime_type: value.runtime_type,
-        updated_at: value.updatedAt,
+        updated_at: value.updated_at || value.updatedAt,
         cumulative_usage: cumulativeUsage,
       }
     })

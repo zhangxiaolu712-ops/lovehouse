@@ -59,20 +59,22 @@ export function createCodexChatHandler({
   runtime,
   sessions = new SessionStore(),
   threadBindings = new InMemoryThreadBindingStore(),
+  routePrefix = '/api/codex',
+  serviceName = 'lovehouse-codex-chat',
 }) {
   assertRuntimeAdapter(runtime)
-  if (typeof authenticate !== 'function') throw new TypeError('Codex Chat requires Owner auth')
+  if (typeof authenticate !== 'function') throw new TypeError('Chat runtime requires Owner auth')
 
   return async function handler(req, res) {
     const pathname = new URL(req.url, 'http://localhost').pathname
-    if (pathname === '/api/codex/health' && req.method === 'GET') {
+    if (pathname === `${routePrefix}/health` && req.method === 'GET') {
       return json(res, 200, {
         ok: true,
-        service: 'lovehouse-codex-chat',
+        service: serviceName,
         runtime: runtime.getCapabilities(),
       })
     }
-    if (pathname !== '/api/codex/chat') {
+    if (pathname !== `${routePrefix}/chat`) {
       return json(res, 404, { error: publicRuntimeError(new ChatRuntimeError(
         'UNKNOWN_RUNTIME', 'Not found', { stage: 'routing', status: 404 },
       )) })
@@ -136,6 +138,7 @@ export function createCodexChatHandler({
       history: session.history,
       message: input.message,
       resumed: session.resumed,
+      runtimeType: capabilities.runtime_type,
     })
     emit('context_breakdown', contextBreakdown)
 
@@ -198,7 +201,7 @@ export function createCodexChatHandler({
           remaining: 0,
           unit: null,
           reset_at: null,
-          source: 'codex_cli_error',
+          source: `${capabilities.runtime_type}_error`,
         })
       }
       emit('error', publicRuntimeError(error))
@@ -213,3 +216,8 @@ export function createCodexChatHandler({
 export function createCodexChatServer(dependencies) {
   return http.createServer(createCodexChatHandler(dependencies))
 }
+
+// Backward-compatible generic names for additional runtime sidecars. Codex
+// keeps its existing exports and behavior.
+export const createChatRuntimeHandler = createCodexChatHandler
+export const createChatRuntimeServer = createCodexChatServer

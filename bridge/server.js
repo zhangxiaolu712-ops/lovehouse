@@ -43,11 +43,10 @@ import {
 } from './client-api/clientApi.js'
 import { createPersonaRegistry } from './client-api/personas.js'
 import {
-  createClaudeAdapter,
+  createClaudeCliAdapter,
   createCodexAdapter,
   createProviderRouter,
 } from './client-api/providerAdapters.js'
-import { FileRuntimeBindingStore } from './client-api/runtimeBindingStore.js'
 
 const app = express()
 const BRIDGE_STARTED_AT = new Date().toISOString()
@@ -78,10 +77,10 @@ const OAUTH_BASE = process.env.OAUTH_BASE_URL || 'https://tingtunehouse.duckdns.
 const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
 const OAUTH_CLIENT_REGISTRY_PATH = process.env.OAUTH_CLIENT_REGISTRY_PATH || ''
 const OAUTH_REFRESH_STORE_PATH = process.env.OAUTH_REFRESH_STORE_PATH || ''
-const CLIENT_RUNTIME_BINDINGS_PATH = process.env.CLIENT_RUNTIME_BINDINGS_PATH
-  || '/root/lovehouse-client-state/runtime-bindings.json'
 const CODEX_CHAT_INTERNAL_URL = process.env.CODEX_CHAT_INTERNAL_URL
   || 'http://127.0.0.1:3002/api/codex'
+const CLAUDE_CHAT_INTERNAL_URL = process.env.CLAUDE_CHAT_INTERNAL_URL
+  || 'http://127.0.0.1:3003/api/claude'
 const MCP_BASE = process.env.MCP_BASE_URL || `${OAUTH_BASE}/api`
 const CLAUDE_MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
 const CLAUDE_MCP_RESOURCE_METADATA = process.env.MCP_RESOURCE_METADATA_URL
@@ -288,19 +287,10 @@ if (MEMORY_DREAM_ENABLED && dreamCuratorConfigured) {
 }
 
 const personaRegistry = createPersonaRegistry()
-const runtimeBindingStore = new FileRuntimeBindingStore({
-  filePath: CLIENT_RUNTIME_BINDINGS_PATH,
-})
 const providerRouter = createProviderRouter({
   personaRegistry,
   adapters: {
-    claude: createClaudeAdapter({
-      sendMessage: claudeSend,
-      abortWindow,
-      resetSession,
-      bindingStore: runtimeBindingStore,
-      systemPrompt: SYSTEM_PROMPT,
-    }),
+    claude: createClaudeCliAdapter({ baseUrl: CLAUDE_CHAT_INTERNAL_URL }),
     codex: createCodexAdapter({ baseUrl: CODEX_CHAT_INTERNAL_URL }),
   },
 })

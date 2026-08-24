@@ -144,13 +144,13 @@ function parseSseFrames(buffer, onFrame, flush = false) {
   return remainder
 }
 
-async function responseError(response) {
+async function responseError(response, label = 'Codex') {
   try {
     const payload = await response.json()
     const detail = payload?.error
     return new ClientApiError(
       detail?.code || 'PROVIDER_UNAVAILABLE',
-      detail?.message || 'Codex provider rejected the request',
+      detail?.message || `${label} provider rejected the request`,
       {
         stage: detail?.stage || detail?.type || 'runtime',
         status: response.status,
@@ -158,7 +158,7 @@ async function responseError(response) {
       },
     )
   } catch (cause) {
-    return new ClientApiError('PROVIDER_UNAVAILABLE', 'Codex provider rejected the request', {
+    return new ClientApiError('PROVIDER_UNAVAILABLE', `${label} provider rejected the request`, {
       stage: 'provider', status: response.status || 503, retryable: true, cause,
     })
   }
@@ -183,12 +183,12 @@ function finiteOrNull(value) {
   return Number.isFinite(value) ? value : null
 }
 
-function safeRuntimeEvent(event, data) {
+function safeRuntimeEvent(event, data, profile) {
   if (event === 'runtime_status') {
     return {
       status: ['ready', 'recovering', 'unavailable'].includes(data?.status) ? data.status : 'unavailable',
-      runtime_type: data?.runtime_type === 'codex_cli' ? 'codex_cli' : 'codex_cli',
-      adapter_id: data?.adapter_id === 'codex-cli-v1' ? 'codex-cli-v1' : 'codex-cli-v1',
+      runtime_type: profile.runtimeType,
+      adapter_id: profile.adapterId,
       capabilities: data?.capabilities && typeof data.capabilities === 'object'
         ? {
             streaming_text: data.capabilities.streaming_text === true,
@@ -210,15 +210,15 @@ function safeRuntimeEvent(event, data) {
         ? data.status
         : 'unavailable',
       summary: typeof data?.summary === 'string' ? data.summary.slice(0, 1_500) : null,
-      source: 'codex_cli',
+      source: profile.runtimeType,
     }
   }
   if (['tool_call', 'tool_result', 'tool_error'].includes(event)) {
     return {
       call_id: typeof data?.call_id === 'string' ? data.call_id.slice(0, 128) : 'unknown',
-      tool_type: ['command', 'file_change', 'mcp', 'web_search'].includes(data?.tool_type)
+      tool_type: profile.toolTypes.includes(data?.tool_type)
         ? data.tool_type
-        : 'command',
+        : profile.toolTypes[0],
       name: typeof data?.name === 'string' ? data.name.slice(0, 128) : 'tool',
       status: event === 'tool_call' ? 'running' : (event === 'tool_result' ? 'success' : 'failed'),
       lifecycle: ['started', 'updated', 'completed'].includes(data?.lifecycle)
@@ -250,7 +250,7 @@ function safeRuntimeEvent(event, data) {
         ? data.baseline_status
         : 'unavailable',
       usage_source: [
-        'codex_cli_cumulative_delta', 'codex_cli_cumulative_baseline', 'codex_cli', 'estimate',
+        ...profile.usageSources, 'estimate',
       ].includes(data?.usage_source) ? data.usage_source : 'estimate',
     }
   }
@@ -260,7 +260,7 @@ function safeRuntimeEvent(event, data) {
       remaining: finiteOrNull(data?.remaining),
       unit: typeof data?.unit === 'string' ? data.unit.slice(0, 32) : null,
       reset_at: typeof data?.reset_at === 'string' ? data.reset_at.slice(0, 64) : null,
-      source: typeof data?.source === 'string' ? data.source.slice(0, 64) : 'codex_cli_unavailable',
+      source: typeof data?.source === 'string' ? data.source.slice(0, 64) : profile.quotaSource,
     }
   }
   if (event === 'context_breakdown') {
@@ -288,10 +288,10 @@ function safeRuntimeEvent(event, data) {
         summary: typeof data?.reasoning?.summary === 'string'
           ? data.reasoning.summary.slice(0, 1_500)
           : null,
-        source: 'codex_native_thread',
+        source: profile.contextSource,
         active_context: data?.reasoning?.active_context === true,
         resumes_with_thread: data?.reasoning?.resumes_with_thread === true,
-        compaction: 'codex_native',
+        compaction: profile.compaction,
       },
       estimated_tokens: finiteOrNull(data?.estimated_tokens),
     }
@@ -299,20 +299,16 @@ function safeRuntimeEvent(event, data) {
   return null
 }
 
-export function createCodexAdapter({
-  baseUrl = 'http://127.0.0.1:3002/api/codex',
-  fetchImpl = globalThis.fetch,
-  healthTimeoutMs = 2_000,
-} = {}) {
-  if (typeof fetchImpl !== 'function') throw new TypeError('Codex adapter requires fetch')
+function createCliSidecarAdapter({ baseUrl, fetchImpl, healthTimeoutMs, profile }) {
+  if (typeof fetchImpl !== 'function') throw new TypeError(`${profile.label} adapter requires fetch`)
   const normalizedBase = baseUrl.replace(/\/+$/, '')
 
   return Object.freeze({
-    runtime: 'codex',
+    runtime: profile.runtime,
     getCapabilities() {
       return {
-        runtime_type: 'codex_cli',
-        adapter_id: 'codex-cli-v1',
+        runtime_type: profile.runtimeType,
+        adapter_id: profile.adapterId,
         enabled: true,
         capabilities: {
           streaming_text: true,
@@ -350,11 +346,11 @@ export function createCodexAdapter({
           signal,
         })
       } catch (error) {
-        throw asProviderError(error, 'Codex')
+        throw asProviderError(error, profile.label)
       }
-      if (!response.ok) throw await responseError(response)
+      if (!response.ok) throw await responseError(response, profile.label)
       if (!response.body) {
-        throw new ClientApiError('PROVIDER_STREAM_MISSING', 'Codex did not return a response stream', {
+        throw new ClientApiError('PROVIDER_STREAM_MISSING', `${profile.label} did not return a response stream`, {
           stage: 'provider', status: 502, retryable: true,
         })
       }
@@ -372,7 +368,7 @@ export function createCodexAdapter({
           'runtime_status', 'reasoning_status', 'tool_call', 'tool_result', 'tool_error',
           'usage', 'quota', 'context_breakdown',
         ].includes(event)) {
-          const safe = safeRuntimeEvent(event, data)
+          const safe = safeRuntimeEvent(event, data, profile)
           if (safe) onEvent?.(event, safe)
           if (event === 'reasoning_status') reasoningReported = true
           if (event === 'quota') quotaReported = true
@@ -381,7 +377,7 @@ export function createCodexAdapter({
         if (event === 'error') {
           streamError = new ClientApiError(
             stableRuntimeErrorCode(data?.code),
-            data?.message || 'Codex provider failed',
+            data?.message || `${profile.label} provider failed`,
             {
               stage: data?.stage || data?.type || 'runtime',
               status: data?.code === 'QUOTA_EXHAUSTED' ? 429 : 503,
@@ -400,13 +396,13 @@ export function createCodexAdapter({
       parseSseFrames(buffer, onFrame, true)
       if (!reasoningReported) {
         onEvent?.('reasoning_status', {
-          available: false, status: 'unavailable', summary: null, source: 'codex_cli',
+          available: false, status: 'unavailable', summary: null, source: profile.runtimeType,
         })
       }
       if (!quotaReported) {
         onEvent?.('quota', {
           status: 'unknown', remaining: null, unit: null, reset_at: null,
-          source: 'codex_cli_unavailable',
+          source: profile.quotaSource,
         })
       }
       if (!contextReported) {
@@ -421,27 +417,71 @@ export function createCodexAdapter({
             available: false,
             status: 'unavailable',
             summary: null,
-            source: 'codex_native_thread',
+            source: profile.contextSource,
             active_context: true,
             resumes_with_thread: true,
-            compaction: 'codex_native',
+            compaction: profile.compaction,
           },
           estimated_tokens: null,
         })
       }
       if (streamError) throw streamError
       if (!done) {
-        throw new ClientApiError('PROVIDER_STREAM_INCOMPLETE', 'Codex stream ended unexpectedly', {
+        throw new ClientApiError('PROVIDER_STREAM_INCOMPLETE', `${profile.label} stream ended unexpectedly`, {
           stage: 'provider', status: 502, retryable: true,
         })
       }
       return { usage: null }
     },
     async reset() {
-      // Codex sidecar owns its persistent runtime binding. The Client API
+      // The sidecar owns its persistent runtime binding. The Client API
       // rotates to a new LoveHouse thread id instead of mutating that store.
       return { reset: true }
     },
+  })
+}
+
+const CODEX_SIDECAR_PROFILE = Object.freeze({
+  runtime: 'codex',
+  runtimeType: 'codex_cli',
+  adapterId: 'codex-cli-v1',
+  label: 'Codex',
+  contextSource: 'codex_native_thread',
+  compaction: 'codex_native',
+  quotaSource: 'codex_cli_unavailable',
+  toolTypes: Object.freeze(['command', 'file_change', 'mcp', 'web_search']),
+  usageSources: Object.freeze(['codex_cli_cumulative_delta', 'codex_cli_cumulative_baseline', 'codex_cli']),
+})
+
+const CLAUDE_SIDECAR_PROFILE = Object.freeze({
+  runtime: 'claude',
+  runtimeType: 'claude_cli',
+  adapterId: 'claude-cli-v1',
+  label: 'Claude',
+  contextSource: 'claude_native_session',
+  compaction: 'claude_native',
+  quotaSource: 'claude_cli_unavailable',
+  toolTypes: Object.freeze(['claude_tool']),
+  usageSources: Object.freeze(['claude_cli']),
+})
+
+export function createCodexAdapter({
+  baseUrl = 'http://127.0.0.1:3002/api/codex',
+  fetchImpl = globalThis.fetch,
+  healthTimeoutMs = 2_000,
+} = {}) {
+  return createCliSidecarAdapter({
+    baseUrl, fetchImpl, healthTimeoutMs, profile: CODEX_SIDECAR_PROFILE,
+  })
+}
+
+export function createClaudeCliAdapter({
+  baseUrl = 'http://127.0.0.1:3003/api/claude',
+  fetchImpl = globalThis.fetch,
+  healthTimeoutMs = 2_000,
+} = {}) {
+  return createCliSidecarAdapter({
+    baseUrl, fetchImpl, healthTimeoutMs, profile: CLAUDE_SIDECAR_PROFILE,
   })
 }
 
