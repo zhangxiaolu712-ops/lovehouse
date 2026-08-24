@@ -1,11 +1,15 @@
 const BRIDGE = 'http://139.180.146.26:3000'
+const CODEX_BRIDGE = 'https://tingtunehouse.duckdns.org'
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
 
     if (url.pathname.startsWith('/api/')) {
-      const target = BRIDGE + url.pathname.replace('/api', '')
+      const isCodex = url.pathname.startsWith('/api/codex/')
+      const target = isCodex
+        ? CODEX_BRIDGE + url.pathname
+        : BRIDGE + url.pathname.replace('/api', '')
       const headers = new Headers(request.headers)
       headers.delete('host')
 
@@ -19,7 +23,7 @@ export default {
       const respHeaders = new Headers(res.headers)
       respHeaders.set('Access-Control-Allow-Origin', '*')
       respHeaders.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-      respHeaders.set('Access-Control-Allow-Headers', 'Content-Type')
+      respHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
       return new Response(res.body, {
         status: res.status,
@@ -32,7 +36,7 @@ export default {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         },
       })
     }

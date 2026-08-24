@@ -45,6 +45,8 @@ const ICON_PATHS = {
   close: 'M18 6L6 18 M6 6l12 12',
   image: 'M4 4h16v16H4z M4 16l4-4 3 3 4-4 5 5 M14.5 9.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z',
   file: 'M14 3H6v18h12V7z M14 3v4h4 M8 13h8 M8 17h5',
+  terminal: 'M4 5h16v14H4z M7 9l3 3-3 3 M12 15h5',
+  volume: 'M4 10h4l4-4v12l-4-4H4z M16 9a4 4 0 0 1 0 6 M18.5 6.5a8 8 0 0 1 0 11',
 }
 
 export default function LineIcon({ name, size = 20, className = '' }) {

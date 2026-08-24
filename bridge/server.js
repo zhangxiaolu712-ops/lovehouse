@@ -29,6 +29,7 @@ import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest } from './livingroom.js'
 import { safeEqual } from './security.js'
+import { createElevenLabsVoiceClient } from './voice.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -84,11 +85,23 @@ const MEMORY_DREAM_CURATOR_PROVIDER = process.env.MEMORY_DREAM_CURATOR_PROVIDER 
 const MEMORY_DREAM_CURATOR_URL = process.env.MEMORY_DREAM_CURATOR_URL || ''
 const MEMORY_DREAM_CURATOR_API_KEY = process.env.MEMORY_DREAM_CURATOR_API_KEY || ''
 const MEMORY_DREAM_CURATOR_MODEL = process.env.MEMORY_DREAM_CURATOR_MODEL || ''
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || ''
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || ''
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_v3'
+const ELEVENLABS_STABILITY = Number.isFinite(Number(process.env.ELEVENLABS_STABILITY))
+  ? Math.min(Math.max(Number(process.env.ELEVENLABS_STABILITY), 0), 1)
+  : 0.45
 const MEMORY_DREAM_INTERVAL_MS = Math.min(
   Math.max(Number.parseInt(process.env.MEMORY_DREAM_INTERVAL_MS, 10) || 300_000, 60_000),
   3_600_000
 )
 const SYSTEM_PROMPT = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
+const voiceClient = createElevenLabsVoiceClient({
+  apiKey: ELEVENLABS_API_KEY,
+  voiceId: ELEVENLABS_VOICE_ID,
+  modelId: ELEVENLABS_MODEL_ID,
+  stability: ELEVENLABS_STABILITY,
+})
 
 const rateMap = new Map()
 function checkRate(id, maximum = 30, windowMs = 60_000) {
@@ -335,6 +348,21 @@ app.post('/reset', verifyOwnerBearer, (req, res) => {
   return res.json({ ok: true, window_id: windowId, reset })
 })
 
+app.post('/voice/tts', verifyOwnerBearer, async (req, res) => {
+  try {
+    const text = typeof req.body.text === 'string' ? req.body.text.trim() : ''
+    if (!text) return res.status(400).json({ error: 'text required' })
+    if (text.length > 5_000) return res.status(400).json({ error: 'text is too long' })
+    const audio = await voiceClient.synthesize(text)
+    res.setHeader('Content-Type', 'audio/mpeg')
+    res.setHeader('Cache-Control', 'no-store')
+    return res.send(audio)
+  } catch (error) {
+    console.error('[voice tts]', error.message)
+    return res.status(error.status || 502).json({ error: error.message })
+  }
+})
+
 app.get('/livingroom', verifyLivingroom, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 200)
@@ -427,6 +455,8 @@ app.get('/health', (_req, res) => {
     memory_dream_enabled: MEMORY_DREAM_ENABLED,
     memory_dream_curator_configured: dreamCuratorConfigured,
     memory_dream_curator_provider: MEMORY_DREAM_CURATOR_PROVIDER || null,
+    voice_tts_configured: voiceClient.configured,
+    voice_tts_model: voiceClient.configured ? voiceClient.modelId : null,
     memory_ranking_profile: MEMORY_RANKING_PROFILE,
     memory_writes_enabled: memoryService.writeEnabled,
     database_migration: MEMORY_SYSTEM_ENABLED ? 'expected' : 'not_applied',

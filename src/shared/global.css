@@ -3233,6 +3233,47 @@ body {
   color: #b07070;
 }
 
+.ct-message-stack {
+  display: flex;
+  max-width: 75%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.ct-message-stack .ct-bubble {
+  max-width: 100%;
+}
+
+.ct-message-stack.user {
+  align-items: flex-end;
+}
+
+.ct-voice-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  color: var(--text-muted);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ct-voice-btn:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.ct-voice-error {
+  margin: -4px 0 12px 42px;
+  color: #b07070;
+  font-size: 11px;
+}
+
 /* ─── Markdown in bubbles ─── */
 
 .md > *:first-child { margin-top: 0; }
