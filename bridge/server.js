@@ -36,8 +36,21 @@ import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest } from './livingroom.js'
 import { safeEqual } from './security.js'
+import {
+  createClientOwnerAuth,
+  installClientApi,
+  resolveDeploymentSha,
+} from './client-api/clientApi.js'
+import { createPersonaRegistry } from './client-api/personas.js'
+import {
+  createClaudeAdapter,
+  createCodexAdapter,
+  createProviderRouter,
+} from './client-api/providerAdapters.js'
+import { FileRuntimeBindingStore } from './client-api/runtimeBindingStore.js'
 
 const app = express()
+const BRIDGE_STARTED_AT = new Date().toISOString()
 app.disable('x-powered-by')
 app.set('trust proxy', 'loopback')
 
@@ -65,6 +78,10 @@ const OAUTH_BASE = process.env.OAUTH_BASE_URL || 'https://tingtunehouse.duckdns.
 const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
 const OAUTH_CLIENT_REGISTRY_PATH = process.env.OAUTH_CLIENT_REGISTRY_PATH || ''
 const OAUTH_REFRESH_STORE_PATH = process.env.OAUTH_REFRESH_STORE_PATH || ''
+const CLIENT_RUNTIME_BINDINGS_PATH = process.env.CLIENT_RUNTIME_BINDINGS_PATH
+  || '/root/lovehouse-client-state/runtime-bindings.json'
+const CODEX_CHAT_INTERNAL_URL = process.env.CODEX_CHAT_INTERNAL_URL
+  || 'http://127.0.0.1:3002/api/codex'
 const MCP_BASE = process.env.MCP_BASE_URL || `${OAUTH_BASE}/api`
 const CLAUDE_MCP_RESOURCE = process.env.MCP_RESOURCE_URL || `${OAUTH_BASE}/api/mcp/claude`
 const CLAUDE_MCP_RESOURCE_METADATA = process.env.MCP_RESOURCE_METADATA_URL
@@ -270,6 +287,25 @@ if (MEMORY_DREAM_ENABLED && dreamCuratorConfigured) {
   dreamCycleInterval.unref?.()
 }
 
+const personaRegistry = createPersonaRegistry()
+const runtimeBindingStore = new FileRuntimeBindingStore({
+  filePath: CLIENT_RUNTIME_BINDINGS_PATH,
+})
+const providerRouter = createProviderRouter({
+  personaRegistry,
+  adapters: {
+    claude: createClaudeAdapter({
+      sendMessage: claudeSend,
+      abortWindow,
+      resetSession,
+      bindingStore: runtimeBindingStore,
+      systemPrompt: SYSTEM_PROMPT,
+    }),
+    codex: createCodexAdapter({ baseUrl: CODEX_CHAT_INTERNAL_URL }),
+  },
+})
+const verifyClientOwner = createClientOwnerAuth({ verifyOwnerToken, checkRate })
+
 app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
     return res.status(400).json({ error: 'message required' })
@@ -344,6 +380,19 @@ app.post('/reset', verifyOwnerBearer, (req, res) => {
   }
   const reset = resetSession(windowId)
   return res.json({ ok: true, window_id: windowId, reset })
+})
+
+// Nginx strips the public /api/ prefix before proxying to this Bridge, so the
+// stable public /api/v1/* contract is mounted internally at /v1/*.
+installClientApi(app, {
+  verifyOwner: verifyClientOwner,
+  providerRouter,
+  startedAt: BRIDGE_STARTED_AT,
+  deploymentSha: resolveDeploymentSha(process.cwd()),
+  features: {
+    memory: true,
+    livingroom: true,
+  },
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {
