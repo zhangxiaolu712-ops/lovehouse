@@ -30,6 +30,7 @@ import {
 import {
   createOllamaEmbeddingFromEnv,
   MemoryV2Service,
+  EngineeringMemoryService,
   SupabaseMemoryV2Repository,
 } from './memory-v2/index.js'
 import { createMcpChannel } from './mcp/channel.js'
@@ -191,6 +192,9 @@ const memoryV2Repository = new SupabaseMemoryV2Repository({
 const memoryV2Service = new MemoryV2Service({
   repository: memoryV2Repository,
   embedding: createOllamaEmbeddingFromEnv(),
+})
+const engineeringMemoryService = new EngineeringMemoryService({
+  repository: memoryV2Repository,
 })
 const canonicalMemoryRepository = new SupabaseMemoryRepository({
   rest: supabaseRest,
@@ -383,6 +387,7 @@ installClientApi(app, {
     memory: true,
     livingroom: true,
   },
+  engineeringMemoryService,
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {

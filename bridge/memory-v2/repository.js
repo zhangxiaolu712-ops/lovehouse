@@ -1,7 +1,14 @@
 const ACTORS = new Set(['gpt', 'claude'])
+const ENGINEERING_ACTORS = new Set(['gpt', 'claude', 'codex', 'owner'])
 
 function fixedActor(actor) {
   if (!ACTORS.has(actor)) throw new TypeError('A fixed Memory V2 actor is required')
+  return actor
+}
+function fixedEngineeringActor(actor) {
+  if (!ENGINEERING_ACTORS.has(actor)) {
+    throw new TypeError('A trusted Engineering Memory actor is required')
+  }
   return actor
 }
 function boundedLimit(value, fallback, maximum) {
@@ -118,6 +125,58 @@ export class SupabaseMemoryV2Repository {
     return this.rpc('memory_v2_approve_shared', {
       p_owner_id: this.ownerId,
       p_source_memory_id: sourceMemoryId,
+    })
+  }
+
+  upsertEngineering(actor, subjectKey, content, options = {}) {
+    return this.rpc('memory_v2_engineering_upsert', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedEngineeringActor(actor),
+      p_subject_key: subjectKey,
+      p_content: content,
+      p_options: options,
+    })
+  }
+
+  recallEngineering(actor, { query = '', limit = 30, includeArchived = false } = {}) {
+    return this.rpc('memory_v2_engineering_recall', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedEngineeringActor(actor),
+      p_query: String(query),
+      p_limit: boundedLimit(limit, 30, 50),
+      p_include_archived: includeArchived === true,
+    })
+  }
+
+  openEngineering(actor, subjectKey) {
+    return this.rpc('memory_v2_engineering_open', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedEngineeringActor(actor),
+      p_subject_key: subjectKey,
+    })
+  }
+
+  expandEngineeringSource(actor, sourceId) {
+    return this.rpc('memory_v2_engineering_expand_source', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedEngineeringActor(actor),
+      p_source_id: sourceId,
+    })
+  }
+
+  archiveEngineering(actor, subjectKey) {
+    return this.rpc('memory_v2_engineering_archive', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedEngineeringActor(actor),
+      p_subject_key: subjectKey,
+    })
+  }
+
+  restoreEngineering(actor, subjectKey) {
+    return this.rpc('memory_v2_engineering_restore', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedEngineeringActor(actor),
+      p_subject_key: subjectKey,
     })
   }
 }

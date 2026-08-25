@@ -60,6 +60,17 @@ function sendJsonError(res, error, requestId) {
   return res.status(normalized.status).json(publicError(normalized, requestId))
 }
 
+function sendEngineeringError(res, error, requestId) {
+  const normalized = error instanceof TypeError
+    ? new ClientApiError('INVALID_ENGINEERING_MEMORY_REQUEST', error.message, {
+      stage: 'validation', status: 400,
+    })
+    : new ClientApiError('ENGINEERING_MEMORY_UNAVAILABLE', 'Engineering Memory could not complete the request', {
+      stage: 'memory', status: 500, cause: error,
+    })
+  return sendJsonError(res, normalized, requestId)
+}
+
 function requestContext(req, res, next) {
   req.clientRequestId = crypto.randomUUID()
   res.setHeader('X-Request-Id', req.clientRequestId)
@@ -221,6 +232,7 @@ export function installClientApi(app, {
   startedAt,
   deploymentSha = resolveDeploymentSha(),
   features,
+  engineeringMemoryService = null,
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
@@ -229,6 +241,10 @@ export function installClientApi(app, {
   }
   const started = startedAt || new Date().toISOString()
   const featureSet = safeFeatures(features)
+  if (engineeringMemoryService && typeof engineeringMemoryService.forActor !== 'function') {
+    throw new TypeError('Client API Engineering Memory requires a fixed-actor service')
+  }
+  const ownerEngineering = engineeringMemoryService?.forActor('owner') || null
 
   app.use('/v1', requestContext, verifyOwner)
 
@@ -275,6 +291,81 @@ export function installClientApi(app, {
       personas: providerRouter.listPersonas(),
     })
   })
+
+  if (ownerEngineering) {
+    app.get('/v1/engineering-memory', async (req, res) => {
+      try {
+        const result = await ownerEngineering.recallEngineering({
+          query: req.query.query || '',
+          limit: req.query.limit,
+          includeArchived: req.query.include_archived === 'true',
+        })
+        res.setHeader('Cache-Control', 'no-store')
+        return res.json({ ok: true, request_id: req.clientRequestId, ...result })
+      } catch (error) {
+        return sendEngineeringError(res, error, req.clientRequestId)
+      }
+    })
+
+    app.get('/v1/engineering-memory/sources/:sourceId', async (req, res) => {
+      try {
+        const source = await ownerEngineering.expandEngineeringSource(req.params.sourceId)
+        res.setHeader('Cache-Control', 'no-store')
+        return res.json({ ok: true, request_id: req.clientRequestId, source })
+      } catch (error) {
+        return sendEngineeringError(res, error, req.clientRequestId)
+      }
+    })
+
+    app.get('/v1/engineering-memory/:subjectKey', async (req, res) => {
+      try {
+        const fact = await ownerEngineering.openEngineeringFact(req.params.subjectKey)
+        res.setHeader('Cache-Control', 'no-store')
+        return res.json({ ok: true, request_id: req.clientRequestId, fact })
+      } catch (error) {
+        return sendEngineeringError(res, error, req.clientRequestId)
+      }
+    })
+
+    app.post('/v1/engineering-memory', async (req, res) => {
+      try {
+        const result = await ownerEngineering.upsertEngineeringFact({
+          subjectKey: req.body?.subject_key,
+          content: req.body?.content,
+          metadata: req.body?.metadata,
+          reason: req.body?.reason,
+          eventTime: req.body?.event_time,
+          humanImportance: req.body?.human_importance,
+          aiImportance: req.body?.ai_importance,
+          sources: req.body?.sources,
+        })
+        res.setHeader('Cache-Control', 'no-store')
+        return res.json({ ok: true, request_id: req.clientRequestId, ...result })
+      } catch (error) {
+        return sendEngineeringError(res, error, req.clientRequestId)
+      }
+    })
+
+    app.post('/v1/engineering-memory/:subjectKey/archive', async (req, res) => {
+      try {
+        const result = await ownerEngineering.archiveEngineeringFact(req.params.subjectKey)
+        res.setHeader('Cache-Control', 'no-store')
+        return res.json({ ok: true, request_id: req.clientRequestId, ...result })
+      } catch (error) {
+        return sendEngineeringError(res, error, req.clientRequestId)
+      }
+    })
+
+    app.post('/v1/engineering-memory/:subjectKey/restore', async (req, res) => {
+      try {
+        const result = await ownerEngineering.restoreEngineeringFact(req.params.subjectKey)
+        res.setHeader('Cache-Control', 'no-store')
+        return res.json({ ok: true, request_id: req.clientRequestId, ...result })
+      } catch (error) {
+        return sendEngineeringError(res, error, req.clientRequestId)
+      }
+    })
+  }
 
   app.post('/v1/chat', async (req, res) => {
     let normalized
