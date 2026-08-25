@@ -48,9 +48,11 @@ import {
   createCodexAdapter,
   createProviderRouter,
 } from './client-api/providerAdapters.js'
+import { resolveBridgePort } from './runtimeConfig.js'
 
 const app = express()
 const BRIDGE_STARTED_AT = new Date().toISOString()
+const BRIDGE_PORT = resolveBridgePort()
 app.disable('x-powered-by')
 app.set('trust proxy', 'loopback')
 
@@ -499,6 +501,6 @@ app.get('/health', (_req, res) => {
   })
 })
 
-app.listen(3000, '0.0.0.0', () => {
-  console.log('lovehouse-bridge running on :3000')
+app.listen(BRIDGE_PORT, '0.0.0.0', () => {
+  console.log(`lovehouse-bridge running on :${BRIDGE_PORT}`)
 })
