@@ -43,6 +43,7 @@ async function startHarness(t, {
     claude: fakeAdapter('claude'),
     codex: fakeAdapter('codex'),
   },
+  engineeringMemoryService = null,
 } = {}) {
   const app = express()
   app.use(express.json())
@@ -61,12 +62,47 @@ async function startHarness(t, {
     startedAt: '2026-08-24T08:00:00.000Z',
     deploymentSha: 'a'.repeat(40),
     features: { memory: true, livingroom: true },
+    engineeringMemoryService,
   })
   const server = http.createServer(app)
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   t.after(() => server.close())
   return `http://127.0.0.1:${server.address().port}`
+}
+
+function fakeEngineeringMemoryService(calls) {
+  return {
+    forActor(actor) {
+      calls.push(['actor', actor])
+      return {
+        async recallEngineering(input) {
+          calls.push(['recall', input])
+          return { mode: 'lexical', items: [{ subject_key: 'runtime.codex' }] }
+        },
+        async upsertEngineeringFact(input) {
+          calls.push(['upsert', input])
+          return { action: 'created', subject_key: input.subjectKey }
+        },
+        async openEngineeringFact(subjectKey) {
+          calls.push(['open', subjectKey])
+          return { entry: { subject_key: subjectKey }, revisions: [] }
+        },
+        async expandEngineeringSource(sourceId) {
+          calls.push(['expand', sourceId])
+          return { source_id: sourceId, quote_text: 'evidence' }
+        },
+        async archiveEngineeringFact(subjectKey) {
+          calls.push(['archive', subjectKey])
+          return { action: 'archived' }
+        },
+        async restoreEngineeringFact(subjectKey) {
+          calls.push(['restore', subjectKey])
+          return { action: 'restored' }
+        },
+      }
+    },
+  }
 }
 
 function authHeaders(extra = {}) {
@@ -141,6 +177,60 @@ test('all v1 routes require the existing owner bearer boundary with a uniform er
   assert.equal(payload.error.code, 'AUTH_REQUIRED')
   assert.equal(payload.error.stage, 'auth')
   assert.match(payload.error.request_id, /^[0-9a-f-]{36}$/i)
+})
+
+test('Owner Client API exposes Engineering Memory without accepting an actor from the client', async t => {
+  const calls = []
+  const base = await startHarness(t, {
+    engineeringMemoryService: fakeEngineeringMemoryService(calls),
+  })
+
+  const unauthorized = await fetch(`${base}/v1/engineering-memory`)
+  assert.equal(unauthorized.status, 401)
+
+  const created = await fetch(`${base}/v1/engineering-memory`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      subject_key: 'runtime.codex',
+      content: 'current state',
+      actor: 'codex',
+      metadata: { category: 'runtime' },
+    }),
+  })
+  assert.equal(created.status, 200)
+  assert.equal((await created.json()).action, 'created')
+
+  const listed = await fetch(`${base}/v1/engineering-memory?query=runtime&include_archived=true`, {
+    headers: authHeaders(),
+  }).then(response => response.json())
+  assert.equal(listed.mode, 'lexical')
+  assert.equal(listed.items[0].subject_key, 'runtime.codex')
+
+  await fetch(`${base}/v1/engineering-memory/runtime.codex`, { headers: authHeaders() })
+  await fetch(`${base}/v1/engineering-memory/sources/source-1`, { headers: authHeaders() })
+  await fetch(`${base}/v1/engineering-memory/runtime.codex/archive`, {
+    method: 'POST', headers: authHeaders(), body: '{}',
+  })
+  await fetch(`${base}/v1/engineering-memory/runtime.codex/restore`, {
+    method: 'POST', headers: authHeaders(), body: '{}',
+  })
+
+  assert.deepEqual(calls[0], ['actor', 'owner'])
+  assert.deepEqual(calls.find(call => call[0] === 'upsert')[1], {
+    subjectKey: 'runtime.codex',
+    content: 'current state',
+    metadata: { category: 'runtime' },
+    reason: undefined,
+    eventTime: undefined,
+    humanImportance: undefined,
+    aiImportance: undefined,
+    sources: undefined,
+  })
+  assert.equal(calls.some(call => call.includes('codex')), false)
+  assert.deepEqual(calls.map(call => call[0]), [
+    'actor', 'upsert', 'recall', 'open', 'expand', 'archive', 'restore',
+  ])
 })
 
 test('unknown and configured-but-disabled personas fail before streaming', async t => {
