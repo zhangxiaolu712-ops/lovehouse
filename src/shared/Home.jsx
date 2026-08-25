@@ -117,6 +117,7 @@ export default function Home() {
             <AppIcon to="/profile"     icon="heart"   label="Us" />
             <AppIcon to="/stats"       icon="calendar" label="Stats" />
             <AppIcon to="/settings/status" icon="workbench" label="Config" />
+            <AppIcon to="/project/checklist" icon="project" label="Build" />
           </div>
         </div>
       </div>

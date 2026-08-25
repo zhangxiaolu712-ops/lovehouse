@@ -21,6 +21,7 @@ import StatsPage from '../modules/stats/StatsPage'
 import StatusPage from '../modules/settings/StatusPage'
 import LivingroomPage from '../modules/livingroom/LivingroomPage'
 import AutobiographyPage from '../modules/autobiography/AutobiographyPage'
+import ProjectChecklistPage from '../modules/project/ProjectChecklistPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
@@ -65,6 +66,7 @@ export const router = createHashRouter([
       { path: 'settings/status', element: <StatusPage /> },
       { path: 'livingroom', element: <LivingroomPage /> },
       { path: 'autobiography', element: <AutobiographyPage /> },
+      { path: 'project/checklist', element: <ProjectChecklistPage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },
