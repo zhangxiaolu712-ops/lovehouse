@@ -24,6 +24,7 @@ import AutobiographyPage from '../modules/autobiography/AutobiographyPage'
 import CodexChatV1Page from '../modules/codex-chat-v1/CodexChatV1Page'
 import ClaudeChatV1Page from '../modules/claude-chat-v1/ClaudeChatV1Page'
 import EngineeringWorkspacePage from '../modules/engineering/EngineeringWorkspacePage'
+import ProjectChecklistPage from '../modules/project/ProjectChecklistPage'
 
 // 规划中的抽屉统一用占位页，做好一个换一个
 const PLACEHOLDER_PATHS = [
@@ -71,6 +72,7 @@ export const router = createHashRouter([
       { path: 'codex-chat-v1', element: <CodexChatV1Page /> },
       { path: 'claude-chat-v1', element: <ClaudeChatV1Page /> },
       { path: 'engineering', element: <EngineeringWorkspacePage /> },
+      { path: 'project/checklist', element: <ProjectChecklistPage /> },
       ...PLACEHOLDER_PATHS.map(path => ({ path, element: <PlaceholderPage /> })),
     ],
   },
