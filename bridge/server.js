@@ -49,6 +49,7 @@ import {
   createProviderRouter,
 } from './client-api/providerAdapters.js'
 import { resolveBridgePort } from './runtimeConfig.js'
+import { ProjectChecklistStore } from './client-api/projectChecklist.js'
 
 const app = express()
 const BRIDGE_STARTED_AT = new Date().toISOString()
@@ -198,6 +199,7 @@ const memoryV2Service = new MemoryV2Service({
 const engineeringMemoryService = new EngineeringMemoryService({
   repository: memoryV2Repository,
 })
+const projectChecklistStore = new ProjectChecklistStore({ rest: supabaseRest })
 const canonicalMemoryRepository = new SupabaseMemoryRepository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
@@ -390,6 +392,9 @@ installClientApi(app, {
     livingroom: true,
   },
   engineeringMemoryService,
+  memoryV2Repository,
+  memoryV2Service,
+  projectChecklistStore,
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {

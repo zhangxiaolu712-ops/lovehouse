@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
 import {
@@ -20,7 +20,9 @@ function today() {
 }
 
 export default function ProjectChecklistPage() {
-  const [sections, setSections] = useState(loadProjectChecklist)
+  const [sections, setSections] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
   const [collapsed, setCollapsed] = useState({})
@@ -37,22 +39,25 @@ export default function ProjectChecklistPage() {
 
   const progress = counts.total ? Math.round((counts.done / counts.total) * 100) : 0
 
-  function refresh() {
-    setSections(loadProjectChecklist())
+  async function refresh() {
+    try { setSections(await loadProjectChecklist()); setError('') }
+    catch (cause) { setError(cause.message || '施工清单读取失败') }
+    finally { setLoading(false) }
   }
 
-  function patchItem(entry, patch) {
+  useEffect(() => { refresh() }, [])
+
+  async function patchItem(entry, patch) {
     const next = { ...entry, ...patch }
     if (patch.status === 'done' && !next.completedAt) next.completedAt = today()
     if (patch.status && patch.status !== 'done' && entry.status === 'done') next.completedAt = ''
-    saveProjectChecklistItem(next)
-    refresh()
+    try { await saveProjectChecklistItem(next); await refresh() } catch (cause) { setError(cause.message || '保存失败') }
   }
 
-  function handleAdd(sectionIndex) {
+  async function handleAdd(sectionIndex) {
     const text = newText.trim()
     if (!text) return
-    addProjectChecklistItem(sectionIndex, text)
+    try { await addProjectChecklistItem(sectionIndex, text) } catch (cause) { setError(cause.message || '新增失败'); return }
     setNewText('')
     setAddingTo(null)
     refresh()
@@ -105,6 +110,8 @@ export default function ProjectChecklistPage() {
       </div>
 
       <div className="project-checklist-sections">
+        {loading && <div className="empty">正在从工程服务读取清单…</div>}
+        {error && <div className="empty">{error}</div>}
         {sections.map(section => {
           const visibleItems = section.items.filter(entry => {
             const statusMatch = filter === 'all' || entry.status === filter
@@ -176,10 +183,10 @@ export default function ProjectChecklistPage() {
                                 />
                               </label>
                               {entry.custom && (
-                                <button type="button" className="project-checklist-delete" onClick={() => {
-                                  deleteProjectChecklistItem(entry.id)
+                                <button type="button" className="project-checklist-delete" onClick={async () => {
+                                  await deleteProjectChecklistItem(entry.id)
                                   setEditing(null)
-                                  refresh()
+                                  await refresh()
                                 }}>删除这条自定义需求</button>
                               )}
                             </div>

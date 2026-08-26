@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
 import {
   getBrainEntries, getBrainStats, addBrainEntry, deleteBrainEntry,
-  awakenEntry, fadeEntry, getRandomEntry, searchBrain,
+  getRandomEntry, searchBrain,
   getDatesWithEntries, toggleSpecial, getMemoryTides,
 } from './brainService'
 
@@ -36,9 +36,6 @@ const TAG_ICONS = {
   '观点': '💡', '修订': '🔧', '认': '✓', '不认': '✗', '悬置': '⏸',
 }
 
-const STATUS_LABEL = {
-  active: '', faded: 'faded', awakened: 'awakened', archived: 'archived',
-}
 
 export default function BrainPage() {
   const [searchParams] = useSearchParams()
@@ -226,23 +223,10 @@ export default function BrainPage() {
     } catch {}
   }
 
-  async function handleAwaken(id) {
-    try {
-      const updated = await awakenEntry(id)
-      setEntries(prev => prev.map(e => e.id === id ? updated : e))
-    } catch {}
-  }
-
-  async function handleFade(id) {
-    try {
-      const updated = await fadeEntry(id)
-      setEntries(prev => prev.map(e => e.id === id ? updated : e))
-    } catch {}
-  }
-
   async function handleToggleSpecial(id, current) {
     try {
-      const updated = await toggleSpecial(id, !current)
+      const entry = entries.find(item => item.id === id)
+      const updated = await toggleSpecial(id, !current, null, entry)
       setEntries(prev => prev.map(e => e.id === id ? updated : e))
     } catch {}
   }
@@ -411,8 +395,6 @@ export default function BrainPage() {
                 onSelectCategory={selectTidesCategory}
                 entries={entries}
                 onDelete={handleDelete}
-                onAwaken={handleAwaken}
-                onFade={handleFade}
                 onToggleSpecial={handleToggleSpecial}
               />
             </div>
@@ -468,8 +450,6 @@ export default function BrainPage() {
             <DateGroupedEntries
               entries={entries}
               onDelete={handleDelete}
-              onAwaken={handleAwaken}
-              onFade={handleFade}
               onToggleSpecial={handleToggleSpecial}
             />
           )}
@@ -637,7 +617,7 @@ function formatDateDisplay(dateStr) {
   return { month: `${m}月`, day: `${m}/${d}` }
 }
 
-function DateGroupedEntries({ entries, onDelete, onAwaken, onFade, onToggleSpecial }) {
+function DateGroupedEntries({ entries, onDelete, onToggleSpecial }) {
   const groups = groupByDate(entries)
 
   return (
@@ -663,8 +643,6 @@ function DateGroupedEntries({ entries, onDelete, onAwaken, onFade, onToggleSpeci
                   key={entry.id}
                   entry={entry}
                   onDelete={onDelete}
-                  onAwaken={onAwaken}
-                  onFade={onFade}
                   onToggleSpecial={onToggleSpecial}
                 />
               ))}
@@ -676,9 +654,8 @@ function DateGroupedEntries({ entries, onDelete, onAwaken, onFade, onToggleSpeci
   )
 }
 
-function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial }) {
+function CompactEntryStrip({ entry, onDelete, onToggleSpecial }) {
   const [expanded, setExpanded] = useState(false)
-  const isFaded = entry.status === 'faded'
   const time = (() => {
     try {
       const d = new Date(entry.created_at)
@@ -698,7 +675,7 @@ function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial 
     <div
       style={{
         ...styles.stripWrap,
-        opacity: isFaded ? 0.5 : 1,
+        opacity: 1,
         borderLeftColor: tagColor.text,
       }}
       onClick={() => setExpanded(!expanded)}
@@ -709,9 +686,7 @@ function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial 
         </span>
         {entry.is_special && <span style={{ fontSize: 12 }}>⭐</span>}
         {moodEmoji && <span style={{ fontSize: 13 }}>{moodEmoji}</span>}
-        {entry.status && entry.status !== 'active' && (
-          <span style={styles.statusBadge}>{STATUS_LABEL[entry.status]}</span>
-        )}
+        {entry.revision_number > 1 && <span style={styles.statusBadge}>revision {entry.revision_number}</span>}
         <span style={styles.stripTime}>{time}</span>
       </div>
 
@@ -738,11 +713,6 @@ function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial 
             <button onClick={() => onToggleSpecial(entry.id, entry.is_special)} style={styles.actionBtn} title="标记特殊日">
               {entry.is_special ? '⭐' : '☆'}
             </button>
-            {isFaded ? (
-              <button onClick={() => onAwaken(entry.id)} style={styles.actionBtn} title="唤醒">🔔</button>
-            ) : (
-              <button onClick={() => onFade(entry.id)} style={styles.actionBtn} title="淡忘">💤</button>
-            )}
             <button onClick={() => onDelete(entry.id)} className="delete-btn" style={{ fontSize: 12, padding: '2px 6px' }}>×</button>
           </div>
         </div>
@@ -751,7 +721,7 @@ function CompactEntryStrip({ entry, onDelete, onAwaken, onFade, onToggleSpecial 
   )
 }
 
-function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelete, onAwaken, onFade, onToggleSpecial }) {
+function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelete, onToggleSpecial }) {
   const maxCount = Math.max(...data.monthCounts.map(m => m.count), 1)
   const maxCatCount = Math.max(...data.categories.map(c => c.items.length), 1)
   const currentIdx = data.monthCounts.length - 1
@@ -852,8 +822,6 @@ function TidesPanel({ data, selectedCategory, onSelectCategory, entries, onDelet
                     key={entry.id}
                     entry={entry}
                     onDelete={onDelete}
-                    onAwaken={onAwaken}
-                    onFade={onFade}
                     onToggleSpecial={onToggleSpecial}
                   />
                 ))}

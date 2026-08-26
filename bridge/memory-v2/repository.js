@@ -121,6 +121,24 @@ export class SupabaseMemoryV2Repository {
     })
   }
 
+  timeline(actor, { limit = 60, query = '' } = {}) {
+    return this.rpc('memory_v2_timeline', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedActor(actor),
+      p_query: String(query || '').trim().slice(0, 500),
+      p_limit: boundedLimit(limit, 60, 100),
+    })
+  }
+
+  async archive(actor, memoryId) {
+    const payload = await this.rpc('memory_v2_archive', {
+      p_owner_id: this.ownerId,
+      p_actor: fixedActor(actor),
+      p_memory_id: memoryId,
+    })
+    return Array.isArray(payload) ? payload[0] : payload
+  }
+
   approveShared(sourceMemoryId) {
     return this.rpc('memory_v2_approve_shared', {
       p_owner_id: this.ownerId,

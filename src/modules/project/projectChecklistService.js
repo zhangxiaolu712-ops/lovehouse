@@ -185,40 +185,54 @@ function readStore() {
   }
 }
 
-function writeStore(store) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
+async function request(path = '', options = {}, dependencies = {}) {
+  const { getOwnerAccessToken } = await import('../engineering/engineeringService.js')
+  const token = await (dependencies.getAccessToken || getOwnerAccessToken)()
+  const response = await (dependencies.fetchImpl || globalThis.fetch)(`${dependencies.endpoint || '/api/v1/engineering/project-checklist'}${path}`, {
+    ...options, headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok || payload?.ok === false) throw new Error(payload?.error?.message || `施工清单请求失败（HTTP ${response.status}）`)
+  return payload
 }
 
-export function loadProjectChecklist() {
-  const store = readStore()
+function localMigrationItems(store) {
+  const overrides = Object.entries(store.overrides || {}).map(([id, value]) => {
+    const sectionIndex = Number(id.split('-')[1]); return { id, sectionIndex, custom: false, status: value.status || 'todo', note: value.note || '', completedAt: value.completedAt || '' }
+  })
+  return [...overrides, ...(store.custom || [])]
+}
+
+function mergeSections(items) {
+  const byId = new Map((items || []).map(entry => [entry.id, entry]))
   return CHECKLIST_SECTIONS.map((section, sectionIndex) => {
     const baseItems = section.items.map((entry, itemIndex) => {
       const id = `base-${sectionIndex}-${itemIndex}`
-      return { id, ...entry, note: '', completedAt: '', ...(store.overrides?.[id] || {}) }
+      return { id, sectionIndex, ...entry, note: '', completedAt: '', ...(byId.get(id) || {}) }
     })
-    const customItems = (store.custom || []).filter(entry => entry.sectionIndex === sectionIndex)
+    const customItems = (items || []).filter(entry => entry.custom && entry.sectionIndex === sectionIndex)
     return { ...section, sectionIndex, items: [...baseItems, ...customItems] }
   })
 }
 
-export function saveProjectChecklistItem(entry) {
-  const store = readStore()
-  if (entry.id.startsWith('custom-')) {
-    store.custom = (store.custom || []).map(item => item.id === entry.id ? { ...item, ...entry } : item)
-  } else {
-    store.overrides = { ...(store.overrides || {}), [entry.id]: {
-      status: entry.status,
-      note: entry.note || '',
-      completedAt: entry.completedAt || '',
-    }}
+export async function loadProjectChecklist(dependencies) {
+  let payload = await request('', {}, dependencies)
+  if (!payload.local_v1_migrated) {
+    const items = localMigrationItems(readStore())
+    await request('/migrate-local-v1', { method: 'POST', body: JSON.stringify({ items }) }, dependencies)
+    if (typeof window !== 'undefined') window.localStorage.removeItem(STORAGE_KEY)
+    payload = await request('', {}, dependencies)
   }
-  writeStore(store)
+  return mergeSections(payload.items)
 }
 
-export function addProjectChecklistItem(sectionIndex, text) {
-  const store = readStore()
+export function saveProjectChecklistItem(entry, dependencies) {
+  return request(`/items/${encodeURIComponent(entry.id)}`, { method: 'PUT', body: JSON.stringify(entry) }, dependencies)
+}
+
+export async function addProjectChecklistItem(sectionIndex, text, dependencies) {
   const entry = {
-    id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `custom-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`}`,
     sectionIndex,
     text,
     status: 'todo',
@@ -226,14 +240,11 @@ export function addProjectChecklistItem(sectionIndex, text) {
     completedAt: '',
     custom: true,
   }
-  store.custom = [...(store.custom || []), entry]
-  writeStore(store)
+  await saveProjectChecklistItem(entry, dependencies)
   return entry
 }
 
-export function deleteProjectChecklistItem(id) {
-  const store = readStore()
-  if (!id.startsWith('custom-')) return
-  store.custom = (store.custom || []).filter(item => item.id !== id)
-  writeStore(store)
+export function deleteProjectChecklistItem(id, dependencies) {
+  if (!id.startsWith('custom-')) throw new TypeError('Only custom checklist items can be deleted')
+  return request(`/items/${encodeURIComponent(id)}`, { method: 'DELETE' }, dependencies)
 }

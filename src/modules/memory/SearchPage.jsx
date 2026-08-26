@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import LineIcon from '../../shared/LineIcon'
 import { supabase } from '../../core/supabase'
+import { searchMemories } from './memoryService'
 
 // 各数据源的检索配置：表名、内容字段、展示信息
 const SOURCES = [
-  { table: 'memories', fields: ['content', 'category'], icon: '💭', label: '记忆' },
   { table: 'diary', fields: ['title', 'content'], icon: '📖', label: '日记' },
   { table: 'quotes', fields: ['content'], icon: '💬', label: '原句' },
   { table: 'notes', fields: ['content'], icon: '💌', label: '纸条' },
@@ -44,8 +44,9 @@ export default function SearchPage() {
     if (!kw.trim()) return
     setLoading(true)
     setHistory(saveHistory(kw.trim()))
-    const all = await Promise.all(
-      SOURCES.map(async src => {
+    const all = await Promise.all([
+      searchMemories(kw.trim(), { limit: 20 }).then(rows => rows.map(row => ({ ...row, _src: { table: 'memory-v2', icon: '💭', label: '记忆 V2' } }))).catch(() => []),
+      ...SOURCES.map(async src => {
         try {
           const orFilter = src.fields.map(f => `${f}.ilike.%${kw.trim()}%`).join(',')
           const { data } = await supabase
@@ -59,7 +60,7 @@ export default function SearchPage() {
           return []
         }
       }),
-    )
+    ])
     setResults(all.flat().sort((a, b) => new Date(b.created_at) - new Date(a.created_at)))
     setLoading(false)
   }
