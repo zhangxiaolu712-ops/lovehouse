@@ -3,7 +3,7 @@ import { Outlet, NavLink, useLocation } from 'react-router'
 import LineIcon from './LineIcon'
 
 const TABS = [
-  { to: '/chat',     icon: 'chat',     label: '聊天' },
+  { to: '/claude-chat-v1', icon: 'chat', label: '聊天' },
   { to: '/brain',    icon: 'memory',   label: '记忆' },
   { to: '/moments',  icon: 'interact', label: '朋友圈' },
   { to: '/settings', icon: 'settings', label: '设置' },
@@ -11,7 +11,7 @@ const TABS = [
 
 export default function AppShell() {
   const { pathname } = useLocation()
-  const hideNav = pathname === '/chat' || pathname === '/codex' || pathname === '/livingroom' || pathname === '/autobiography'
+  const hideNav = pathname === '/codex-chat-v1' || pathname === '/claude-chat-v1' || pathname === '/livingroom' || pathname === '/autobiography'
 
   useEffect(() => { window.scrollTo(0, 0) }, [pathname])
 

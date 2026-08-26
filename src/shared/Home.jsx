@@ -112,7 +112,10 @@ export default function Home() {
             </div>
 
             <AppIcon to="/livingroom"  icon="message" label="Room" />
-            <AppIcon to="/codex"       icon="terminal" label="Codex" />
+            <AppIcon to="/codex-chat-v1" icon="workbench" label="Codex" />
+            <AppIcon to="/claude-chat-v1" icon="message" label="CC" />
+            <AppIcon to="/memory/gpt" icon="memory" label="G记忆" />
+            <AppIcon to="/project/checklist" icon="project" label="Build" />
             <AppIcon to="/autobiography" icon="edit" label="自传" />
             <AppIcon to="/space/clawd" icon="paw"     label="Clawd" />
             <AppIcon to="/profile"     icon="heart"   label="Us" />
