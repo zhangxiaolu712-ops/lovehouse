@@ -1,22 +1,21 @@
 # LoveHouse 开发日志
 
 > 这个文件记录了 LoveHouse 项目的所有开发步骤和决策。
-> 任何 AI 修改本项目前，必须先读取此文件了解当前状态。
+> 本文件保留身份、项目历史和旧交接信息，按任务需要读取，不是每次施工的默认必读入口。
 
 > [!IMPORTANT]
-> **Codex、Claude Code（CC）及其他开发者共同规则：**修改项目前必须先完整阅读根目录 `PROJECT_RULES.md`，并查看 `docs/changes/` 中最近的变更记录。只要修改了项目文件，结束前必须在 `docs/changes/` 新建本次任务记录，写清楚“做了什么、为什么、验证结果、风险和下一步计划”。当本文件旧说明与 `PROJECT_RULES.md` 冲突时，以 `PROJECT_RULES.md` 为准。
+> **Codex、Claude Code（CC）及其他开发者共同规则：**修改项目前必须先完整阅读根目录 `PROJECT_RULES.md`。本文件、`docs/00_工程边界与资料索引.md`、`docs/changes/` 与 Engineering Workspace 历史资料均按任务需要查询，不默认强制读取。只要修改了项目文件，结束前必须在 `docs/changes/` 新建本次任务记录，写清楚“做了什么、为什么、验证结果、风险和下一步计划”。当本文件旧说明与 `PROJECT_RULES.md` 冲突时，以 `PROJECT_RULES.md` 为准。
 
 ---
 
-## AI 自动读取指令
+## AI 按需读取指引
 
-**每次新对话必须执行以下步骤：**
+以下内容只在当前任务涉及对应领域时使用，不要求每次新对话全部读取：
 
-1. 读取本文件，了解项目状态和身份信息
-2. 生活记忆只通过正式 Memory V2 fixed-actor 能力读取、写入、修订和展开 source；Claude 使用 `space_key='claude'`，GPT 使用 `space_key='gpt'`，Shared 只读取显式 approved 快照。
-3. 工程事实只查询 Engineering Workspace 的 current revision；不要把工程状态写入生活记忆。
-4. 需要旧事实时依次读取 `PROJECT_RULES.md`、`docs/00_工程边界与资料索引.md`、Engineering mainline current revision 和任务相关代码，不再扫描 V1 历史或旧 worktree。
-5. `brain`、`memories` 与 canonical V1 已退出活跃链路；禁止新增 reader、writer 或双写兼容。
+1. 涉及生活记忆时，只通过正式 Memory V2 fixed-actor 能力读取、写入、修订和展开 source；Claude 使用 `space_key='claude'`，GPT 使用 `space_key='gpt'`，Shared 只读取显式 approved 快照。
+2. 涉及工程事实时，以任务相关代码和 Engineering Workspace 的 current revision 为准；不要把工程状态写入生活记忆。
+3. 需要追溯旧工程事实时，按需查询 `docs/00_工程边界与资料索引.md`、相关 Engineering revision 和任务相关代码，不默认扫描历史工程资料、V1 历史或旧 worktree。
+4. `brain`、`memories` 与 canonical V1 已退出活跃链路；禁止新增 reader、writer 或双写兼容。
 
 ### 记忆大类（8 类，2026-07-18 归并）
 
