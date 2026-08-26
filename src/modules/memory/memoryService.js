@@ -1,32 +1,21 @@
-import { supabase } from '../../core/supabase'
+import { archiveMemory, createMemory, listMemoryTimeline } from '../memory-v2/memoryV2Service'
+
+function metaValue(meta, key) { return meta?.[key] ?? meta?.[`legacy_${key}`] }
+function project(item) { const meta = item.metadata || {}; return { id: item.memory_id, content: item.content, category: metaValue(meta, 'category') || metaValue(meta, 'tag') || '日常点滴', level: metaValue(meta, 'level') || '长期', created_at: item.event_time || item.created_at, revision_number: item.revision_number, source_count: item.source_count } }
 
 export async function getMemories({ category, level, limit = 100 } = {}) {
-  let query = supabase.from('memories').select('*').order('created_at', { ascending: false }).limit(limit)
-  if (category) query = query.eq('category', category)
-  if (level) query = query.eq('level', level)
-  const { data, error } = await query
-  if (error) throw error
-  return data
+  const items = (await listMemoryTimeline('claude', { limit })).map(project)
+  return items.filter(item => (!category || item.category === category) && (!level || item.level === level))
 }
 
 export async function searchMemories(keyword, { limit = 50 } = {}) {
-  const { data, error } = await supabase
-    .from('memories')
-    .select('*')
-    .ilike('content', `%${keyword}%`)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-  if (error) throw error
-  return data
+  return listMemoryTimeline('claude', { query: keyword, limit }).then(rows => rows.map(project))
 }
 
 export async function addMemory({ content, category = '日常点滴', level = '短期', importance = 1 }) {
-  const { data, error } = await supabase.from('memories').insert({ content, category, level, importance }).select().single()
-  if (error) throw error
-  return data
+  return createMemory('claude', { content, metadata: { category, level, legacy_importance_retired: importance }, reason: 'owner_frontend_create' })
 }
 
 export async function deleteMemory(id) {
-  const { error } = await supabase.from('memories').delete().eq('id', id)
-  if (error) throw error
+  return archiveMemory('claude', id)
 }

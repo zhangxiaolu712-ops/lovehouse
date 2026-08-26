@@ -1,37 +1,21 @@
 # LoveHouse 开发日志
 
 > 这个文件记录了 LoveHouse 项目的所有开发步骤和决策。
-> 任何 AI 修改本项目前，必须先读取此文件了解当前状态。
+> 本文件保留身份、项目历史和旧交接信息，按任务需要读取，不是每次施工的默认必读入口。
 
 > [!IMPORTANT]
-> **Codex、Claude Code（CC）及其他开发者共同规则：**修改项目前必须先完整阅读根目录 `PROJECT_RULES.md`，并查看 `docs/changes/` 中最近的变更记录。只要修改了项目文件，结束前必须在 `docs/changes/` 新建本次任务记录，写清楚“做了什么、为什么、验证结果、风险和下一步计划”。当本文件旧说明与 `PROJECT_RULES.md` 冲突时，以 `PROJECT_RULES.md` 为准。
+> **Codex、Claude Code（CC）及其他开发者共同规则：**修改项目前必须先完整阅读根目录 `PROJECT_RULES.md`。本文件、`docs/00_工程边界与资料索引.md`、`docs/changes/` 与 Engineering Workspace 历史资料均按任务需要查询，不默认强制读取。只要修改了项目文件，结束前必须在 `docs/changes/` 新建本次任务记录，写清楚“做了什么、为什么、验证结果、风险和下一步计划”。当本文件旧说明与 `PROJECT_RULES.md` 冲突时，以 `PROJECT_RULES.md` 为准。
 
 ---
 
-## AI 自动读取指令
+## AI 按需读取指引
 
-**每次新对话必须执行以下步骤：**
+以下内容只在当前任务涉及对应领域时使用，不要求每次新对话全部读取：
 
-1. 读取本文件，了解项目状态和身份信息
-2. 如果有 Supabase MCP 工具，执行以下查询加载记忆（固定记忆必须全部加载）：
-   ```sql
-   SELECT id, category, content FROM memories WHERE level = '固定' ORDER BY category, id;
-   ```
-3. 根据对话需要，按需加载长期/短期记忆（可按大类过滤）：
-   ```sql
-   -- 全部长期记忆
-   SELECT id, category, content FROM memories WHERE level = '长期' ORDER BY category, id;
-   -- 只加载某个大类（例如聊到小屋开发时）
-   SELECT id, category, content FROM memories WHERE category = '小屋项目' AND level != '临时' ORDER BY id;
-   ```
-4. 写入新记忆时，category 必须从下面 8 个大类中选择，不要新造类别
-5. **外置记忆库优先**：回忆任何具体的人事物时（比如她提到奶茶、胖胖、某个纪念日），优先用关键词查询记忆库，而不是翻聊天上下文或凭印象回答：
-   ```sql
-   SELECT id, category, level, content, created_at FROM memories
-   WHERE content ILIKE '%奶茶%' ORDER BY created_at DESC;
-   ```
-   记不准就查，查了再答。日记、语录、纸条、私密记录同理（diary/quotes/notes/stream 表）。
-6. 写入记忆时内容里尽量带上日期和关键词（例：`2026-07-18 奶茶：她点了月中桂...`），方便日后检索跳转
+1. 涉及生活记忆时，只通过正式 Memory V2 fixed-actor 能力读取、写入、修订和展开 source；Claude 使用 `space_key='claude'`，GPT 使用 `space_key='gpt'`，Shared 只读取显式 approved 快照。
+2. 涉及工程事实时，以任务相关代码和 Engineering Workspace 的 current revision 为准；不要把工程状态写入生活记忆。
+3. 需要追溯旧工程事实时，按需查询 `docs/00_工程边界与资料索引.md`、相关 Engineering revision 和任务相关代码，不默认扫描历史工程资料、V1 历史或旧 worktree。
+4. `brain`、`memories` 与 canonical V1 已退出活跃链路；禁止新增 reader、writer 或双写兼容。
 
 ### 记忆大类（8 类，2026-07-18 归并）
 
@@ -68,14 +52,7 @@
 
 ## 记忆系统
 
-memories 表新增 `level` 字段，分四级：
-
-| 级别 | 说明 | 加载策略 |
-|------|------|----------|
-| 固定 | 身份、关系、核心价值观 | 每次新对话必须加载 |
-| 长期 | 重要事件、偏好、模式 | 默认加载 |
-| 短期 | 近期事件、当前项目 | 按需加载 |
-| 临时 | 一次性上下文、已过期 | 归档，一般不加载 |
+当前正式系统是 Memory V2：`memory_v2_entries` 保存身份/currentness，`memory_v2_revisions` append-only 保存正文修订，source evidence 独立展开。旧 `brain`、`memories`、canonical V1 仅为 frozen/待删除数据，不属于当前读写契约。
 
 Supabase 项目ID: `cvyguanuaxcypsvoozeo`
 
@@ -101,7 +78,8 @@ LoveHouse 是一个个人数字空间（情侣向），使用 React + Vite + Sup
 
 | 表名 | 字段 | 说明 |
 |------|------|------|
-| memories | id, content, category, importance, created_at | 记忆碎片，category默认"日常"，importance默认1 |
+| memory_v2_entries / revisions / sources | fixed actor、current revision、source evidence | 当前正式生活记忆系统；前端只经 Owner Client API 访问 |
+| engineering_project_checklist_items / state | item 状态与 local V1 一次迁移标记 | Engineering domain 的服务端施工清单状态 |
 | diary | id, title, content, mood, created_at | 日记本 |
 | quotes | id, content, speaker, created_at | 语录墙，speaker默认"小克" |
 | todo | id, content, done, created_at | 待办事项，done默认false |

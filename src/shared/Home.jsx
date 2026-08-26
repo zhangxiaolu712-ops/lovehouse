@@ -120,6 +120,8 @@ export default function Home() {
             <AppIcon to="/codex-chat-v1" icon="workbench" label="Codex v1" />
             <AppIcon to="/claude-chat-v1" icon="message" label="Claude v1" />
             <AppIcon to="/engineering" icon="workbench" label="工程区" />
+            <AppIcon to="/project/checklist" icon="project" label="Build" />
+            <AppIcon to="/memory/gpt" icon="memory" label="GPT Memory" />
           </div>
         </div>
       </div>

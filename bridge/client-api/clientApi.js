@@ -2,6 +2,8 @@ import crypto from 'node:crypto'
 
 import { ClientApiError, normalizeClientApiError } from './errors.js'
 import { SCENES } from './personas.js'
+import { installMemoryTimeline } from './memoryTimeline.js'
+import { installProjectChecklistApi } from './projectChecklist.js'
 
 export const CLIENT_API_VERSION = 1
 export const CLIENT_STREAM_EVENTS = Object.freeze([
@@ -233,6 +235,9 @@ export function installClientApi(app, {
   deploymentSha = resolveDeploymentSha(),
   features,
   engineeringMemoryService = null,
+  memoryV2Repository = null,
+  memoryV2Service = null,
+  projectChecklistStore = null,
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
@@ -247,6 +252,11 @@ export function installClientApi(app, {
   const ownerEngineering = engineeringMemoryService?.forActor('owner') || null
 
   app.use('/v1', requestContext, verifyOwner)
+
+  if (memoryV2Repository && memoryV2Service) {
+    installMemoryTimeline(app, { memoryV2Repository, memoryV2Service })
+  }
+  if (projectChecklistStore) installProjectChecklistApi(app, { store: projectChecklistStore })
 
   app.get('/v1/bootstrap', (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
