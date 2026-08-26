@@ -192,3 +192,12 @@ Toy 安全没有完成前，不应扩大公开访问范围。
 
 为避免注意力转移导致漏项：上一轮未标明“已提交 / 已合并 / 已部署”三种状态前，收到新需求时也要先报告上一轮所处阶段。UI、文档等低风险改动不得与数据库迁移、RLS、OAuth、Bridge、VPS 或 Toy 等高风险改动混在同一个 PR。
 - 已向用户说明结果、风险和仍未完成的事项。
+
+## 十一、工程资料归属与清理边界
+
+- `docs/00_工程边界与资料索引.md` 是工程资料长期入口；接班时必须和本文件一起读取。
+- Engineering Workspace 保存详细工程事实、历史 revision、source evidence、部署/故障经验；GitHub / VPS 文档只保留当前规则、架构、规划、索引和与代码变更对应的 change record。
+- 旧 checkout、worktree、release snapshot 与临时 handoff 只作为迁移来源或证据，不自动视为当前事实。
+- 同一工程事实按稳定 `subject_key` 维护 revision history，不采用“一份旧文件 = 一条工程记忆”的导入方式。
+- 清理旧资料前必须先完成 Engineering 迁移、读回验收和 unique orphan 核对；当前生产 release、必要 rollback 和尚未迁移的独有成果不得删除。
+- 工程资料与生活记忆继续严格分流，纯工程事实不得写入 GPT / Claude 的生活 private Memory。
