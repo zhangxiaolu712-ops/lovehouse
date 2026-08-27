@@ -34,6 +34,13 @@ function facadeService(factory) {
   }
 }
 
+function createTestMcpToolHandler(options) {
+  return createMcpToolHandler({
+    engineeringMemoryService: facadeService(() => ({})),
+    ...options,
+  })
+}
+
 function recordingFacade(calls, actor) {
   return {
     async starterPack(input) { calls.push(['starterPack', actor, input]); return { actor, items: [] } },
@@ -86,8 +93,8 @@ test('formal MCP surface is exactly the seven reviewed tools', () => {
   ])
 })
 
-test('schemas stay closed and expose no actor, owner, space or Shared approval controls', () => {
-  const forbidden = /^(actor|author|created_by_actor|owner|owner_id|permission|permissions|space|space_key|namespace|shared_status|approval_status)$/
+test('schemas stay closed and expose only string space routing, never actor or approval controls', () => {
+  const forbidden = /^(actor|author|created_by_actor|owner|owner_id|permission|permissions|space|namespace|shared_status|approval_status)$/
   for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     for (const tool of createMcpToolDefinitions(actor)) {
       const schemas = tool.inputSchema.oneOf || [tool.inputSchema]
@@ -102,7 +109,7 @@ test('schemas stay closed and expose no actor, owner, space or Shared approval c
 test('seven handler routes are thin Memory V2 or fenced LivingRoom calls', async () => {
   const calls = []
   const memoryV2Service = facadeService(actor => recordingFacade(calls, actor))
-  const handler = createMcpToolHandler({
+  const handler = createTestMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryV2Service,
     livingroomRest: livingroomFence(async (method, path, body) => {
@@ -162,7 +169,7 @@ test('GPT and Claude channels select fixed facades and ignore actor spoofing', a
       async recall() { return { mode: 'semantic', items: visible[fixed] } },
       async remember() { return { actor: fixed, memory_id: MEMORY_ID } },
     }))
-    const handler = createMcpToolHandler({
+    const handler = createTestMcpToolHandler({
       actor,
       memoryV2Service,
       livingroomRest: livingroomFence(async () => []),
@@ -172,12 +179,135 @@ test('GPT and Claude channels select fixed facades and ignore actor spoofing', a
       content: 'fixed actor wins',
       actor: forged,
       owner_id: 'forged',
-      space_key: forged,
     }))
     const recalled = JSON.parse(await handler('recall', { query: 'memory', actor: forged }))
     assert.equal(saved.actor, actor)
     assert.equal(recalled.items.some(item => item.space_key === forged), false)
     assert.equal(recalled.items.some(item => item.space_key === 'shared'), true)
+    await assert.rejects(
+      handler('remember', { content: 'cross private', space_key: forged }),
+      error => error.code === 'MCP_MEMORY_SPACE_FORBIDDEN',
+    )
+  }
+})
+
+test('explicit Engineering space uses subject_key and existing Engineering facade semantics', async () => {
+  const calls = []
+  const engineeringMemoryService = facadeService(actor => ({
+    async upsertEngineeringFact(input) {
+      calls.push(['upsert', actor, input])
+      return { action: calls.length === 1 ? 'created' : 'revised', subject_key: input.subjectKey }
+    },
+    async recallEngineering(input) {
+      calls.push(['recall', actor, input])
+      return { mode: 'lexical', items: [{ subject_key: 'runtime.codex' }] }
+    },
+    async openEngineeringFact(subjectKey) {
+      calls.push(['open', actor, subjectKey])
+      return { entry: { subject_key: subjectKey }, revisions: [{ revision_number: 2 }] }
+    },
+    async expandEngineeringSource(sourceId) {
+      calls.push(['source', actor, sourceId])
+      return { source_id: sourceId, quote_text: 'evidence' }
+    },
+  }))
+  const handler = createMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryV2Service: facadeService(() => recordingFacade([], 'gpt')),
+    engineeringMemoryService,
+    livingroomRest: livingroomFence(async () => []),
+  })
+
+  await handler('remember', {
+    content: 'stable fact',
+    subject_key: 'runtime.codex',
+    space_key: 'engineering',
+    sources: [{ source_kind: 'git_commit', quote_text: 'evidence' }],
+  })
+  await handler('revise', {
+    content: 'new revision',
+    subject_key: 'runtime.codex',
+    space_key: 'engineering',
+  })
+  const recalled = JSON.parse(await handler('recall', {
+    query: 'runtime', space_key: 'engineering',
+  }))
+  const opened = JSON.parse(await handler('open_memory', {
+    subject_key: 'runtime.codex', space_key: 'engineering',
+  }))
+  const source = JSON.parse(await handler('open_memory', {
+    source_id: SOURCE_ID, space_key: 'engineering',
+  }))
+
+  assert.equal(recalled.items[0].subject_key, 'runtime.codex')
+  assert.equal(opened.entry.subject_key, 'runtime.codex')
+  assert.equal(opened.revisions[0].revision_number, 2)
+  assert.equal(source.source.quote_text, 'evidence')
+  assert.deepEqual(calls.slice(0, 3), [
+    ['upsert', 'gpt', {
+      content: 'stable fact',
+      sources: [{
+        sourceKind: 'git_commit', locator: undefined, provenance: undefined, quoteText: 'evidence',
+      }],
+      subjectKey: 'runtime.codex',
+    }],
+    ['upsert', 'gpt', { content: 'new revision', subjectKey: 'runtime.codex' }],
+    ['recall', 'gpt', { query: 'runtime', limit: undefined }],
+  ])
+  await assert.rejects(
+    handler('remember', { content: 'missing key', space_key: 'engineering' }),
+    /subject_key is required/,
+  )
+  await assert.rejects(
+    handler('revise', {
+      memory_id: MEMORY_ID,
+      subject_key: 'runtime.codex',
+      content: 'conflict',
+      space_key: 'engineering',
+    }),
+    /not both/,
+  )
+})
+
+test('space policies keep omitted calls actor-private and make Shared explicitly read-only', async () => {
+  for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
+    const calls = []
+    const visible = [
+      candidate({ content: `${actor} private`, space_key: actor }),
+      candidate({ memory_id: '44444444-4444-4444-8444-444444444444', content: 'shared', space_key: 'shared' }),
+    ]
+    const handler = createMcpToolHandler({
+      actor,
+      memoryV2Service: facadeService(fixed => ({
+        ...recordingFacade(calls, fixed),
+        async recall(input) {
+          calls.push(['recall', fixed, input])
+          return { mode: 'semantic', items: visible }
+        },
+      })),
+      engineeringMemoryService: facadeService(() => ({})),
+      livingroomRest: livingroomFence(async () => []),
+    })
+    await handler('remember', { content: 'legacy default' })
+    assert.deepEqual(calls[0], ['remember', actor, { content: 'legacy default' }])
+    const legacyRecall = JSON.parse(await handler('recall', { query: 'legacy default' }))
+    assert.deepEqual(legacyRecall.items.map(item => item.space_key), [actor, 'shared'])
+    const sharedRecall = JSON.parse(await handler('recall', {
+      query: 'shared only', space_key: 'shared',
+    }))
+    assert.deepEqual(sharedRecall.items.map(item => item.space_key), ['shared'])
+    await assert.rejects(
+      handler('remember', { content: 'no direct shared write', space_key: 'shared' }),
+      error => error.code === 'MCP_MEMORY_SPACE_FORBIDDEN',
+    )
+    await assert.rejects(
+      handler('remember', { content: 'unknown', space_key: 'future_space' }),
+      error => error.code === 'MCP_MEMORY_SPACE_UNSUPPORTED',
+    )
+    await assert.rejects(
+      handler('remember', { content: 'ordinary', subject_key: 'not.allowed' }),
+      /only valid for Engineering/,
+    )
   }
 })
 
@@ -205,7 +335,7 @@ test('MCP recall uses Memory V2 semantic mode and preserves current/Shared visib
     embedding: { async embed() { return { vector: [0.1], model: 'test' } } },
     clock: () => NOW,
   })
-  const handler = createMcpToolHandler({
+  const handler = createTestMcpToolHandler({
     actor: MEMORY_ACTORS.CLAUDE,
     memoryV2Service: service,
     livingroomRest: livingroomFence(async () => []),
@@ -248,7 +378,7 @@ test('Ollama failure falls back at Memory V2 and does not block remember, revise
     async recordRecall() {},
   }
   const service = new MemoryV2Service({ repository, embedding, clock: () => NOW })
-  const handler = createMcpToolHandler({
+  const handler = createTestMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryV2Service: service,
     livingroomRest: livingroomFence(async (method, _path, body) => {
@@ -285,7 +415,7 @@ test('open_memory keeps history descriptors separate from explicit source expans
       return { source_id: SOURCE_ID, available: true, quote_text: 'selected quote' }
     },
   }))
-  const handler = createMcpToolHandler({
+  const handler = createTestMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryV2Service,
     livingroomRest: livingroomFence(async () => []),
@@ -303,7 +433,7 @@ test('open_memory keeps history descriptors separate from explicit source expans
 test('LivingRoom sender stays fixed and upstream errors remain explicit', async () => {
   for (const [actor, sender] of [['gpt', 'GPT'], ['claude', 'CC']]) {
     const restCalls = []
-    const handler = createMcpToolHandler({
+    const handler = createTestMcpToolHandler({
       actor,
       memoryV2Service: facadeService(() => ({})),
       livingroomRest: livingroomFence(async (...args) => {
@@ -315,7 +445,7 @@ test('LivingRoom sender stays fixed and upstream errors remain explicit', async 
     assert.deepEqual(restCalls[0], ['POST', 'livingroom', { sender, message: 'hello' }])
   }
 
-  const failed = createMcpToolHandler({
+  const failed = createTestMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryV2Service: facadeService(() => ({})),
     livingroomRest: livingroomFence(async () => ({ status: 401, error: { message: 'unauthorized' } })),
@@ -331,7 +461,7 @@ test('LivingRoom sender stays fixed and upstream errors remain explicit', async 
 })
 
 test('LivingRoom empty reads are real and empty writes cannot become fake success', async () => {
-  const handler = createMcpToolHandler({
+  const handler = createTestMcpToolHandler({
     actor: MEMORY_ACTORS.GPT,
     memoryV2Service: facadeService(() => ({})),
     livingroomRest: livingroomFence(async () => []),
@@ -345,7 +475,7 @@ test('LivingRoom empty reads are real and empty writes cannot become fake succes
 
 test('MCP refuses a V1 service or raw LivingRoom REST function', () => {
   assert.throws(
-    () => createMcpToolHandler({
+    () => createTestMcpToolHandler({
       actor: MEMORY_ACTORS.GPT,
       memoryV2Service: { recall() {} },
       livingroomRest: livingroomFence(async () => []),
@@ -353,7 +483,7 @@ test('MCP refuses a V1 service or raw LivingRoom REST function', () => {
     /MemoryV2Service/
   )
   assert.throws(
-    () => createMcpToolHandler({
+    () => createTestMcpToolHandler({
       actor: MEMORY_ACTORS.GPT,
       memoryV2Service: facadeService(() => ({})),
       livingroomRest: async () => [],
