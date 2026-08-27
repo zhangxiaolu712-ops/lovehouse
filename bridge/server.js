@@ -52,6 +52,11 @@ import {
 import { resolveBridgePort } from './runtimeConfig.js'
 import { ProjectChecklistStore } from './client-api/projectChecklist.js'
 import { createRuntimeStatusProvider } from './client-api/runtimeStatus.js'
+import {
+  createR2MediaService,
+  installMediaRoutes,
+  resolveR2MediaConfig,
+} from './media/index.js'
 
 const require = createRequire(import.meta.url)
 const pm2Client = require('/usr/lib/node_modules/pm2')
@@ -117,6 +122,8 @@ const MEMORY_DREAM_INTERVAL_MS = Math.min(
   3_600_000
 )
 const SYSTEM_PROMPT = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
+const r2MediaConfig = resolveR2MediaConfig()
+const r2MediaService = createR2MediaService({ config: r2MediaConfig })
 
 const rateMap = new Map()
 function checkRate(id, maximum = 30, windowMs = 60_000) {
@@ -446,6 +453,11 @@ app.post('/livingroom', verifyLivingroom, async (req, res) => {
   }
 })
 
+installMediaRoutes(app, {
+  verifyOwner: verifyOwnerBearer,
+  mediaService: r2MediaService,
+})
+
 app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
   try {
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 1), 100)
@@ -522,6 +534,9 @@ app.get('/health', (_req, res) => {
     memory_ranking_profile: MEMORY_RANKING_PROFILE,
     memory_writes_enabled: memoryService.writeEnabled,
     database_migration: MEMORY_SYSTEM_ENABLED ? 'expected' : 'not_applied',
+    r2_media: r2MediaService.available ? 'available' : 'unavailable',
+    r2_media_max_bytes: r2MediaService.maxBytes,
+    r2_media_url_ttl_seconds: r2MediaService.urlTtlSeconds,
   })
 })
 
