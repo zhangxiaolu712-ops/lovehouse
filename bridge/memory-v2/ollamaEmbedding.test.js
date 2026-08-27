@@ -40,7 +40,6 @@ test('Ollama adapter calls /api/embed and returns only a finite configured vecto
     error: null,
   })
 })
-
 test('invalid vectors and network failures expose lexical fallback status', async () => {
   const malformed = new OllamaEmbeddingAdapter({
     url: 'http://ollama.example.invalid:11434/api/embed',
@@ -92,4 +91,13 @@ test('configuration stays in environment and dimensions fail closed at 1536', ()
     error => error instanceof MemoryV2EmbeddingError
       && error.code === 'MEMORY_V2_EMBEDDING_DIMENSIONS_INVALID'
   )
+})
+
+test('long-running backfill timeout remains bounded', () => {
+  const adapter = new OllamaEmbeddingAdapter({
+    url: 'http://127.0.0.1:11434',
+    model: 'qwen3-embedding:4b',
+    timeoutMs: 180_000,
+  })
+  assert.equal(adapter.timeoutMs, 120_000)
 })

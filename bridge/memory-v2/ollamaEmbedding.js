@@ -1,4 +1,5 @@
 const DEFAULT_TIMEOUT_MS = 8_000
+const MAX_TIMEOUT_MS = 120_000
 const MAX_INPUT_CHARS = 12_000
 
 export class MemoryV2EmbeddingError extends Error {
@@ -8,7 +9,6 @@ export class MemoryV2EmbeddingError extends Error {
     this.code = code
   }
 }
-
 function normalizeDimensions(value) {
   const dimensions = Number.parseInt(value, 10)
   if (dimensions !== 1536) {
@@ -71,7 +71,7 @@ export class OllamaEmbeddingAdapter {
     this.dimensions = normalizeDimensions(dimensions)
     this.timeoutMs = Math.min(
       Math.max(Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS, 500),
-      30_000
+      MAX_TIMEOUT_MS
     )
     this.fetchImpl = fetchImpl
     this.clock = clock
