@@ -44,6 +44,7 @@ async function startHarness(t, {
     codex: fakeAdapter('codex'),
   },
   engineeringMemoryService = null,
+  runtimeStatusProvider = null,
 } = {}) {
   const app = express()
   app.use(express.json())
@@ -63,6 +64,7 @@ async function startHarness(t, {
     deploymentSha: 'a'.repeat(40),
     features: { memory: true, livingroom: true },
     engineeringMemoryService,
+    runtimeStatusProvider,
   })
   const server = http.createServer(app)
   server.listen(0, '127.0.0.1')
@@ -177,6 +179,40 @@ test('all v1 routes require the existing owner bearer boundary with a uniform er
   assert.equal(payload.error.code, 'AUTH_REQUIRED')
   assert.equal(payload.error.stage, 'auth')
   assert.match(payload.error.request_id, /^[0-9a-f-]{36}$/i)
+})
+
+test('runtime status is Owner-only and returns the provider safe snapshot', async t => {
+  const runtime = {
+    version: 1,
+    observed_at: '2026-08-27T12:00:00.000Z',
+    daemon: { count: 1, pid: 684943, uptime_seconds: 3600, systemd_managed: true },
+    services: [{
+      name: 'lovehouse', label: 'Bridge', status: 'online', health: 'ok', pid: 686862,
+      port: 3000, release: '22df726', uptime_seconds: 120, restart_count: 0,
+      last_started_at: '2026-08-27T11:58:00.000Z',
+    }],
+  }
+  const base = await startHarness(t, {
+    runtimeStatusProvider: { async snapshot() { return runtime } },
+  })
+
+  assert.equal((await fetch(`${base}/v1/runtime-status`)).status, 401)
+  const response = await fetch(`${base}/v1/runtime-status`, { headers: authHeaders() })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  const payload = await response.json()
+  assert.deepEqual(payload.runtime, runtime)
+})
+
+test('runtime status failures are sanitized', async t => {
+  const base = await startHarness(t, {
+    runtimeStatusProvider: { async snapshot() { throw new Error('secret PM2 path') } },
+  })
+  const response = await fetch(`${base}/v1/runtime-status`, { headers: authHeaders() })
+  assert.equal(response.status, 503)
+  const payload = await response.json()
+  assert.equal(payload.error.code, 'RUNTIME_STATUS_UNAVAILABLE')
+  assert.equal(JSON.stringify(payload).includes('secret PM2 path'), false)
 })
 
 test('Owner Client API exposes Engineering Memory without accepting an actor from the client', async t => {

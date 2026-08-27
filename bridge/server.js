@@ -1,5 +1,6 @@
 import cors from 'cors'
 import express from 'express'
+import { createRequire } from 'node:module'
 
 import {
   installMcpOAuth,
@@ -50,6 +51,10 @@ import {
 } from './client-api/providerAdapters.js'
 import { resolveBridgePort } from './runtimeConfig.js'
 import { ProjectChecklistStore } from './client-api/projectChecklist.js'
+import { createRuntimeStatusProvider } from './client-api/runtimeStatus.js'
+
+const require = createRequire(import.meta.url)
+const pm2Client = require('/usr/lib/node_modules/pm2')
 
 const app = express()
 const BRIDGE_STARTED_AT = new Date().toISOString()
@@ -200,6 +205,17 @@ const engineeringMemoryService = new EngineeringMemoryService({
   repository: memoryV2Repository,
 })
 const projectChecklistStore = new ProjectChecklistStore({ rest: supabaseRest })
+const runtimeStatusProvider = createRuntimeStatusProvider({
+  listProcesses: () => new Promise((resolve, reject) => {
+    pm2Client.connect(error => {
+      if (error) return reject(error)
+      pm2Client.list((listError, rows) => {
+        pm2Client.disconnect()
+        return listError ? reject(listError) : resolve(rows)
+      })
+    })
+  }),
+})
 const canonicalMemoryRepository = new SupabaseMemoryRepository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
@@ -395,6 +411,7 @@ installClientApi(app, {
   memoryV2Repository,
   memoryV2Service,
   projectChecklistStore,
+  runtimeStatusProvider,
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {
