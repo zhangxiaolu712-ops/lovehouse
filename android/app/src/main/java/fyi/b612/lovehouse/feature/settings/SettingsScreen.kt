@@ -29,16 +29,16 @@ fun SettingsScreen(
             .padding(horizontal = LoveHouseSpacing.Page, vertical = LoveHouseSpacing.XLarge),
         verticalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Large),
     ) {
-        SectionLabel("House controls")
-        Text("Settings", style = MaterialTheme.typography.headlineMedium)
+        SectionLabel("小屋控制")
+        Text("设置", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Only the native shell settings live here for now.",
+            "这里暂时只放原生小屋自己的设置。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         LoveHouseCard(modifier = Modifier.fillMaxWidth()) {
-            Text("Native", style = MaterialTheme.typography.titleMedium)
+            Text("原生能力", style = MaterialTheme.typography.titleMedium)
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
             Row(
                 modifier = Modifier
@@ -49,14 +49,14 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Native Lab", style = MaterialTheme.typography.titleLarge)
+                    Text("原生能力测试", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "A quiet checklist for device capabilities.",
+                        "逐项点亮这台设备能为 LoveHouse 做的事。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                StatusPill("Phase 0")
+                StatusPill("阶段 0")
             }
         }
     }

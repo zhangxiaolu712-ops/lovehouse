@@ -79,10 +79,10 @@ private fun LoveHouseContent(
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Chat.deepLink }),
         ) {
             PlaceholderScreen(
-                eyebrow = "Conversation room",
-                title = "Chat",
-                message = "The native chat contract will connect here later. No Claude, Codex or web chat has been moved.",
-                status = "Not connected",
+                eyebrow = "对话房间",
+                title = "聊天",
+                message = "原生聊天契约会在后续阶段接入，这里暂时没有搬入 Claude、Codex 或现有网页聊天。",
+                status = "暂未连接",
             )
         }
 
@@ -91,10 +91,10 @@ private fun LoveHouseContent(
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Memory.deepLink }),
         ) {
             PlaceholderScreen(
-                eyebrow = "Memory room",
-                title = "Memory",
-                message = "Memory V2 remains on the server. This room is only a native doorway for a later phase.",
-                status = "Backend untouched",
+                eyebrow = "记忆房间",
+                title = "记忆",
+                message = "Memory V2 仍留在服务端，这里只是为后续阶段准备的原生入口。",
+                status = "后端未改动",
             )
         }
 
@@ -103,10 +103,10 @@ private fun LoveHouseContent(
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Engineering.deepLink }),
         ) {
             PlaceholderScreen(
-                eyebrow = "Workshop",
-                title = "Engineering",
-                message = "Subject, revision and source will arrive through a stable client contract—not a copied web page.",
-                status = "Shell only",
+                eyebrow = "工程工作台",
+                title = "工程",
+                message = "工程主题、修订和来源以后会通过稳定客户端契约接入，而不是复制一份网页。",
+                status = "仅有原生壳",
             )
         }
 
@@ -143,7 +143,14 @@ private fun LoveHouseNavigationBar(
                 selected = destination == selected,
                 onClick = { onNavigate(destination) },
                 icon = { NavGlyph(destination.glyph, destination == selected) },
-                label = { Text(destination.label, maxLines = 1) },
+                label = {
+                    Text(
+                        text = destination.label,
+                        maxLines = 1,
+                        softWrap = false,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                },
                 alwaysShowLabel = true,
                 colors = NavigationBarItemDefaults.colors(
                     indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),

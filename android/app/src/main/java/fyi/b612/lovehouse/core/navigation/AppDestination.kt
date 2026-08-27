@@ -7,12 +7,12 @@ enum class AppDestination(
     val deepLink: String,
     val isPrimary: Boolean,
 ) {
-    Home("home", "Home", "H", "lovehouse://home", true),
-    Chat("chat", "Chat", "C", "lovehouse://chat", true),
-    Memory("memory", "Memory", "M", "lovehouse://memory", true),
-    Engineering("engineering", "Engineering", "E", "lovehouse://engineering", true),
-    Settings("settings", "Settings", "S", "lovehouse://settings", true),
-    NativeLab("settings/native-lab", "Native Lab", "NL", "lovehouse://settings/native-lab", false),
+    Home("home", "首页", "家", "lovehouse://home", true),
+    Chat("chat", "聊天", "聊", "lovehouse://chat", true),
+    Memory("memory", "记忆", "忆", "lovehouse://memory", true),
+    Engineering("engineering", "工程", "工", "lovehouse://engineering", true),
+    Settings("settings", "设置", "设", "lovehouse://settings", true),
+    NativeLab("settings/native-lab", "原生能力测试", "验", "lovehouse://settings/native-lab", false),
     ;
 
     companion object {

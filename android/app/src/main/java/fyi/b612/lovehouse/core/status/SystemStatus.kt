@@ -8,9 +8,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 enum class SystemReadiness(val label: String) {
-    Ready("Ready"),
-    Planned("Planned"),
-    Unavailable("Unavailable"),
+    Ready("可使用"),
+    Planned("待接入"),
+    Unavailable("不可用"),
 }
 
 data class SystemStatus(

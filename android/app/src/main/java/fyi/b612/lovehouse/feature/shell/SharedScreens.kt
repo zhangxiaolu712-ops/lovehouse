@@ -62,7 +62,7 @@ fun LoveHouseLaunchScreen(modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.displaySmall,
         )
         Text(
-            text = "A little house, waking up.",
+            text = "一座正在醒来的小屋。",
             modifier = Modifier.padding(top = LoveHouseSpacing.Small),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -88,12 +88,12 @@ fun PlaceholderScreen(
         Text(title, style = MaterialTheme.typography.headlineMedium)
         StatusPill(status)
         EmptyState(
-            title = "This room has its shape.",
+            title = "这个房间已经有轮廓啦。",
             message = message,
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            text = "Phase 0 keeps the room quiet on purpose—no web page has been moved in yet.",
+            text = "阶段 0 特意让这里保持安静，还没有搬入任何网页页面。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

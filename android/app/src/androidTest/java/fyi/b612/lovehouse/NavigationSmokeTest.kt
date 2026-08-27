@@ -14,17 +14,17 @@ class NavigationSmokeTest {
     @Test
     fun fiveRoomsAndNativeLabAreReachable() {
         composeRule.waitUntil(timeoutMillis = 3_000) {
-            runCatching { composeRule.onNodeWithText("Home").fetchSemanticsNode() }.isSuccess
+            runCatching { composeRule.onNodeWithText("首页").fetchSemanticsNode() }.isSuccess
         }
 
-        listOf("Chat", "Memory", "Engineering", "Settings").forEach { label ->
+        listOf("聊天", "记忆", "工程", "设置").forEach { label ->
             composeRule.onNodeWithText(label).performClick()
             composeRule.onNodeWithText(label).assertIsDisplayed()
         }
 
-        composeRule.onNodeWithText("Native Lab").performClick()
-        composeRule.onNodeWithText("Native Lab").assertIsDisplayed()
-        composeRule.onNodeWithText("Photos").assertIsDisplayed()
-        composeRule.onNodeWithText("Deep Link").assertIsDisplayed()
+        composeRule.onNodeWithText("原生能力测试").performClick()
+        composeRule.onNodeWithText("原生能力测试").assertIsDisplayed()
+        composeRule.onNodeWithText("照片").assertIsDisplayed()
+        composeRule.onNodeWithText("深链").assertIsDisplayed()
     }
 }

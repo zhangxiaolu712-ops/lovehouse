@@ -33,19 +33,19 @@ fun HomeScreen(modifier: Modifier = Modifier) {
             .padding(horizontal = LoveHouseSpacing.Page, vertical = LoveHouseSpacing.XLarge),
         verticalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Large),
     ) {
-        SectionLabel("Native shell · phase 0")
-        Text("The house is awake.", style = MaterialTheme.typography.displaySmall)
+        SectionLabel("原生小屋 · 阶段 0")
+        Text("小屋醒来啦。", style = MaterialTheme.typography.displaySmall)
         Text(
-            "Five quiet rooms, one native foundation. We will light them one by one.",
+            "五个安静的房间，共用一套原生地基。以后再一盏一盏地点亮。",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        StatusPill("Shell ready")
+        StatusPill("原生壳已就绪")
 
         LoveHouseCard(modifier = Modifier.fillMaxWidth()) {
-            Text("Today in LoveHouse", style = MaterialTheme.typography.titleLarge)
+            Text("今天的 LoveHouse", style = MaterialTheme.typography.titleLarge)
             Text(
-                "No HTML has been moved in. Navigation, deep links and native capability contracts are standing on their own.",
+                "没有搬入任何网页页面，导航、深链和原生能力契约已经独立站稳。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -53,9 +53,9 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                MiniRoom("5", "rooms")
-                MiniRoom("9", "native labs")
-                MiniRoom("0", "backend calls")
+                MiniRoom("5", "房间")
+                MiniRoom("9", "原生能力")
+                MiniRoom("0", "后端调用")
             }
         }
     }
