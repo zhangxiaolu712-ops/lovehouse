@@ -1,3 +1,5 @@
+import { optionalImportance } from './importance.js'
+
 const ACTORS = new Set(['gpt', 'claude'])
 const RESERVED_FIELDS = new Set([
   'owner', 'owner_id', 'actor', 'space', 'space_key', 'scope',
@@ -105,8 +107,12 @@ function normalizeOptions(input, { partial = false } = {}) {
     options.metadata = mergedMetadata
   }
   if (input.eventTime !== undefined) options.event_time = input.eventTime
-  if (input.humanImportance !== undefined) options.human_importance = input.humanImportance
-  if (input.aiImportance !== undefined) options.ai_importance = input.aiImportance
+  if (input.humanImportance !== undefined) {
+    options.human_importance = optionalImportance(input.humanImportance, 'human_importance')
+  }
+  if (input.aiImportance !== undefined) {
+    options.ai_importance = optionalImportance(input.aiImportance, 'ai_importance')
+  }
   if (input.reason !== undefined) options.reason = String(input.reason).slice(0, 1000)
   if (input.supersedesMemoryId !== undefined) options.supersedes_memory_id = input.supersedesMemoryId
   const sources = normalizeSources(input.sources)

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import { createLivingroomRest } from '../livingroom.js'
 import { MEMORY_ACTORS } from '../memory/index.js'
-import { MemoryV2Service } from '../memory-v2/index.js'
+import { EngineeringMemoryService, MemoryV2Service } from '../memory-v2/index.js'
 import {
   createMcpToolDefinitions,
   createMcpToolHandler,
@@ -104,6 +104,51 @@ test('schemas stay closed and expose only string space routing, never actor or a
       }
     }
   }
+})
+
+test('remember and revise expose importance as optional 0-5 integers', () => {
+  const definitions = createMcpToolDefinitions(MEMORY_ACTORS.GPT)
+  for (const name of ['remember', 'revise']) {
+    const properties = definitions.find(tool => tool.name === name).inputSchema.properties
+    for (const field of ['human_importance', 'ai_importance']) {
+      assert.deepEqual(properties[field], { type: 'integer', minimum: 0, maximum: 5 })
+      assert.equal(definitions.find(tool => tool.name === name).inputSchema.required.includes(field), false)
+    }
+  }
+})
+
+test('private and Engineering remember/revise reject invalid importance before persistence', async () => {
+  const calls = []
+  const repository = {
+    async remember(...args) { calls.push(['remember', ...args]); return {} },
+    async revise(...args) { calls.push(['revise', ...args]); return {} },
+    async upsertEngineering(...args) { calls.push(['engineering', ...args]); return {} },
+  }
+  const handler = createMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryV2Service: new MemoryV2Service({ repository }),
+    engineeringMemoryService: new EngineeringMemoryService({ repository }),
+    livingroomRest: livingroomFence(async () => []),
+  })
+  const writes = [
+    ['remember', { content: 'private remember', human_importance: 0.5 }],
+    ['revise', { memory_id: MEMORY_ID, content: 'private revise', ai_importance: 3.2 }],
+    ['remember', {
+      subject_key: 'runtime.remember', space_key: 'engineering', content: 'engineering remember',
+      human_importance: 0.5,
+    }],
+    ['revise', {
+      subject_key: 'runtime.remember', space_key: 'engineering', content: 'engineering revise',
+      ai_importance: 3.2,
+    }],
+  ]
+  for (const [name, args] of writes) {
+    await assert.rejects(
+      handler(name, args),
+      /(?:human|ai)_importance must be an integer between 0 and 5/,
+    )
+  }
+  assert.deepEqual(calls, [])
 })
 
 test('seven handler routes are thin Memory V2 or fenced LivingRoom calls', async () => {

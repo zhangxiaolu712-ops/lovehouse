@@ -1,4 +1,5 @@
 import { formatCurrentTime } from './service.js'
+import { optionalImportance } from './importance.js'
 
 const ENGINEERING_ACTORS = new Set(['gpt', 'claude', 'codex', 'owner'])
 const RESERVED_FIELDS = new Set([
@@ -61,8 +62,12 @@ function normalizeUpsert(input) {
   const options = {}
   if (metadataSupplied) options.metadata = input.metadata
   if (input.eventTime !== undefined) options.event_time = input.eventTime
-  if (input.humanImportance !== undefined) options.human_importance = input.humanImportance
-  if (input.aiImportance !== undefined) options.ai_importance = input.aiImportance
+  if (input.humanImportance !== undefined) {
+    options.human_importance = optionalImportance(input.humanImportance, 'human_importance')
+  }
+  if (input.aiImportance !== undefined) {
+    options.ai_importance = optionalImportance(input.aiImportance, 'ai_importance')
+  }
   if (input.reason !== undefined) options.reason = String(input.reason).slice(0, 1000)
   const sources = normalizeSources(input.sources)
   if (sources !== undefined) options.sources = sources
