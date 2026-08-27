@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 import {
   MobileBadge,
   MobileCard,
@@ -5,6 +7,7 @@ import {
   MobilePageHeader,
   MobileSection,
 } from '../../shared/MobileUI'
+import { getRuntimeStatus } from './runtimeStatusService'
 
 const URLS = [
   {
@@ -45,6 +48,17 @@ const INFRA = [
 ]
 
 export default function StatusPage() {
+  const [runtime, setRuntime] = useState(null)
+  const [runtimeError, setRuntimeError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    getRuntimeStatus()
+      .then(value => { if (active) setRuntime(value) })
+      .catch(error => { if (active) setRuntimeError(error.message) })
+    return () => { active = false }
+  }, [])
+
   return (
     <MobilePage className="status-page">
       <MobilePageHeader title="Config" icon="workbench" />
@@ -80,6 +94,31 @@ export default function StatusPage() {
             <p>{service.desc}</p>
           </MobileCard>
         ))}
+      </MobileSection>
+
+      <MobileSection title="Runtime v1 · Read only">
+        {runtimeError && <MobileCard><p>{runtimeError}</p></MobileCard>}
+        {!runtime && !runtimeError && <MobileCard><p>正在读取 Runtime 状态…</p></MobileCard>}
+        {runtime && (
+          <>
+            <MobileCard className="status-infra-card">
+              <div className="status-infra-row"><strong>PM2 daemon</strong><span>{runtime.daemon.count === 1 ? 'single' : runtime.daemon.count} · PID {runtime.daemon.pid || 'unavailable'}</span></div>
+              <div className="status-infra-row"><strong>systemd</strong><span>{runtime.daemon.systemd_managed ? 'pm2-root.service' : 'unavailable'}</span></div>
+              <div className="status-infra-row"><strong>uptime</strong><span>{runtime.daemon.uptime_seconds ?? 'unavailable'}s</span></div>
+            </MobileCard>
+            {runtime.services.map(service => (
+              <MobileCard key={service.name} className="status-service-card">
+                <div className="status-card-title-row">
+                  <h3>{service.label}</h3>
+                  <MobileBadge tone={service.status === 'online' && service.health === 'ok' ? 'green' : 'gold'}>{service.status}</MobileBadge>
+                </div>
+                <p>PID {service.pid || 'unavailable'} · port {service.port} · health {service.health}</p>
+                <p>release {service.release || 'unavailable'} · restarts {service.restart_count}</p>
+                <p>started {service.last_started_at || 'unavailable'} · uptime {service.uptime_seconds ?? 'unavailable'}s</p>
+              </MobileCard>
+            ))}
+          </>
+        )}
       </MobileSection>
 
       <MobileSection title="Infrastructure">

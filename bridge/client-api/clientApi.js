@@ -238,6 +238,7 @@ export function installClientApi(app, {
   memoryV2Repository = null,
   memoryV2Service = null,
   projectChecklistStore = null,
+  runtimeStatusProvider = null,
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
@@ -250,6 +251,9 @@ export function installClientApi(app, {
     throw new TypeError('Client API Engineering Memory requires a fixed-actor service')
   }
   const ownerEngineering = engineeringMemoryService?.forActor('owner') || null
+  if (runtimeStatusProvider && typeof runtimeStatusProvider.snapshot !== 'function') {
+    throw new TypeError('Client API runtime status provider is invalid')
+  }
 
   app.use('/v1', requestContext, verifyOwner)
 
@@ -291,6 +295,22 @@ export function installClientApi(app, {
       personas,
     })
   })
+
+  if (runtimeStatusProvider) {
+    app.get('/v1/runtime-status', async (req, res) => {
+      try {
+        const runtime = await runtimeStatusProvider.snapshot()
+        res.setHeader('Cache-Control', 'no-store')
+        return res.json({ ok: true, request_id: req.clientRequestId, runtime })
+      } catch {
+        return sendJsonError(res, new ClientApiError(
+          'RUNTIME_STATUS_UNAVAILABLE',
+          'Runtime status is currently unavailable',
+          { stage: 'runtime', status: 503, retryable: true },
+        ), req.clientRequestId)
+      }
+    })
+  }
 
   app.get('/v1/personas', (req, res) => {
     res.setHeader('Cache-Control', 'no-store')
