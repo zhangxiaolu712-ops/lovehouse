@@ -25,12 +25,22 @@ function recordingMemoryV2Service(calls) {
   }
 }
 
+function recordingEngineeringMemoryService(calls) {
+  return {
+    forActor(actor) {
+      calls.push(['forEngineeringActor', actor])
+      return {}
+    },
+  }
+}
+
 for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
   test(`${expectedActor} channel exposes exactly seven tools and fixes its Memory V2 actor`, async () => {
     const calls = []
     const channel = createMcpChannel({
       actor: expectedActor,
       memoryV2Service: recordingMemoryV2Service(calls),
+      engineeringMemoryService: recordingEngineeringMemoryService(calls),
       livingroomRest: emptyLivingroomFence(),
     })
     const forgedActor = expectedActor === MEMORY_ACTORS.GPT
@@ -49,7 +59,6 @@ for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     await channel.callTool('remember', {
       content: 'server actor wins',
       actor: forgedActor,
-      space_key: forgedActor,
     }, {
       body: { actor: forgedActor },
       query: { actor: forgedActor },
@@ -58,8 +67,8 @@ for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     await channel.callTool('recall', { query: 'rose', actor: forgedActor })
 
     assert.equal(channel.actor, expectedActor)
-    assert.deepEqual(calls.map(call => call[1]), [expectedActor, expectedActor, expectedActor])
-    assert.equal(calls[1][2].actor, undefined)
-    assert.equal(calls[1][2].space_key, undefined)
+    assert.deepEqual(calls.map(call => call[1]), [expectedActor, expectedActor, expectedActor, expectedActor])
+    assert.equal(calls[2][2].actor, undefined)
+    assert.equal(calls[2][2].space_key, undefined)
   })
 }

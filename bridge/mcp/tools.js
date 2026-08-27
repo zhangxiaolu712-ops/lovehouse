@@ -1,5 +1,6 @@
 import { MEMORY_ACTORS } from '../memory/index.js'
 import { isLivingroomRest } from '../livingroom.js'
+import { createMemorySpaceRouter } from './spacePolicy.js'
 
 export const MCP_TOOL_ROUTES = Object.freeze({
   wake_up: 'memory-v2.starterPack',
@@ -13,6 +14,8 @@ export const MCP_TOOL_ROUTES = Object.freeze({
 
 const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
 const uuidField = { type: 'string', pattern: UUID_PATTERN }
+const spaceKeyField = { type: 'string', minLength: 1, maxLength: 100 }
+const subjectKeyField = { type: 'string', minLength: 1, maxLength: 200 }
 
 const closedObject = properties => ({
   type: 'object',
@@ -90,10 +93,12 @@ export function createMcpToolDefinitions(actor) {
     },
     {
       name: 'remember',
-      description: `记住一件事。最少只需 content；owner、actor 与 private space 由服务端固定为 ${actor}。`,
+      description: `记住一件事。最少只需 content；不传 space_key 时使用当前 ${actor} private space。Engineering 必须显式传 space_key 与稳定 subject_key。`,
       inputSchema: {
         ...closedObject({
           content: { type: 'string', minLength: 1, maxLength: 50000 },
+          space_key: spaceKeyField,
+          subject_key: subjectKeyField,
           ...optionalMemoryFields,
         }),
         required: ['content'],
@@ -101,41 +106,45 @@ export function createMcpToolDefinitions(actor) {
     },
     {
       name: 'recall',
-      description: '召回相关 Memory V2。语义检索可用时使用 semantic，不可用时由 Memory V2 自动 lexical fallback；MCP 不实现第二套搜索。',
+      description: '召回相关 Memory。省略 space_key 时保持当前 channel private 语义；显式 space_key 由统一 policy 路由。',
       inputSchema: {
         ...closedObject({
           query: { type: 'string', minLength: 1, maxLength: 1000 },
           limit: { type: 'integer', minimum: 1, maximum: 10 },
+          space_key: spaceKeyField,
         }),
         required: ['query'],
       },
     },
     {
       name: 'revise',
-      description: '修订一条自己的私有 Memory V2；旧 revision 与 currentness 由 Memory V2 保存。',
+      description: '修订 Memory。普通空间使用 memory_id；Engineering 使用稳定 subject_key 并追加 revision。',
       inputSchema: {
         ...closedObject({
           memory_id: uuidField,
+          subject_key: subjectKeyField,
+          space_key: spaceKeyField,
           content: { type: 'string', minLength: 1, maxLength: 50000 },
           reason: { type: 'string', minLength: 1, maxLength: 1000 },
           ...optionalMemoryFields,
         }),
-        required: ['memory_id', 'content'],
+        required: ['content'],
       },
     },
     {
       name: 'open_memory',
-      description: '深挖 Memory V2：传 memory_id 查看完整 revision history 与 source descriptors；传 source_id 才显式展开对应原文。',
+      description: '深挖 Memory：普通空间传 memory_id，Engineering 传 subject_key；传 source_id 才显式展开对应原文。',
       inputSchema: {
-        oneOf: [
-          {
-            ...closedObject({ memory_id: uuidField }),
-            required: ['memory_id'],
-          },
-          {
-            ...closedObject({ source_id: uuidField }),
-            required: ['source_id'],
-          },
+        ...closedObject({
+          memory_id: uuidField,
+          subject_key: subjectKeyField,
+          source_id: uuidField,
+          space_key: spaceKeyField,
+        }),
+        anyOf: [
+          { required: ['memory_id'] },
+          { required: ['subject_key'] },
+          { required: ['source_id'] },
         ],
       },
     },
@@ -172,15 +181,20 @@ function parseSince(value) {
   return new Date(value).toISOString()
 }
 
-export function createMcpToolHandler({ actor, memoryV2Service, livingroomRest }) {
+export function createMcpToolHandler({ actor, memoryV2Service, engineeringMemoryService, livingroomRest }) {
   if (!Object.values(MEMORY_ACTORS).includes(actor)) throw new Error('A fixed MCP actor is required')
   if (!memoryV2Service || typeof memoryV2Service.forActor !== 'function') {
     throw new Error('MemoryV2Service is required')
+  }
+  if (!engineeringMemoryService || typeof engineeringMemoryService.forActor !== 'function') {
+    throw new Error('EngineeringMemoryService is required')
   }
   if (!isLivingroomRest(livingroomRest)) {
     throw new Error('A fenced livingroom REST function is required')
   }
   const memory = memoryV2Service.forActor(actor)
+  const engineering = engineeringMemoryService.forActor(actor)
+  const spaces = createMemorySpaceRouter({ actor, memory, engineering })
   const sender = actor === MEMORY_ACTORS.GPT ? 'GPT' : 'CC'
 
   return async function callMcpTool(name, args = {}) {
@@ -191,31 +205,49 @@ export function createMcpToolHandler({ actor, memoryV2Service, livingroomRest })
       }))
     }
     if (name === 'remember') {
-      return JSON.stringify(await memory.remember(toMemoryV2Input(args)))
+      return JSON.stringify(await spaces.call('remember', args.space_key, {
+        subjectKey: args.subject_key,
+        input: toMemoryV2Input(args),
+      }))
     }
     if (name === 'recall') {
-      return JSON.stringify(await memory.recall(args))
+      return JSON.stringify(await spaces.call('recall', args.space_key, {
+        input: { query: args.query, limit: args.limit },
+      }))
     }
     if (name === 'revise') {
-      return JSON.stringify(await memory.revise(args.memory_id, toMemoryV2Input(args)))
+      if (args.memory_id !== undefined && args.subject_key !== undefined) {
+        throw new TypeError('revise accepts memory_id or subject_key, not both')
+      }
+      return JSON.stringify(await spaces.call('revise', args.space_key, {
+        memoryId: args.memory_id,
+        subjectKey: args.subject_key,
+        input: toMemoryV2Input(args),
+      }))
     }
     if (name === 'open_memory') {
       const hasMemoryId = typeof args.memory_id === 'string' && args.memory_id.length > 0
+      const hasSubjectKey = typeof args.subject_key === 'string' && args.subject_key.length > 0
       const hasSourceId = typeof args.source_id === 'string' && args.source_id.length > 0
-      if (hasMemoryId === hasSourceId) {
-        throw new TypeError('open_memory requires exactly one of memory_id or source_id')
+      if ([hasMemoryId, hasSubjectKey, hasSourceId].filter(Boolean).length !== 1) {
+        throw new TypeError('open_memory requires exactly one of memory_id, subject_key or source_id')
       }
-      if (hasMemoryId) {
+      const opened = await spaces.call('open', args.space_key, {
+        memoryId: args.memory_id,
+        subjectKey: args.subject_key,
+        sourceId: args.source_id,
+      })
+      if (hasMemoryId || hasSubjectKey) {
         return JSON.stringify({
           mode: 'history',
-          memory_id: args.memory_id,
-          revisions: await memory.history(args.memory_id),
+          ...(hasMemoryId ? { memory_id: args.memory_id } : { subject_key: args.subject_key }),
+          ...(hasSubjectKey ? opened : { revisions: opened }),
         })
       }
       return JSON.stringify({
         mode: 'source',
         source_id: args.source_id,
-        source: await memory.expandSource(args.source_id),
+        source: opened,
       })
     }
     if (name === 'read_livingroom') {

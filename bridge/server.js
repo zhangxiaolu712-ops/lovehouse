@@ -443,11 +443,13 @@ app.get('/livingroom/context', verifyLivingroom, async (req, res) => {
 const gptChannel = createMcpChannel({
   actor: MEMORY_ACTORS.GPT,
   memoryV2Service,
+  engineeringMemoryService,
   livingroomRest,
 })
 const claudeChannel = createMcpChannel({
   actor: MEMORY_ACTORS.CLAUDE,
   memoryV2Service,
+  engineeringMemoryService,
   livingroomRest,
 })
 
