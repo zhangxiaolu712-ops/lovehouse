@@ -207,6 +207,43 @@ test('optional metadata and source are forwarded without becoming required', asy
   })
 })
 
+test('private remember and revise accept only optional 0-5 integer importance', async () => {
+  const repository = new FakeRepository()
+  const gpt = createService(repository).forActor('gpt')
+
+  for (let importance = 0; importance <= 5; importance += 1) {
+    await gpt.remember({
+      content: 'valid remember', humanImportance: importance, aiImportance: importance,
+    })
+    await gpt.revise('memory-1', {
+      content: 'valid revise', humanImportance: importance, aiImportance: importance,
+    })
+  }
+  await gpt.remember({ content: 'null remember', humanImportance: null, aiImportance: null })
+  await gpt.revise('memory-1', {
+    content: 'null revise', humanImportance: null, aiImportance: null,
+  })
+  assert.deepEqual(repository.calls[0][3], { metadata: {}, human_importance: 0, ai_importance: 0 })
+  assert.deepEqual(repository.calls[11][4], { human_importance: 5, ai_importance: 5 })
+  assert.deepEqual(repository.calls[12][3], { metadata: {}, human_importance: null, ai_importance: null })
+  assert.deepEqual(repository.calls[13][4], { human_importance: null, ai_importance: null })
+
+  const invalidValues = [-1, 6, 0.5, 3.2, Number.NaN, '3']
+  for (const operation of ['remember', 'revise']) {
+    for (const field of ['humanImportance', 'aiImportance']) {
+      for (const value of invalidValues) {
+        const input = { content: 'invalid importance', [field]: value }
+        const call = operation === 'remember'
+          ? gpt.remember(input)
+          : gpt.revise('memory-1', input)
+        const parameter = field === 'humanImportance' ? 'human_importance' : 'ai_importance'
+        await assert.rejects(call, new RegExp(`${parameter} must be an integer between 0 and 5`))
+      }
+    }
+  }
+  assert.equal(repository.calls.length, 14)
+})
+
 test('authority fields are rejected instead of trusting caller-supplied namespace', async () => {
   const repository = new FakeRepository()
   const gpt = createService(repository).forActor('gpt')

@@ -47,8 +47,8 @@ const sourceInput = {
 const optionalMemoryFields = {
   metadata: { type: 'object', maxProperties: 30 },
   event_time: { type: 'string', description: '真实事件时间；未知时不要填写。' },
-  human_importance: { type: 'number', minimum: 0, maximum: 5 },
-  ai_importance: { type: 'number', minimum: 0, maximum: 5 },
+  human_importance: { type: 'integer', minimum: 0, maximum: 5 },
+  ai_importance: { type: 'integer', minimum: 0, maximum: 5 },
   supersedes_memory_id: uuidField,
   sources: { type: 'array', maxItems: 20, items: sourceInput },
 }

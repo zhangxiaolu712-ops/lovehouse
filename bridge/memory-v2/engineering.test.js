@@ -87,6 +87,51 @@ test('Engineering recall is lexical-only, bounded and does not accept authority 
   )
 })
 
+test('Engineering create and revision upserts accept only optional 0-5 integer importance', async () => {
+  const repository = createRepository()
+  const engineering = new EngineeringMemoryService({ repository }).forActor('gpt')
+
+  for (let importance = 0; importance <= 5; importance += 1) {
+    await engineering.upsertEngineeringFact({
+      subjectKey: `runtime.create-${importance}`,
+      content: 'valid create',
+      humanImportance: importance,
+      aiImportance: importance,
+    })
+    await engineering.upsertEngineeringFact({
+      subjectKey: `runtime.create-${importance}`,
+      content: 'valid revision',
+      humanImportance: importance,
+      aiImportance: importance,
+    })
+  }
+  await engineering.upsertEngineeringFact({
+    subjectKey: 'runtime.null', content: 'null create', humanImportance: null, aiImportance: null,
+  })
+  await engineering.upsertEngineeringFact({
+    subjectKey: 'runtime.null', content: 'null revision', humanImportance: null, aiImportance: null,
+  })
+  assert.deepEqual(repository.calls[0][4], { human_importance: 0, ai_importance: 0 })
+  assert.deepEqual(repository.calls[11][4], { human_importance: 5, ai_importance: 5 })
+  assert.deepEqual(repository.calls[12][4], { human_importance: null, ai_importance: null })
+  assert.deepEqual(repository.calls[13][4], { human_importance: null, ai_importance: null })
+
+  const invalidValues = [-1, 6, 0.5, 3.2, Number.NaN, '3']
+  for (const content of ['invalid create', 'invalid revision']) {
+    for (const field of ['humanImportance', 'aiImportance']) {
+      for (const value of invalidValues) {
+        await assert.rejects(
+          engineering.upsertEngineeringFact({
+            subjectKey: 'runtime.invalid', content, [field]: value,
+          }),
+          new RegExp(`${field === 'humanImportance' ? 'human_importance' : 'ai_importance'} must be an integer between 0 and 5`),
+        )
+      }
+    }
+  }
+  assert.equal(repository.calls.length, 14)
+})
+
 test('archive and restore are Owner-only while history and source stay available through explicit calls', async () => {
   const repository = createRepository()
   const service = new EngineeringMemoryService({ repository })
