@@ -1,0 +1,180 @@
+package fyi.b612.lovehouse.core.navigation
+
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navDeepLink
+import fyi.b612.lovehouse.app.AppDependencies
+import fyi.b612.lovehouse.feature.home.HomeScreen
+import fyi.b612.lovehouse.feature.nativelab.NativeLabScreen
+import fyi.b612.lovehouse.feature.settings.SettingsScreen
+import fyi.b612.lovehouse.feature.shell.NavGlyph
+import fyi.b612.lovehouse.feature.shell.PlaceholderScreen
+
+@Composable
+fun LoveHouseShell(
+    dependencies: AppDependencies,
+    modifier: Modifier = Modifier,
+    navController: NavHostController = rememberNavController(),
+) {
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val selected = AppDestination.selectedForRoute(backStackEntry?.destination?.route)
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        if (maxWidth >= 720.dp) {
+            Row(Modifier.fillMaxSize()) {
+                LoveHouseNavigationRail(selected = selected, onNavigate = { navController.openPrimary(it) })
+                LoveHouseContent(navController, dependencies, Modifier.weight(1f))
+            }
+        } else {
+            Scaffold(
+                containerColor = MaterialTheme.colorScheme.background,
+                bottomBar = {
+                    LoveHouseNavigationBar(selected = selected, onNavigate = { navController.openPrimary(it) })
+                },
+            ) { padding ->
+                LoveHouseContent(navController, dependencies, Modifier.padding(padding))
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoveHouseContent(
+    navController: NavHostController,
+    dependencies: AppDependencies,
+    modifier: Modifier = Modifier,
+) {
+    NavHost(
+        navController = navController,
+        startDestination = AppDestination.Home.route,
+        modifier = modifier.fillMaxSize(),
+    ) {
+        composable(
+            route = AppDestination.Home.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Home.deepLink }),
+        ) { HomeScreen() }
+
+        composable(
+            route = AppDestination.Chat.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Chat.deepLink }),
+        ) {
+            PlaceholderScreen(
+                eyebrow = "Conversation room",
+                title = "Chat",
+                message = "The native chat contract will connect here later. No Claude, Codex or web chat has been moved.",
+                status = "Not connected",
+            )
+        }
+
+        composable(
+            route = AppDestination.Memory.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Memory.deepLink }),
+        ) {
+            PlaceholderScreen(
+                eyebrow = "Memory room",
+                title = "Memory",
+                message = "Memory V2 remains on the server. This room is only a native doorway for a later phase.",
+                status = "Backend untouched",
+            )
+        }
+
+        composable(
+            route = AppDestination.Engineering.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Engineering.deepLink }),
+        ) {
+            PlaceholderScreen(
+                eyebrow = "Workshop",
+                title = "Engineering",
+                message = "Subject, revision and source will arrive through a stable client contract—not a copied web page.",
+                status = "Shell only",
+            )
+        }
+
+        composable(
+            route = AppDestination.Settings.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Settings.deepLink }),
+        ) {
+            SettingsScreen(onOpenNativeLab = { navController.navigate(AppDestination.NativeLab.route) })
+        }
+
+        composable(
+            route = AppDestination.NativeLab.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.NativeLab.deepLink }),
+        ) {
+            NativeLabScreen(
+                systemStatusProvider = dependencies.systemStatus,
+                onBack = { navController.popBackStack() },
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoveHouseNavigationBar(
+    selected: AppDestination?,
+    onNavigate: (AppDestination) -> Unit,
+) {
+    NavigationBar(
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        tonalElevation = 3.dp,
+    ) {
+        AppDestination.primary.forEach { destination ->
+            NavigationBarItem(
+                selected = destination == selected,
+                onClick = { onNavigate(destination) },
+                icon = { NavGlyph(destination.glyph, destination == selected) },
+                label = { Text(destination.label, maxLines = 1) },
+                alwaysShowLabel = true,
+                colors = NavigationBarItemDefaults.colors(
+                    indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoveHouseNavigationRail(
+    selected: AppDestination?,
+    onNavigate: (AppDestination) -> Unit,
+) {
+    NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
+        AppDestination.primary.forEach { destination ->
+            NavigationRailItem(
+                selected = destination == selected,
+                onClick = { onNavigate(destination) },
+                icon = { NavGlyph(destination.glyph, destination == selected) },
+                label = { Text(destination.label) },
+                alwaysShowLabel = true,
+            )
+        }
+    }
+}
+
+private fun NavHostController.openPrimary(destination: AppDestination) {
+    navigate(destination.route) {
+        popUpTo(graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
