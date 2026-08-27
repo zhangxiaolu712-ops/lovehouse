@@ -4,7 +4,7 @@ Phase 0 is a single-module Kotlin + Jetpack Compose shell. It owns only native U
 
 ## Open and build
 
-Open this `android/` directory in Android Studio, use JDK 21, and install Android SDK Platform 37 plus Build Tools 36.0.0.
+Open this `android/` directory in Android Studio, use JDK 21, and install Android SDK Platform 36 plus Build Tools 36.0.0.
 
 ```bash
 ./gradlew testDebugUnitTest lintDebug assembleDebug
