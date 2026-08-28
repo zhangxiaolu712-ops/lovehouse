@@ -8,6 +8,7 @@ import fyi.b612.lovehouse.feature.nativelab.biometricAvailabilityMessage
 import fyi.b612.lovehouse.feature.nativelab.formatFileSize
 import fyi.b612.lovehouse.feature.nativelab.formatLocationSnapshot
 import fyi.b612.lovehouse.feature.nativelab.formatGattProperties
+import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
 import androidx.biometric.BiometricManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -60,6 +61,14 @@ class AppContractTest {
             ),
         )
         assertEquals("无公开属性", formatGattProperties(0))
+    }
+
+    @Test
+    fun `screen observer session states have explicit Chinese labels`() {
+        assertEquals(
+            listOf("未开启", "正在启动", "正在观察", "已被系统/用户停止"),
+            ScreenObserverStatus.entries.map { it.label },
+        )
     }
 
     @Test
