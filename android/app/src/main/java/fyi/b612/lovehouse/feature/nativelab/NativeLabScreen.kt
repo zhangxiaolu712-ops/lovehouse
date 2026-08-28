@@ -1,6 +1,7 @@
 package fyi.b612.lovehouse.feature.nativelab
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -65,6 +66,8 @@ fun NativeLabScreen(
 ) {
     val context = LocalContext.current
     val status by systemStatusProvider.status.collectAsState()
+    val bleController = remember(context.applicationContext) { BleCapabilityController(context.applicationContext) }
+    val bleState by bleController.state.collectAsState()
 
     var photoResult by rememberSaveable { mutableStateOf<String?>(null) }
     var fileResult by rememberSaveable { mutableStateOf<String?>(null) }
@@ -164,6 +167,24 @@ fun NativeLabScreen(
         }
     }
 
+    val bluetoothEnable = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        bleController.refreshBluetoothState()
+        if (bleController.state.value.isBluetoothEnabled) bleController.startScan()
+    }
+    val bluetoothPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        systemStatusProvider.refresh()
+        if (requiredBleRuntimePermissions().all { grants[it] == true || context.hasPermission(it) }) {
+            bleController.refreshBluetoothState()
+            if (bleController.state.value.isBluetoothEnabled) {
+                bleController.startScan()
+            } else {
+                bluetoothEnable.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            }
+        }
+    }
+
     val activity = remember(context) { context.findFragmentActivity() }
     val biometricPrompt = remember(activity) {
         activity?.let {
@@ -197,10 +218,11 @@ fun NativeLabScreen(
     LaunchedEffect(systemStatusProvider) {
         systemStatusProvider.refresh()
     }
-    DisposableEffect(audioRecorder, locationSmokeTest) {
+    DisposableEffect(audioRecorder, locationSmokeTest, bleController) {
         onDispose {
             audioRecorder.cancel()
             locationSmokeTest.cancel()
+            bleController.release()
         }
     }
 
@@ -343,6 +365,72 @@ fun NativeLabScreen(
                     },
                     onSecondaryAction = { openNotificationSettings(context) },
                 )
+
+                NativeCapability.Bluetooth -> CapabilityCard(
+                    capabilityStatus = capabilityStatus,
+                    actionLabel = when {
+                        bleState.isScanning -> "停止扫描"
+                        !bleState.isBluetoothEnabled -> "开启蓝牙并扫描"
+                        else -> "扫描 BLE 设备"
+                    },
+                    secondaryActionLabel = "进入系统设置".takeIf {
+                        capabilityStatus.state == PermissionState.Denied
+                    },
+                    result = bleState.message,
+                    onAction = {
+                        when {
+                            bleState.isScanning -> bleController.stopScan()
+                            !bleState.isSupported -> bleController.refreshBluetoothState()
+                            requiredBleRuntimePermissions().any { !context.hasPermission(it) } -> {
+                                bluetoothPermission.launch(requiredBleRuntimePermissions())
+                            }
+                            !bleState.isBluetoothEnabled -> {
+                                bluetoothEnable.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                            }
+                            else -> bleController.startScan()
+                        }
+                    },
+                    onSecondaryAction = { openAppSettings(context) },
+                ) {
+                    bleState.connectedAddress?.let { address ->
+                        Text(
+                            "已连接：${bleState.connectedName ?: "未命名设备"}\n$address",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        LoveHouseSecondaryButton(
+                            text = "主动断开",
+                            onClick = bleController::disconnect,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    bleState.devices.take(20).forEach { device ->
+                        LoveHouseCard(modifier = Modifier.fillMaxWidth()) {
+                            Text(device.name, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "标识：${device.address}\nRSSI：${device.rssi} dBm",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (bleState.connectedAddress != device.address) {
+                                LoveHouseSecondaryButton(
+                                    text = "连接此设备",
+                                    onClick = { bleController.connect(device) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                    }
+                    bleState.services.forEach { service ->
+                        Text("GATT 服务：${service.uuid}", style = MaterialTheme.typography.titleSmall)
+                        service.characteristics.forEach { characteristic ->
+                            Text(
+                                characteristic,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
 
                 NativeCapability.Share -> CapabilityCard(
                     capabilityStatus = capabilityStatus,
