@@ -4,6 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
+import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,20 +18,20 @@ enum class NativeCapability(
     val description: String,
 ) {
     Photos("照片", "照", "通过系统照片选择器，只把选中的一张照片交给 LoveHouse。"),
-    Camera("相机", "拍", "以后在明确操作后，从 LoveHouse 内拍摄照片。"),
+    Camera("相机", "拍", "点击后调用系统相机，拍摄结果只留在当前预览。"),
     Files("文件", "文", "通过系统文件选择器打开一个文件。"),
-    Microphone("麦克风", "麦", "以后只在明确操作后录制语音。"),
-    Location("位置", "位", "以后只在具体场景需要时附加位置。"),
-    Notifications("通知", "通", "以后发送由你主动开启的 LoveHouse 提醒。"),
+    Microphone("麦克风", "麦", "点击开始或停止最小录音测试，录音只保存在本机缓存。"),
+    Location("位置", "位", "点击后获取一次当前位置，不会后台或持续追踪。"),
+    Notifications("通知", "通", "按需授权并发送一条可重新打开 LoveHouse 的测试通知。"),
     Share("分享", "享", "通过 Android 系统分享面板发送内容。"),
-    Biometrics("生物识别", "锁", "以后使用设备凭据保护私密房间。"),
-    DeepLink("深链", "链", "通过 lovehouse:// 打开稳定的原生页面。"),
+    Biometrics("生物识别", "锁", "使用 AndroidX Biometric 验证设备能力，不作为启动锁。"),
+    DeepLink("深链", "链", "通过 lovehouse://settings/native-lab 打开当前测试页。"),
 }
 
 enum class PermissionState(val label: String) {
     Granted("可使用"),
     Denied("未授权"),
-    NotRequested("待接入"),
+    NotRequested("待授权"),
     NotRequired("可使用"),
     Unsupported("不可用"),
 }
@@ -66,6 +69,8 @@ class AndroidPermissionStatusProvider(
     }
 
     private fun stateFor(capability: NativeCapability, declared: Set<String>): PermissionState {
+        if (!hasRequiredHardware(capability)) return PermissionState.Unsupported
+
         val permission = permissionFor(capability) ?: return when (capability) {
             NativeCapability.Photos,
             NativeCapability.Files,
@@ -73,11 +78,7 @@ class AndroidPermissionStatusProvider(
             NativeCapability.DeepLink,
             -> PermissionState.NotRequired
 
-            NativeCapability.Biometrics -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                PermissionState.NotRequested
-            } else {
-                PermissionState.Unsupported
-            }
+            NativeCapability.Biometrics -> biometricState()
 
             else -> PermissionState.NotRequested
         }
@@ -88,6 +89,21 @@ class AndroidPermissionStatusProvider(
         } else {
             PermissionState.Denied
         }
+    }
+
+    private fun hasRequiredHardware(capability: NativeCapability): Boolean = when (capability) {
+        NativeCapability.Camera -> context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+        NativeCapability.Microphone -> context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+        NativeCapability.Location -> context.packageManager.hasSystemFeature(PackageManager.FEATURE_LOCATION)
+        else -> true
+    }
+
+    private fun biometricState(): PermissionState = when (
+        BiometricManager.from(context).canAuthenticate(BIOMETRIC_STRONG or DEVICE_CREDENTIAL)
+    ) {
+        BiometricManager.BIOMETRIC_SUCCESS -> PermissionState.Granted
+        BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> PermissionState.Denied
+        else -> PermissionState.Unsupported
     }
 
     private fun permissionFor(capability: NativeCapability): String? = when (capability) {

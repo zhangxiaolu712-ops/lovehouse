@@ -17,5 +17,6 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Pushes 
 - Primary destinations: Home, Chat, Memory, Engineering, Settings.
 - Secondary destination: Settings → Native Lab.
 - Deep links: `lovehouse://home`, `lovehouse://chat`, `lovehouse://memory`, `lovehouse://engineering`, `lovehouse://settings`, `lovehouse://settings/native-lab`.
+- Native Lab provides on-demand camera, microphone, one-shot location, test notification, biometric and deep-link smoke tests alongside the existing photo, file and share actions.
 - Native capability contracts live under `core/permissions`, `core/storage`, and `core/status`.
 - No backend URL, token, service role, provider session or production configuration exists in this module.

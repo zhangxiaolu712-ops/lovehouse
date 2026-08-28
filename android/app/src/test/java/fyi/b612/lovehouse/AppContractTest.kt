@@ -2,7 +2,11 @@ package fyi.b612.lovehouse
 
 import fyi.b612.lovehouse.core.navigation.AppDestination
 import fyi.b612.lovehouse.core.permissions.NativeCapability
+import fyi.b612.lovehouse.feature.nativelab.LocationSnapshot
+import fyi.b612.lovehouse.feature.nativelab.biometricAvailabilityMessage
 import fyi.b612.lovehouse.feature.nativelab.formatFileSize
+import fyi.b612.lovehouse.feature.nativelab.formatLocationSnapshot
+import androidx.biometric.BiometricManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -41,6 +45,7 @@ class AppContractTest {
             ),
             NativeCapability.entries.map { it.label },
         )
+        assertTrue(NativeCapability.entries.none { "以后" in it.description })
     }
 
     @Test
@@ -54,5 +59,28 @@ class AppContractTest {
         assertEquals("512 B", formatFileSize(512))
         assertEquals("1.5 KB", formatFileSize(1_536))
         assertEquals("2.0 MB", formatFileSize(2_097_152))
+    }
+
+    @Test
+    fun `location result contains basic acceptance fields in Chinese`() {
+        assertEquals(
+            "纬度：31.230416\n经度：121.473701\n精度：12.5 米\n来源：卫星定位（单次获取）",
+            formatLocationSnapshot(
+                LocationSnapshot(
+                    latitude = 31.230416,
+                    longitude = 121.473701,
+                    accuracyMeters = 12.5f,
+                    provider = "gps",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `unsupported biometrics has a Chinese status`() {
+        assertEquals(
+            "这台设备没有可用的生物识别硬件。",
+            biometricAvailabilityMessage(BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE),
+        )
     }
 }
