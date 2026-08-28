@@ -1,6 +1,8 @@
 package fyi.b612.lovehouse.feature.nativelab
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.CancellationSignal
@@ -29,6 +31,15 @@ internal class LocationSmokeTest(
 
     fun request(onResult: (LocationSmokeResult) -> Unit) {
         cancellationSignal?.cancel()
+
+        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            onResult(LocationSmokeResult("定位权限未授予，请授权后重试。"))
+            return
+        }
 
         val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
             .firstOrNull { candidate -> runCatching { locationManager.isProviderEnabled(candidate) }.getOrDefault(false) }

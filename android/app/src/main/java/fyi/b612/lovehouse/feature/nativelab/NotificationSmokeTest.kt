@@ -1,14 +1,17 @@
 package fyi.b612.lovehouse.feature.nativelab
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import fyi.b612.lovehouse.MainActivity
 import fyi.b612.lovehouse.R
 import fyi.b612.lovehouse.core.navigation.AppDestination
@@ -22,6 +25,13 @@ internal data class NotificationSmokeResult(
 )
 
 internal fun sendTestNotification(context: Context): NotificationSmokeResult {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+        return NotificationSmokeResult("通知权限未授予，请在系统设置中开启后重试。", needsNotificationSettings = true)
+    }
+
     val manager = context.getSystemService(NotificationManager::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         manager.createNotificationChannel(
