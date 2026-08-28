@@ -1,11 +1,13 @@
 package fyi.b612.lovehouse
 
+import android.bluetooth.BluetoothGattCharacteristic
 import fyi.b612.lovehouse.core.navigation.AppDestination
 import fyi.b612.lovehouse.core.permissions.NativeCapability
 import fyi.b612.lovehouse.feature.nativelab.LocationSnapshot
 import fyi.b612.lovehouse.feature.nativelab.biometricAvailabilityMessage
 import fyi.b612.lovehouse.feature.nativelab.formatFileSize
 import fyi.b612.lovehouse.feature.nativelab.formatLocationSnapshot
+import fyi.b612.lovehouse.feature.nativelab.formatGattProperties
 import androidx.biometric.BiometricManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,7 +32,7 @@ class AppContractTest {
     }
 
     @Test
-    fun `native lab exposes the nine planned capabilities`() {
+    fun `native lab exposes phase zero capabilities and BLE`() {
         assertEquals(
             listOf(
                 "照片",
@@ -39,6 +41,7 @@ class AppContractTest {
                 "麦克风",
                 "位置",
                 "通知",
+                "蓝牙 / BLE",
                 "分享",
                 "生物识别",
                 "深链",
@@ -46,6 +49,17 @@ class AppContractTest {
             NativeCapability.entries.map { it.label },
         )
         assertTrue(NativeCapability.entries.none { "以后" in it.description })
+    }
+
+    @Test
+    fun `gatt properties have compact Chinese labels`() {
+        assertEquals(
+            "读 / 通知",
+            formatGattProperties(
+                BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            ),
+        )
+        assertEquals("无公开属性", formatGattProperties(0))
     }
 
     @Test

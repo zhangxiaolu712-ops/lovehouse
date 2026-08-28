@@ -23,6 +23,7 @@ enum class NativeCapability(
     Microphone("麦克风", "麦", "点击开始或停止最小录音测试，录音只保存在本机缓存。"),
     Location("位置", "位", "点击后获取一次当前位置，不会后台或持续追踪。"),
     Notifications("通知", "通", "按需授权并发送一条可重新打开 LoveHouse 的测试通知。"),
+    Bluetooth("蓝牙 / BLE", "蓝", "主动扫描附近 BLE 设备，选择后连接并查看基础 GATT 信息。"),
     Share("分享", "享", "通过 Android 系统分享面板发送内容。"),
     Biometrics("生物识别", "锁", "使用 AndroidX Biometric 验证设备能力，不作为启动锁。"),
     DeepLink("深链", "链", "通过 lovehouse://settings/native-lab 打开当前测试页。"),
@@ -95,6 +96,7 @@ class AndroidPermissionStatusProvider(
         NativeCapability.Camera -> context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
         NativeCapability.Microphone -> context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
         NativeCapability.Location -> context.packageManager.hasSystemFeature(PackageManager.FEATURE_LOCATION)
+        NativeCapability.Bluetooth -> context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)
         else -> true
     }
 
@@ -117,6 +119,11 @@ class AndroidPermissionStatusProvider(
         NativeCapability.Camera -> Manifest.permission.CAMERA
         NativeCapability.Microphone -> Manifest.permission.RECORD_AUDIO
         NativeCapability.Location -> Manifest.permission.ACCESS_COARSE_LOCATION
+        NativeCapability.Bluetooth -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Manifest.permission.BLUETOOTH_SCAN
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
         NativeCapability.Notifications -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Manifest.permission.POST_NOTIFICATIONS
         } else {
