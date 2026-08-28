@@ -1,6 +1,7 @@
 package fyi.b612.lovehouse.feature.nativelab
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -60,6 +61,8 @@ internal fun formatGattProperties(properties: Int): String = buildList {
     if (properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0) add("指示")
 }.joinToString(" / ").ifEmpty { "无公开属性" }
 
+// Lint cannot follow the version-aware permission helpers; every BLE entry and callback rechecks them at runtime.
+@SuppressLint("MissingPermission")
 internal class BleCapabilityController(context: Context) {
     private val appContext = context.applicationContext
     private val adapter = appContext.getSystemService(BluetoothManager::class.java)?.adapter
