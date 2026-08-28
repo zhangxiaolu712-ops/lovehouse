@@ -1,0 +1,27 @@
+package fyi.b612.lovehouse.core.navigation
+
+enum class AppDestination(
+    val route: String,
+    val label: String,
+    val glyph: String,
+    val deepLink: String,
+    val isPrimary: Boolean,
+) {
+    Home("home", "首页", "家", "lovehouse://home", true),
+    Chat("chat", "聊天", "聊", "lovehouse://chat", true),
+    Memory("memory", "记忆", "忆", "lovehouse://memory", true),
+    Engineering("engineering", "工程", "工", "lovehouse://engineering", true),
+    Settings("settings", "设置", "设", "lovehouse://settings", true),
+    NativeLab("settings/native-lab", "原生能力测试", "验", "lovehouse://settings/native-lab", false),
+    ;
+
+    companion object {
+        val primary = entries.filter(AppDestination::isPrimary)
+
+        fun selectedForRoute(route: String?): AppDestination? = when {
+            route == null -> null
+            route.startsWith(Settings.route) -> Settings
+            else -> primary.firstOrNull { it.route == route }
+        }
+    }
+}
