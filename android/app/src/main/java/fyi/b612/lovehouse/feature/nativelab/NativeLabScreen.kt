@@ -1,6 +1,7 @@
 package fyi.b612.lovehouse.feature.nativelab
 
 import android.Manifest
+import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.media.projection.MediaProjectionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,6 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,6 +58,10 @@ import fyi.b612.lovehouse.core.permissions.CapabilityPermissionStatus
 import fyi.b612.lovehouse.core.permissions.NativeCapability
 import fyi.b612.lovehouse.core.permissions.PermissionState
 import fyi.b612.lovehouse.core.status.SystemStatusProvider
+import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
+import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverService
+import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
+import kotlinx.coroutines.launch
 
 private const val ShareSample = "来自 LoveHouse 原生小屋的一句测试分享。"
 
@@ -68,6 +75,10 @@ fun NativeLabScreen(
     val status by systemStatusProvider.status.collectAsState()
     val bleController = remember(context.applicationContext) { BleCapabilityController(context.applicationContext) }
     val bleState by bleController.state.collectAsState()
+    val screenObserverState by ScreenObserverRuntime.state.collectAsState()
+    val screenObserverScope = rememberCoroutineScope()
+    var screenPreview by remember { mutableStateOf<Bitmap?>(null) }
+    var screenCaptureResult by rememberSaveable { mutableStateOf<String?>(null) }
 
     var photoResult by rememberSaveable { mutableStateOf<String?>(null) }
     var fileResult by rememberSaveable { mutableStateOf<String?>(null) }
@@ -185,6 +196,24 @@ fun NativeLabScreen(
         }
     }
 
+    val screenCapturePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val resultData = result.data
+        if (result.resultCode == Activity.RESULT_OK && resultData != null) {
+            runCatching {
+                ContextCompat.startForegroundService(
+                    context,
+                    ScreenObserverService.startIntent(context, result.resultCode, resultData),
+                )
+            }.onFailure {
+                ScreenObserverRuntime.startFailed("屏幕观察服务启动失败，请稍后重试。")
+            }
+        } else {
+            ScreenObserverRuntime.authorizationDenied()
+        }
+    }
+
     val activity = remember(context) { context.findFragmentActivity() }
     val biometricPrompt = remember(activity) {
         activity?.let {
@@ -218,6 +247,16 @@ fun NativeLabScreen(
     LaunchedEffect(systemStatusProvider) {
         systemStatusProvider.refresh()
     }
+    LaunchedEffect(screenObserverState.status) {
+        if (screenObserverState.status != ScreenObserverStatus.Active) {
+            screenPreview = null
+            screenCaptureResult = null
+        }
+    }
+    DisposableEffect(screenPreview) {
+        val preview = screenPreview
+        onDispose { preview?.recycle() }
+    }
     DisposableEffect(audioRecorder, locationSmokeTest, bleController) {
         onDispose {
             audioRecorder.cancel()
@@ -249,6 +288,103 @@ fun NativeLabScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Small)) {
                     StatusPill("版本 ${status.appVersion}")
                     StatusPill(status.backend.label)
+                }
+            }
+        }
+
+        item(key = "screen-observer") {
+            LoveHouseCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("屏幕观察", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            "系统授权后保持本次捕获会话，仅在你点击时截取一帧并本地预览。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    StatusPill(
+                        screenObserverState.status.label,
+                        color = when (screenObserverState.status) {
+                            ScreenObserverStatus.Active -> MaterialTheme.colorScheme.tertiary
+                            ScreenObserverStatus.Stopped -> MaterialTheme.colorScheme.error
+                            ScreenObserverStatus.Inactive,
+                            ScreenObserverStatus.Starting,
+                            -> MaterialTheme.colorScheme.secondary
+                        },
+                    )
+                }
+
+                Text(
+                    screenObserverState.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                if (screenObserverState.status == ScreenObserverStatus.Active) {
+                    LoveHousePrimaryButton(
+                        text = "截取当前一帧",
+                        onClick = {
+                            screenCaptureResult = "正在截取当前屏幕…"
+                            screenObserverScope.launch {
+                                ScreenObserverRuntime.captureFrame()
+                                    .onSuccess { bitmap ->
+                                        screenPreview = bitmap
+                                        screenCaptureResult = "已取得当前屏幕一帧；仅在本页临时预览。"
+                                    }
+                                    .onFailure { error ->
+                                        screenCaptureResult = error.message ?: "当前屏幕帧截取失败。"
+                                    }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    LoveHouseSecondaryButton(
+                        text = "停止屏幕观察",
+                        onClick = {
+                            screenPreview = null
+                            screenCaptureResult = null
+                            context.startService(ScreenObserverService.stopIntent(context))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LoveHousePrimaryButton(
+                        text = "开始屏幕观察",
+                        onClick = {
+                            val projectionManager = context.getSystemService(MediaProjectionManager::class.java)
+                            ScreenObserverRuntime.authorizationRequested()
+                            runCatching {
+                                screenCapturePermission.launch(projectionManager.createScreenCaptureIntent())
+                            }.onFailure {
+                                ScreenObserverRuntime.startFailed("无法打开系统屏幕捕获授权界面。")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                screenCaptureResult?.let { result ->
+                    Text(
+                        result,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                screenPreview?.let { bitmap ->
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "刚截取的屏幕帧预览",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1))
+                            .clip(RoundedCornerShape(LoveHouseRadius.Medium)),
+                        contentScale = ContentScale.Fit,
+                    )
                 }
             }
         }
