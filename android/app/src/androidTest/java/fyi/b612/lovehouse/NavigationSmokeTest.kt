@@ -50,6 +50,7 @@ class NavigationSmokeTest {
         composeRule.onAllNodesWithText("原生能力测试").filter(hasClickAction()).onFirst().performClick()
 
         listOf(
+            "读取当前设备状态",
             "开始屏幕观察",
             "拍摄一张照片",
             "开始录音",
@@ -82,6 +83,7 @@ class NavigationSmokeTest {
                     Manifest.permission.POST_NOTIFICATIONS,
                     Manifest.permission.FOREGROUND_SERVICE,
                     Manifest.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION,
+                    Manifest.permission.ACCESS_NETWORK_STATE,
                     Manifest.permission.BLUETOOTH_SCAN,
                     Manifest.permission.BLUETOOTH_CONNECT,
                 ),
