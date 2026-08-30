@@ -1,6 +1,14 @@
 package fyi.b612.lovehouse
 
 import android.bluetooth.BluetoothGattCharacteristic
+import fyi.b612.lovehouse.core.devicecontext.BatteryContext
+import fyi.b612.lovehouse.core.devicecontext.BluetoothContext
+import fyi.b612.lovehouse.core.devicecontext.ChargingSource
+import fyi.b612.lovehouse.core.devicecontext.DeviceContextSnapshot
+import fyi.b612.lovehouse.core.devicecontext.NetworkContext
+import fyi.b612.lovehouse.core.devicecontext.NetworkTransport
+import fyi.b612.lovehouse.core.devicecontext.ScreenObserverContext
+import fyi.b612.lovehouse.core.devicecontext.formatDeviceContextSnapshot
 import fyi.b612.lovehouse.core.navigation.AppDestination
 import fyi.b612.lovehouse.core.permissions.NativeCapability
 import fyi.b612.lovehouse.feature.nativelab.LocationSnapshot
@@ -14,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.ZoneOffset
 
 class AppContractTest {
     @Test
@@ -68,6 +77,49 @@ class AppContractTest {
         assertEquals(
             listOf("未开启", "正在启动", "正在观察", "已被系统/用户停止"),
             ScreenObserverStatus.entries.map { it.label },
+        )
+    }
+
+    @Test
+    fun `device context snapshot has a compact Chinese rendering`() {
+        assertEquals(
+            "电量：63%\n" +
+                "充电：否\n" +
+                "充电来源：USB\n" +
+                "网络：Wi-Fi\n" +
+                "网络可用：是\n" +
+                "已验证联网：是\n" +
+                "按流量计费：否\n" +
+                "VPN：开启\n" +
+                "蓝牙：开启\n" +
+                "BLE 权限：已授权\n" +
+                "屏幕观察：开启\n" +
+                "更新时间：00:00:00",
+            formatDeviceContextSnapshot(
+                DeviceContextSnapshot(
+                    capturedAtEpochMillis = 0,
+                    battery = BatteryContext(
+                        levelPercent = 63,
+                        isCharging = false,
+                        chargingSource = ChargingSource.Usb,
+                        isLow = false,
+                    ),
+                    network = NetworkContext(
+                        hasNetwork = true,
+                        isValidated = true,
+                        transport = NetworkTransport.Wifi,
+                        isMetered = false,
+                        isVpnActive = true,
+                    ),
+                    bluetooth = BluetoothContext(
+                        isSupported = true,
+                        isEnabled = true,
+                        blePermissionsGranted = true,
+                    ),
+                    screenObserver = ScreenObserverContext(isActive = true),
+                ),
+                zoneId = ZoneOffset.UTC,
+            ),
         )
     }
 

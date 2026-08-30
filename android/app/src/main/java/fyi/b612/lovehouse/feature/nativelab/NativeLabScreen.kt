@@ -53,6 +53,9 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseSecondaryButton
 import fyi.b612.lovehouse.core.designsystem.LoveHouseSpacing
 import fyi.b612.lovehouse.core.designsystem.SectionLabel
 import fyi.b612.lovehouse.core.designsystem.StatusPill
+import fyi.b612.lovehouse.core.devicecontext.AndroidDeviceContextProvider
+import fyi.b612.lovehouse.core.devicecontext.DeviceContextSnapshot
+import fyi.b612.lovehouse.core.devicecontext.formatDeviceContextSnapshot
 import fyi.b612.lovehouse.core.navigation.AppDestination
 import fyi.b612.lovehouse.core.permissions.CapabilityPermissionStatus
 import fyi.b612.lovehouse.core.permissions.NativeCapability
@@ -79,6 +82,15 @@ fun NativeLabScreen(
     val screenObserverScope = rememberCoroutineScope()
     var screenPreview by remember { mutableStateOf<Bitmap?>(null) }
     var screenCaptureResult by rememberSaveable { mutableStateOf<String?>(null) }
+    val deviceContextProvider = remember(context.applicationContext) {
+        AndroidDeviceContextProvider(
+            context = context.applicationContext,
+            isScreenObserverActive = {
+                ScreenObserverRuntime.state.value.status == ScreenObserverStatus.Active
+            },
+        )
+    }
+    var deviceContextSnapshot by remember { mutableStateOf<DeviceContextSnapshot?>(null) }
 
     var photoResult by rememberSaveable { mutableStateOf<String?>(null) }
     var fileResult by rememberSaveable { mutableStateOf<String?>(null) }
@@ -288,6 +300,40 @@ fun NativeLabScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Small)) {
                     StatusPill("版本 ${status.appVersion}")
                     StatusPill(status.backend.label)
+                }
+            }
+        }
+
+        item(key = "device-context") {
+            LoveHouseCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("设备状态 / Device Context", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            "按需读取一次电池、网络、蓝牙与屏幕观察当前状态；不会保存历史。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    StatusPill(if (deviceContextSnapshot == null) "未读取" else "已更新")
+                }
+
+                LoveHousePrimaryButton(
+                    text = "读取当前设备状态",
+                    onClick = { deviceContextSnapshot = deviceContextProvider.getCurrentDeviceContext() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                deviceContextSnapshot?.let { snapshot ->
+                    Text(
+                        text = formatDeviceContextSnapshot(snapshot),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
