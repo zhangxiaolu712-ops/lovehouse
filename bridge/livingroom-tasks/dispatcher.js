@@ -1,4 +1,11 @@
 const APPROVAL_MARKER = /\[\[APPROVAL_REQUIRED:\s*([^\]]+)\]\]/i
+const LOCAL_USER_MARKER = /\[\[LOCAL_USER_REQUIRED:\s*([^\]]+)\]\]/i
+import { normalizeApprovalRisk } from './notifications.js'
+
+function parseApproval(value) {
+  const [risk, summary, impact, ...detail] = value.split('|').map(part => part.trim())
+  return { risk_level: normalizeApprovalRisk(risk), summary: summary || value.trim(), impact: impact || '影响当前任务', detail: detail.join('|') || value.trim() }
+}
 
 export class LivingroomTaskDispatcher {
   constructor({ repository, endpoint, resolveEndpoint, transientStore, pollMs = 3000, logger = console }) {
@@ -33,6 +40,7 @@ export class LivingroomTaskDispatcher {
       task = await this.repository.claimQueued()
       if (!task) return false
       this.transientStore.append(task.thread_id, { type: 'status', status: 'running' })
+      this.repository.publishNotification(task, 'running', { summary: '正在处理任务' })
       const resumed = Boolean(task.runtime_session_id)
       const request = this.transientStore.read(task.thread_id).find(event => event.type === 'request')?.content
         || task.request_summary
@@ -50,17 +58,29 @@ export class LivingroomTaskDispatcher {
           : request,
       })
       const approval = result.text.match(APPROVAL_MARKER)
-      if (approval) {
-        this.transientStore.append(task.thread_id, { type: 'approval', content: approval[1].trim() })
-        await this.repository.waitForApproval(task, approval[1].trim(), result.sessionId)
+      const localUser = result.text.match(LOCAL_USER_MARKER)
+      if (localUser) {
+        const request = localUser[1].trim()
+        this.transientStore.append(task.thread_id, { type: 'requires_local_user', content: request })
+        await this.repository.requireLocalUser(task, request, result.sessionId)
+        this.repository.publishNotification(task, 'requires_local_user', { summary: request })
+      } else if (approval) {
+        const parsed = parseApproval(approval[1])
+        this.transientStore.append(task.thread_id, { type: 'approval', content: parsed.detail, risk_level: parsed.risk_level })
+        const requested = await this.repository.waitForApproval(task, parsed.detail, result.sessionId, parsed)
+        this.repository.publishNotification(task, 'waiting_approval', { ...parsed, approval_id: requested.id })
       } else {
         this.transientStore.append(task.thread_id, { type: 'result', content: result.text })
         await this.repository.complete(task, result)
+        this.repository.publishNotification(task, 'completed', { summary: result.text })
       }
       return true
     } catch (error) {
       this.logger.error?.('[livingroom-dispatcher]', error.message)
-      if (task) await this.repository.fail(task, error)
+      if (task) {
+        await this.repository.fail(task, error)
+        this.repository.publishNotification(task, 'failed', { summary: error.message })
+      }
       return false
     } finally {
       this.busy = false

@@ -23,3 +23,10 @@ test('approval RPC is one-shot, owner/request-specific and blocks expired approv
   assert.match(migration, /set status = 'expired'/)
   assert.match(migration, /revoke all on function public\.livingroom_decide_approval[^;]+from public, anon, authenticated/s)
 })
+
+test('schema supports risk levels and local-user checkpoints without durable progress tables', () => {
+  assert.match(migration, /risk_level text not null check \(risk_level in \('low', 'medium', 'high'\)\)/)
+  assert.match(migration, /'requires_local_user'/)
+  assert.match(migration, /livingroom_resume_local_user/)
+  assert.doesNotMatch(migration, /create table public\.[a-z0-9_]*(?:message|event|progress|log)/i)
+})

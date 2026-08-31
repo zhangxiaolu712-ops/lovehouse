@@ -79,7 +79,8 @@ export function createCodexChatHandler({
     const threadMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/threads/([0-9a-f-]+)$`, 'i'))
     const manualApprovalMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/tasks/([0-9a-f-]+)/approval$`, 'i'))
     const decisionMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/approvals/([0-9a-f-]+)/decision$`, 'i'))
-    if (taskRepository && (threadMatch || manualApprovalMatch || decisionMatch)) {
+    const localResumeMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/tasks/([0-9a-f-]+)/local-user/resume$`, 'i'))
+    if (taskRepository && (threadMatch || manualApprovalMatch || decisionMatch || localResumeMatch)) {
       try {
         await authenticate(req.headers.authorization)
         if (threadMatch && req.method === 'GET') {
@@ -98,6 +99,10 @@ export function createCodexChatHandler({
           if (!['approved', 'rejected', 'expired'].includes(body.decision)) return json(res, 400, { error: { code: 'APPROVAL_DECISION_INVALID' } })
           const approval = await taskRepository.decideApproval(decisionMatch[1], body.decision)
           return json(res, approval ? 200 : 409, approval || { error: { code: 'APPROVAL_NOT_PENDING' } })
+        }
+        if (localResumeMatch && req.method === 'POST') {
+          const task = await taskRepository.resumeLocalUser(localResumeMatch[1])
+          return json(res, task ? 200 : 409, task || { error: { code: 'LOCAL_ACTION_NOT_PENDING' } })
         }
         return json(res, 405, { error: { code: 'METHOD_NOT_ALLOWED' } })
       } catch (error) {

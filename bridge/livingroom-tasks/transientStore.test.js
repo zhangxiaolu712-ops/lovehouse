@@ -14,6 +14,27 @@ test('private thread events expire after the configured transient TTL', () => {
   assert.deepEqual(store.read('thread'), [])
 })
 
+test('status progress replaces the same task notification instead of accumulating events', () => {
+  const store = new TransientThreadStore()
+  const sameTask = item => item.type === 'task_notification' && item.task_id === 'task'
+  store.upsert('thread', sameTask, { type: 'task_notification', task_id: 'task', status: 'queued' })
+  store.upsert('thread', sameTask, { type: 'task_notification', task_id: 'task', status: 'running' })
+  store.upsert('thread', sameTask, { type: 'task_notification', task_id: 'task', status: 'running', body: '正在运行测试' })
+  assert.deepEqual(store.read('thread').map(item => item.status), ['running'])
+})
+
+test('upserted notification survives file-store restart as one event', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'livingroom-notification-'))
+  const filePath = path.join(directory, 'threads.json')
+  const match = item => item.type === 'task_notification' && item.task_id === 'task'
+  const first = new FileTransientThreadStore({ filePath, cleanupIntervalMs: 0 })
+  first.upsert('thread', match, { type: 'task_notification', task_id: 'task', status: 'queued' })
+  first.upsert('thread', match, { type: 'task_notification', task_id: 'task', status: 'running' })
+  const restarted = new FileTransientThreadStore({ filePath, cleanupIntervalMs: 0 })
+  assert.deepEqual(restarted.read('thread').map(item => item.status), ['running'])
+  first.close(); restarted.close(); fs.rmSync(directory, { recursive: true })
+})
+
 test('file transient store survives restart, writes atomically with private permissions, and expires', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'livingroom-transient-'))
   const filePath = path.join(directory, 'threads.json')

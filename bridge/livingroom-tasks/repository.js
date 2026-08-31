@@ -1,4 +1,5 @@
 import { routeLivingroomMessage } from './routing.js'
+import { taskNotification } from './notifications.js'
 
 const q = value => encodeURIComponent(String(value))
 
@@ -28,9 +29,16 @@ export class SupabaseLivingroomTaskRepository {
         request_summary: target.prompt.slice(0, 1000),
       }))?.[0]
       if (task?.thread_id) this.transientStore?.append(task.thread_id, { type: 'request', content: target.prompt })
+      if (task?.thread_id) this.publishNotification(task, 'queued')
       created += 1
     }
     return created
+  }
+
+  publishNotification(task, status, detail) {
+    const event = taskNotification(task, status, detail)
+    this.transientStore?.upsert(task.thread_id, item => item.type === 'task_notification' && item.task_id === task.id, event)
+    return event
   }
 
   async claimQueued() {
@@ -43,13 +51,23 @@ export class SupabaseLivingroomTaskRepository {
     return rows?.[0] || null
   }
 
-  async waitForApproval(task, request, sessionId) {
+  async waitForApproval(task, request, sessionId, metadata = {}) {
     return this.rest('POST', 'rpc/livingroom_request_approval', {
       p_owner_id: task.owner_id,
       p_task_id: task.id,
       p_request_summary: request.slice(0, 1000),
       p_runtime_session_id: sessionId,
       p_expires_at: null,
+      p_risk_level: metadata.risk_level,
+      p_action_summary: metadata.summary,
+      p_impact_summary: metadata.impact,
+    })
+  }
+
+  requireLocalUser(task, request, sessionId) {
+    return this.rest('POST', 'rpc/livingroom_require_local_user', {
+      p_owner_id: task.owner_id, p_task_id: task.id,
+      p_request_summary: request.slice(0, 1000), p_runtime_session_id: sessionId,
     })
   }
 
@@ -58,6 +76,12 @@ export class SupabaseLivingroomTaskRepository {
       p_owner_id: this.ownerId,
       p_approval_id: approvalId,
       p_decision: decision,
+    })
+  }
+
+  resumeLocalUser(taskId) {
+    return this.rest('POST', 'rpc/livingroom_resume_local_user', {
+      p_owner_id: this.ownerId, p_task_id: taskId,
     })
   }
 

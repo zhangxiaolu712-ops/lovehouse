@@ -4,6 +4,7 @@ import { LivingroomTaskDispatcher } from './dispatcher.js'
 import { TransientThreadStore } from './transientStore.js'
 
 const task = { id: 'task', thread_id: 'thread', request_summary: 'do it', runtime_session_id: null }
+const notifications = () => ({ publishNotification() {} })
 
 test('idle dispatcher does not wake the Codex endpoint', async () => {
   let runs = 0
@@ -22,7 +23,7 @@ test('queued task wakes Codex and keeps full result only in transient thread', a
   const dispatcher = new LivingroomTaskDispatcher({
     repository: {
       ingestMentions: async () => {}, claimQueued: async () => task,
-      complete: async (_task, result) => calls.push(['complete', result.text]),
+      ...notifications(), complete: async (_task, result) => calls.push(['complete', result.text]),
       fail: async () => {},
     },
     endpoint: { run: async () => ({ text: 'full result', sessionId: 'session' }) },
@@ -42,7 +43,9 @@ test('approval marker checkpoints and exits; approved queued task resumes same t
   const dispatcher = new LivingroomTaskDispatcher({
     repository: {
       ingestMentions: async () => {}, claimQueued: async () => current,
-      waitForApproval: async (_task, request, sessionId) => calls.push(['waiting', request, sessionId]),
+      ...notifications(), waitForApproval: async (_task, request, sessionId) => {
+        calls.push(['waiting', request, sessionId]); return { id: 'approval' }
+      },
       complete: async () => calls.push(['completed']), fail: async () => {},
     },
     endpoint: { run: async ({ message, sessionId }) => {
@@ -65,4 +68,22 @@ test('approval marker checkpoints and exits; approved queued task resumes same t
     ['completed'],
   ])
   assert.deepEqual(sessions, [null, queued.runtime_session_id])
+})
+
+test('local-user checkpoint has no approval and resumes the same runtime session', async () => {
+  const calls = []
+  const repository = {
+    ingestMentions: async () => {}, claimQueued: async () => task,
+    requireLocalUser: async (_task, request, session) => calls.push(['local', request, session]),
+    publishNotification: (_task, status, detail) => calls.push(['notify', status, detail.summary]),
+    fail: async () => {},
+  }
+  const dispatcher = new LivingroomTaskDispatcher({
+    repository,
+    endpoint: { run: async () => ({ text: '[[LOCAL_USER_REQUIRED: 请完成 2FA]]', sessionId: 'runtime-1' }) },
+    transientStore: new TransientThreadStore(),
+  })
+  assert.equal(await dispatcher.tick(), true)
+  assert.deepEqual(calls.filter(call => call[0] === 'local'), [['local', '请完成 2FA', 'runtime-1']])
+  assert.equal(calls.some(call => call.includes('waiting_approval')), false)
 })

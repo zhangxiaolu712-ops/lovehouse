@@ -15,7 +15,7 @@ test('mention ingestion stores one minimal routed task and no message/event log 
   const transientEvents = []
   const repository = new SupabaseLivingroomTaskRepository({
     rest, ownerId: 'owner', route: CODEX_VPS_ROUTE,
-    transientStore: { append: (...args) => transientEvents.push(args) },
+    transientStore: { append: (...args) => transientEvents.push(args), upsert: (...args) => transientEvents.push(args) },
   })
   assert.equal(await repository.ingestMentions(), 1)
   const insert = calls.find(call => call[0] === 'POST')
@@ -31,6 +31,7 @@ test('mention ingestion stores one minimal routed task and no message/event log 
   })
   assert.deepEqual(calls.filter(call => call[0] === 'POST').map(call => call[1]), ['livingroom_tasks'])
   assert.equal(transientEvents[0][1].content, 'run smoke')
+  assert.equal(transientEvents[1][2].status, 'queued')
 })
 
 test('approval decision uses one request-specific transactional RPC', async () => {

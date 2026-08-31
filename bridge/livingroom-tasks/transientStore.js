@@ -18,6 +18,15 @@ export class TransientThreadStore {
     })
   }
 
+  upsert(threadId, predicate, event) {
+    const current = this.read(threadId)
+    const next = current.filter(item => !predicate(item))
+    this.records.set(threadId, {
+      expiresAt: this.now() + this.ttlMs,
+      events: [...next, { ...event, at: new Date(this.now()).toISOString() }].slice(-200),
+    })
+  }
+
   read(threadId) {
     const record = this.records.get(threadId)
     if (!record) return []
@@ -69,6 +78,18 @@ export class FileTransientThreadStore extends TransientThreadStore {
       this.records.set(threadId, {
         expiresAt: this.now() + this.ttlMs,
         events: [...current, { ...event, at: new Date(this.now()).toISOString() }].slice(-200),
+      })
+      this.persistAtomic()
+    })
+  }
+
+  upsert(threadId, predicate, event) {
+    return this.withLock(() => {
+      this.loadFromDisk()
+      const current = this.records.get(threadId)?.events || []
+      this.records.set(threadId, {
+        expiresAt: this.now() + this.ttlMs,
+        events: [...current.filter(item => !predicate(item)), { ...event, at: new Date(this.now()).toISOString() }].slice(-200),
       })
       this.persistAtomic()
     })

@@ -8,7 +8,7 @@ create table public.livingroom_tasks (
   target_endpoint text not null,
   request_summary text not null check (char_length(request_summary) <= 1000),
   status text not null default 'queued'
-    check (status in ('queued', 'running', 'waiting_approval', 'completed', 'failed')),
+    check (status in ('queued', 'running', 'waiting_approval', 'requires_local_user', 'completed', 'failed')),
   runtime_session_id text,
   final_result_summary text check (final_result_summary is null or char_length(final_result_summary) <= 1000),
   last_error_summary text check (last_error_summary is null or char_length(last_error_summary) <= 1000),
@@ -22,6 +22,9 @@ create table public.livingroom_approvals (
   owner_id uuid not null references auth.users(id) on delete cascade,
   task_id uuid not null references public.livingroom_tasks(id) on delete cascade,
   request_summary text not null check (char_length(request_summary) <= 1000),
+  risk_level text not null check (risk_level in ('low', 'medium', 'high')),
+  action_summary text not null check (char_length(action_summary) between 1 and 160),
+  impact_summary text not null check (char_length(impact_summary) between 1 and 160),
   status text not null default 'pending'
     check (status in ('pending', 'approved', 'rejected', 'expired')),
   expires_at timestamptz not null default (now() + interval '24 hours'),
@@ -51,7 +54,10 @@ create or replace function public.livingroom_request_approval(
   p_task_id uuid,
   p_request_summary text,
   p_runtime_session_id text,
-  p_expires_at timestamptz default null
+  p_expires_at timestamptz default null,
+  p_risk_level text default 'high',
+  p_action_summary text default '需要审批',
+  p_impact_summary text default '影响当前任务'
 ) returns jsonb
 language plpgsql
 security definer
@@ -66,21 +72,53 @@ begin
   if p_expires_at is not null and p_expires_at <= now() then
     raise exception 'approval expiry must be in the future' using errcode = '22023';
   end if;
+  if p_risk_level not in ('low', 'medium', 'high') then p_risk_level := 'high'; end if;
 
   update public.livingroom_tasks
      set status = 'waiting_approval', runtime_session_id = p_runtime_session_id, updated_at = now()
    where id = p_task_id and owner_id = p_owner_id and status = 'running';
   if not found then raise exception 'task is not running' using errcode = 'P0001'; end if;
 
-  insert into public.livingroom_approvals(owner_id, task_id, request_summary, expires_at)
-  values (p_owner_id, p_task_id, btrim(p_request_summary), coalesce(p_expires_at, now() + interval '24 hours'))
+  insert into public.livingroom_approvals(owner_id, task_id, request_summary, risk_level, action_summary, impact_summary, expires_at)
+  values (p_owner_id, p_task_id, btrim(p_request_summary), p_risk_level,
+    left(coalesce(nullif(btrim(p_action_summary), ''), '需要审批'), 160),
+    left(coalesce(nullif(btrim(p_impact_summary), ''), '影响当前任务'), 160),
+    coalesce(p_expires_at, now() + interval '24 hours'))
   returning * into requested;
   return to_jsonb(requested);
 end;
 $$;
 
-revoke all on function public.livingroom_request_approval(uuid, uuid, text, text, timestamptz) from public, anon, authenticated;
-grant execute on function public.livingroom_request_approval(uuid, uuid, text, text, timestamptz) to service_role;
+revoke all on function public.livingroom_request_approval(uuid, uuid, text, text, timestamptz, text, text, text) from public, anon, authenticated;
+grant execute on function public.livingroom_request_approval(uuid, uuid, text, text, timestamptz, text, text, text) to service_role;
+
+create or replace function public.livingroom_require_local_user(
+  p_owner_id uuid, p_task_id uuid, p_request_summary text, p_runtime_session_id text
+) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
+declare changed public.livingroom_tasks%rowtype;
+begin
+  update public.livingroom_tasks set status = 'requires_local_user',
+    runtime_session_id = p_runtime_session_id, updated_at = now()
+  where id = p_task_id and owner_id = p_owner_id and status = 'running'
+  returning * into changed;
+  if changed.id is null then raise exception 'task is not running' using errcode = 'P0001'; end if;
+  return to_jsonb(changed);
+end; $$;
+revoke all on function public.livingroom_require_local_user(uuid, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.livingroom_require_local_user(uuid, uuid, text, text) to service_role;
+
+create or replace function public.livingroom_resume_local_user(
+  p_owner_id uuid, p_task_id uuid
+) returns jsonb language plpgsql security definer set search_path = pg_catalog, public as $$
+declare changed public.livingroom_tasks%rowtype;
+begin
+  update public.livingroom_tasks set status = 'queued', updated_at = now()
+  where id = p_task_id and owner_id = p_owner_id and status = 'requires_local_user'
+  returning * into changed;
+  return case when changed.id is null then null else to_jsonb(changed) end;
+end; $$;
+revoke all on function public.livingroom_resume_local_user(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.livingroom_resume_local_user(uuid, uuid) to service_role;
 
 create or replace function public.livingroom_decide_approval(
   p_owner_id uuid,
