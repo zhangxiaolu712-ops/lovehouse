@@ -61,7 +61,10 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
   }
 }
 
-async function open({ runtimeAdapter = runtime(), threadBindings = new InMemoryThreadBindingStore() } = {}) {
+async function open({
+  runtimeAdapter = runtime(), threadBindings = new InMemoryThreadBindingStore(),
+  taskRepository = null, transientStore = null,
+} = {}) {
   const server = createCodexChatServer({
     authenticate: async authorization => {
       if (authorization !== 'Bearer good') {
@@ -71,6 +74,8 @@ async function open({ runtimeAdapter = runtime(), threadBindings = new InMemoryT
     },
     runtime: runtimeAdapter,
     threadBindings,
+    taskRepository,
+    transientStore,
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -111,6 +116,32 @@ test('health reports the independent runtime contract without secrets', async t 
   assert.equal(payload.service, 'lovehouse-codex-chat')
   assert.equal(payload.runtime.runtime_type, 'codex_cli')
   assert.equal(JSON.stringify(payload).includes('session_id'), false)
+})
+
+test('owner can read a transient task thread and approve the same task', async t => {
+  const calls = []
+  const base = await start(t, {
+    taskRepository: {
+      getThread: async id => ({ id: 'task', thread_id: id, status: 'waiting_approval' }),
+      decideApproval: async (id, decision) => {
+        calls.push([id, decision])
+        return { id, status: decision }
+      },
+    },
+    transientStore: { read: () => [{ type: 'result', content: 'temporary' }] },
+  })
+  const thread = await fetch(`${base}/api/codex/livingroom/threads/${THREAD_ID}`, {
+    headers: { Authorization: 'Bearer good' },
+  })
+  assert.equal(thread.status, 200)
+  assert.equal((await thread.json()).transient_events[0].content, 'temporary')
+  const approved = await fetch(`${base}/api/codex/livingroom/approvals/${THREAD_ID}/decision`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer good', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision: 'approved' }),
+  })
+  assert.equal(approved.status, 200)
+  assert.deepEqual(calls, [[THREAD_ID, 'approved']])
 })
 
 test('owner auth fails before runtime and successful stream exposes normalized metadata', async t => {

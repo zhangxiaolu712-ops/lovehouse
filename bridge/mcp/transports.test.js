@@ -14,6 +14,7 @@ const TOOL_NAMES = [
   'open_memory',
   'read_livingroom',
   'say_livingroom',
+  'read_livingroom_task',
 ]
 
 function assertCalledAt(value) {
@@ -22,7 +23,7 @@ function assertCalledAt(value) {
   assert.equal(Number.isNaN(Date.parse(value)), false)
 }
 
-test('all seven GPT and Claude tool results preserve fields and add UTC+8 called_at', async () => {
+test('all eight GPT and Claude tool results preserve fields and add UTC+8 called_at', async () => {
   for (const actor of ['gpt', 'claude']) {
     const channel = {
       actor,

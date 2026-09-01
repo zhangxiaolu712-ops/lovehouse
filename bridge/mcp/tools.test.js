@@ -22,6 +22,7 @@ const TOOL_NAMES = [
   'open_memory',
   'read_livingroom',
   'say_livingroom',
+  'read_livingroom_task',
 ]
 
 const livingroomFence = rest => createLivingroomRest({ rest })
@@ -75,11 +76,11 @@ function candidate(overrides = {}) {
   }
 }
 
-test('formal MCP surface is exactly the seven reviewed tools', () => {
+test('formal MCP surface includes the reviewed memory, LivingRoom and read-only task tools', () => {
   for (const actor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
     const names = createMcpToolDefinitions(actor).map(tool => tool.name)
     assert.deepEqual(names, TOOL_NAMES)
-    assert.equal(names.length, 7)
+    assert.equal(names.length, 8)
   }
   assert.deepEqual(Object.keys(MCP_TOOL_ROUTES), TOOL_NAMES)
   assert.deepEqual(Object.values(MCP_TOOL_ROUTES), [
@@ -90,6 +91,7 @@ test('formal MCP surface is exactly the seven reviewed tools', () => {
     'memory-v2.open',
     'livingroom.read',
     'livingroom.write',
+    'livingroom-task.read',
   ])
 })
 
@@ -151,7 +153,7 @@ test('private and Engineering remember/revise reject invalid importance before p
   assert.deepEqual(calls, [])
 })
 
-test('seven handler routes are thin Memory V2 or fenced LivingRoom calls', async () => {
+test('existing handlers remain thin Memory V2 or fenced LivingRoom calls', async () => {
   const calls = []
   const memoryV2Service = facadeService(actor => recordingFacade(calls, actor))
   const handler = createTestMcpToolHandler({
@@ -202,6 +204,47 @@ test('seven handler routes are thin Memory V2 or fenced LivingRoom calls', async
   assert.deepEqual(room.messages.map(row => row.id), [6])
   assert.equal(room.context, '[CC] hello')
   assert.equal(sent.sender, 'GPT')
+})
+
+test('read_livingroom_task exposes task status, private thread and final result without mutations', async () => {
+  const calls = []
+  const taskId = '44444444-4444-4444-8444-444444444444'
+  const threadId = '55555555-5555-4555-8555-555555555555'
+  const handler = createTestMcpToolHandler({
+    actor: MEMORY_ACTORS.GPT,
+    memoryV2Service: facadeService(() => recordingFacade([], 'gpt')),
+    livingroomRest: livingroomFence(async () => []),
+    livingroomTaskReader: {
+      async getTask(id) { calls.push(['getTask', id]); return { id, thread_id: threadId, status: 'completed', request_summary: 'run tests', final_result_summary: 'all green' } },
+      async getThread(id) { calls.push(['getThread', id]); return null },
+      readPrivateThread(id) { calls.push(['readPrivateThread', id]); return [{ type: 'workflow_milestone', summary: 'running tests' }] },
+    },
+  })
+  const result = JSON.parse(await handler('read_livingroom_task', { task_id: taskId }))
+  assert.equal(result.task.status, 'completed')
+  assert.equal(result.final_result, 'all green')
+  assert.deepEqual(result.private_thread, [{ type: 'workflow_milestone', summary: 'running tests' }])
+  assert.deepEqual(calls, [['getTask', taskId], ['readPrivateThread', threadId]])
+  await assert.rejects(handler('read_livingroom_task', { task_id: taskId, thread_id: threadId }), /exactly one/)
+})
+
+test('read_livingroom_task returns safe not found for an unavailable thread without reading transient data', async () => {
+  let transientReads = 0
+  const handler = createTestMcpToolHandler({
+    actor: MEMORY_ACTORS.CLAUDE,
+    memoryV2Service: facadeService(() => recordingFacade([], 'claude')),
+    livingroomRest: livingroomFence(async () => []),
+    livingroomTaskReader: {
+      async getTask() { return null },
+      async getThread() { return null },
+      readPrivateThread() { transientReads += 1; return [] },
+    },
+  })
+  const result = JSON.parse(await handler('read_livingroom_task', {
+    thread_id: '55555555-5555-4555-8555-555555555555',
+  }))
+  assert.deepEqual(result, { found: false })
+  assert.equal(transientReads, 0)
 })
 
 test('GPT and Claude channels select fixed facades and ignore actor spoofing', async () => {
