@@ -24,6 +24,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navDeepLink
 import fyi.b612.lovehouse.app.AppDependencies
+import fyi.b612.lovehouse.feature.chat.RemoteTaskChatScreen
 import fyi.b612.lovehouse.feature.home.HomeScreen
 import fyi.b612.lovehouse.feature.nativelab.NativeLabScreen
 import fyi.b612.lovehouse.feature.settings.SettingsScreen
@@ -78,12 +79,7 @@ private fun LoveHouseContent(
             route = AppDestination.Chat.route,
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Chat.deepLink }),
         ) {
-            PlaceholderScreen(
-                eyebrow = "对话房间",
-                title = "聊天",
-                message = "原生聊天契约会在后续阶段接入，这里暂时没有搬入 Claude、Codex 或现有网页聊天。",
-                status = "暂未连接",
-            )
+            RemoteTaskChatScreen()
         }
 
         composable(
