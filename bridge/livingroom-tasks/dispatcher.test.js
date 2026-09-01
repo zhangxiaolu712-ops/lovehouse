@@ -34,6 +34,28 @@ test('queued task wakes Codex and keeps full result only in transient thread', a
   assert.equal(store.read('thread').at(-1).content, 'full result')
 })
 
+test('runtime milestones update one transient workflow event and workflow notification', async () => {
+  const store = new TransientThreadStore()
+  const calls = []
+  const dispatcher = new LivingroomTaskDispatcher({
+    repository: {
+      ingestMentions: async () => {}, claimQueued: async () => task,
+      publishNotification: (_task, status, detail) => calls.push([status, detail?.summary]),
+      complete: async () => {}, fail: async () => {},
+    },
+    endpoint: { run: async input => {
+      input.onMilestone({ stage: 'tool', summary: '运行 targeted tests' })
+      input.onMilestone({ stage: 'tool', summary: '运行 full Bridge tests' })
+      return { text: 'done', sessionId: 'session' }
+    } },
+    transientStore: store,
+  })
+  await dispatcher.tick()
+  const milestones = store.read('thread').filter(event => event.type === 'workflow_milestone')
+  assert.deepEqual(milestones.map(event => event.summary), ['运行 full Bridge tests'])
+  assert.equal(calls.some(call => call[0] === 'running' && call[1] === '运行 full Bridge tests'), true)
+})
+
 test('approval marker checkpoints and exits; approved queued task resumes same thread', async () => {
   const calls = []
   const sessions = []

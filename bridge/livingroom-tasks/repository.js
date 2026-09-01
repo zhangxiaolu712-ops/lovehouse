@@ -37,7 +37,7 @@ export class SupabaseLivingroomTaskRepository {
 
   publishNotification(task, status, detail) {
     const event = taskNotification(task, status, detail)
-    this.transientStore?.upsert(task.thread_id, item => item.type === 'task_notification' && item.task_id === task.id, event)
+    this.transientStore?.upsert(task.thread_id, item => item.type === 'task_notification' && item.notification_key === event.notification_key, event)
     return event
   }
 
@@ -86,7 +86,11 @@ export class SupabaseLivingroomTaskRepository {
   }
 
   async getThread(threadId) {
-    return (await this.rest('GET', `livingroom_tasks?thread_id=eq.${q(threadId)}&limit=1&select=*`))?.[0] || null
+    return (await this.rest('GET', `livingroom_tasks?thread_id=eq.${q(threadId)}&owner_id=eq.${q(this.ownerId)}&limit=1&select=*`))?.[0] || null
+  }
+
+  async getTask(taskId) {
+    return (await this.rest('GET', `livingroom_tasks?id=eq.${q(taskId)}&owner_id=eq.${q(this.ownerId)}&limit=1&select=*`))?.[0] || null
   }
 
   async createManualApproval(taskId, request) {

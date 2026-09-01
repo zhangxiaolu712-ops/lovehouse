@@ -68,3 +68,25 @@ test('conditional claim is idempotent when two dispatchers race', async () => {
   }
   assert.equal(wakes, 1)
 })
+
+test('thread reads are fixed-owner scoped and return not found for missing or cross-owner threads', async () => {
+  const calls = []
+  const tasks = [
+    { id: 'task-owner', thread_id: 'thread-owner', owner_id: 'owner' },
+    { id: 'task-other', thread_id: 'thread-other', owner_id: 'other-owner' },
+  ]
+  const rest = async (method, path) => {
+    calls.push([method, path])
+    const threadId = decodeURIComponent(path.match(/thread_id=eq\.([^&]+)/)?.[1] || '')
+    const ownerId = decodeURIComponent(path.match(/owner_id=eq\.([^&]+)/)?.[1] || '')
+    return tasks.filter(task => task.thread_id === threadId && task.owner_id === ownerId)
+  }
+  const repository = new SupabaseLivingroomTaskRepository({
+    rest, ownerId: 'owner', route: CODEX_VPS_ROUTE,
+  })
+
+  assert.equal((await repository.getThread('thread-owner')).id, 'task-owner')
+  assert.equal(await repository.getThread('thread-missing'), null)
+  assert.equal(await repository.getThread('thread-other'), null)
+  assert.equal(calls.every(([, path]) => path.includes('owner_id=eq.owner')), true)
+})

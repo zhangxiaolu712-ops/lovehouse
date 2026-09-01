@@ -13,6 +13,7 @@ export const CLAUDE_MCP_TOOL_NAMES = Object.freeze([
   'open_memory',
   'read_livingroom',
   'say_livingroom',
+  'read_livingroom_task',
 ])
 
 export const CLAUDE_ALLOWED_TOOLS = Object.freeze(

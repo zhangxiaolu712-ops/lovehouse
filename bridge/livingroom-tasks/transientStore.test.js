@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { FileTransientThreadStore, TransientThreadStore } from './transientStore.js'
+import { FileTransientThreadReader, FileTransientThreadStore, TransientThreadStore } from './transientStore.js'
 
 test('private thread events expire after the configured transient TTL', () => {
   let now = 1_000
@@ -12,6 +12,17 @@ test('private thread events expire after the configured transient TTL', () => {
   assert.equal(store.read('thread').length, 1)
   now = 1_201
   assert.deepEqual(store.read('thread'), [])
+})
+
+test('read-only file reader returns private events without creating or changing files', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'livingroom-reader-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const filePath = path.join(directory, 'threads.json')
+  fs.writeFileSync(filePath, JSON.stringify({ threads: { thread: { expiresAt: 2000, events: [{ type: 'result', content: 'done' }] } } }))
+  const before = fs.statSync(filePath).mtimeMs
+  const reader = new FileTransientThreadReader({ filePath, now: () => 1000 })
+  assert.deepEqual(reader.read('thread'), [{ type: 'result', content: 'done' }])
+  assert.equal(fs.statSync(filePath).mtimeMs, before)
 })
 
 test('status progress replaces the same task notification instead of accumulating events', () => {

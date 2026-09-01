@@ -4,9 +4,13 @@ import { normalizeApprovalRisk, taskNotification } from './notifications.js'
 
 const task = { id: 'task-1', thread_id: 'thread-1', request_summary: '部署服务' }
 
-test('one task keeps a stable Android notification key across all states', () => {
-  const keys = ['queued', 'running', 'completed', 'failed'].map(status => taskNotification(task, status).notification_key)
-  assert.deepEqual(new Set(keys), new Set(['livingroom-task:task-1']))
+test('receipt, workflow and completion are separate task-aware notification surfaces', () => {
+  const receipt = taskNotification(task, 'queued')
+  const workflow = taskNotification(task, 'running')
+  const completion = taskNotification(task, 'completed')
+  assert.match(receipt.body, /部署服务/)
+  assert.deepEqual([receipt.surface, workflow.surface, completion.surface], ['receipt', 'workflow', 'completion'])
+  assert.equal(new Set([receipt.notification_key, workflow.notification_key, completion.notification_key]).size, 3)
 })
 
 test('approval risk is explicit and unknown risk fails closed to high', () => {
@@ -24,4 +28,3 @@ test('requires_local_user never exposes remote approval controls', () => {
   assert.match(event.body, /^待办：/)
   assert.equal(event.actions.includes('approve'), false)
 })
-

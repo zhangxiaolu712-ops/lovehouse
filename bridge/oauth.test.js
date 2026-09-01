@@ -459,6 +459,7 @@ test('OAuth access tokens reach MCP initialize, exact tools/list and fixed GPT/C
       'open_memory',
       'read_livingroom',
       'say_livingroom',
+      'read_livingroom_task',
     ])
     const toolCall = await call('tools/call', 3, {
       name: 'wake_up',

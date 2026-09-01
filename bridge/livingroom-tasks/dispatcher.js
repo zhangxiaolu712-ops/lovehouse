@@ -1,6 +1,7 @@
 const APPROVAL_MARKER = /\[\[APPROVAL_REQUIRED:\s*([^\]]+)\]\]/i
 const LOCAL_USER_MARKER = /\[\[LOCAL_USER_REQUIRED:\s*([^\]]+)\]\]/i
 import { normalizeApprovalRisk } from './notifications.js'
+import { workflowMilestone } from './notifications.js'
 
 function parseApproval(value) {
   const [risk, summary, impact, ...detail] = value.split('|').map(part => part.trim())
@@ -56,6 +57,13 @@ export class LivingroomTaskDispatcher {
         message: resumed
           ? `Approval granted. Resume this task from its checkpoint and finish it: ${request}`
           : request,
+        onMilestone: milestone => {
+          const event = workflowMilestone(task, milestone)
+          this.transientStore.upsert(task.thread_id,
+            item => item.type === 'workflow_milestone' && item.task_id === task.id,
+            event)
+          this.repository.publishNotification(task, 'running', { summary: event.summary })
+        },
       })
       const approval = result.text.match(APPROVAL_MARKER)
       const localUser = result.text.match(LOCAL_USER_MARKER)

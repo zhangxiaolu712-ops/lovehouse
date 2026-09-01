@@ -149,3 +149,22 @@ export class FileTransientThreadStore extends TransientThreadStore {
     this.cleanupTimer = null
   }
 }
+
+export class FileTransientThreadReader {
+  constructor({ filePath, now = () => Date.now() } = {}) {
+    if (!path.isAbsolute(filePath || '')) throw new TypeError('transient thread file path must be absolute')
+    this.filePath = filePath
+    this.now = now
+  }
+
+  read(threadId) {
+    try {
+      const record = JSON.parse(fs.readFileSync(this.filePath, 'utf8')).threads?.[threadId]
+      if (!record || !Array.isArray(record.events) || record.expiresAt <= this.now()) return []
+      return record.events
+    } catch (error) {
+      if (error.code === 'ENOENT') return []
+      throw error
+    }
+  }
+}
