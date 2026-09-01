@@ -37,6 +37,9 @@ import {
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest } from './livingroom.js'
+import { SupabaseLivingroomTaskRepository } from './livingroom-tasks/repository.js'
+import { CODEX_VPS_ROUTE } from './livingroom-tasks/routing.js'
+import { FileTransientThreadReader } from './livingroom-tasks/transientStore.js'
 import { safeEqual } from './security.js'
 import {
   createClientOwnerAuth,
@@ -200,6 +203,18 @@ const supabaseRest = createSupabaseRest({
   serverKey: SUPABASE_SERVER_KEY,
 })
 const livingroomRest = createLivingroomRest({ rest: supabaseRest })
+const livingroomTaskThreads = new FileTransientThreadReader({
+  filePath: process.env.LIVINGROOM_TRANSIENT_FILE
+    || '/root/lovehouse-codex-chat-state/livingroom-transient-threads.json',
+})
+const livingroomTaskRepository = new SupabaseLivingroomTaskRepository({
+  rest: supabaseRest, ownerId: OWNER_USER_ID, route: CODEX_VPS_ROUTE,
+})
+const livingroomTaskReader = Object.freeze({
+  getTask: taskId => livingroomTaskRepository.getTask(taskId),
+  getThread: threadId => livingroomTaskRepository.getThread(threadId),
+  readPrivateThread: threadId => livingroomTaskThreads.read(threadId),
+})
 const memoryV2Repository = new SupabaseMemoryV2Repository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
@@ -474,12 +489,14 @@ const gptChannel = createMcpChannel({
   memoryV2Service,
   engineeringMemoryService,
   livingroomRest,
+  livingroomTaskReader,
 })
 const claudeChannel = createMcpChannel({
   actor: MEMORY_ACTORS.CLAUDE,
   memoryV2Service,
   engineeringMemoryService,
   livingroomRest,
+  livingroomTaskReader,
 })
 
 function verifyMcpKey(req) {

@@ -20,8 +20,9 @@ test('the explicit Claude whitelist matches the reviewed Bridge routes', () => {
     'open_memory',
     'read_livingroom',
     'say_livingroom',
+    'read_livingroom_task',
   ])
-  assert.equal(CLAUDE_MCP_TOOL_NAMES.length, 7)
+  assert.equal(CLAUDE_MCP_TOOL_NAMES.length, 8)
   assert.equal(CLAUDE_ALLOWED_TOOLS.every(name => name.startsWith('mcp__lovehouse__')), true)
 })
 

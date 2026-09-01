@@ -35,7 +35,7 @@ function recordingEngineeringMemoryService(calls) {
 }
 
 for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
-  test(`${expectedActor} channel exposes exactly seven tools and fixes its Memory V2 actor`, async () => {
+  test(`${expectedActor} channel exposes the reviewed tools and fixes its Memory V2 actor`, async () => {
     const calls = []
     const channel = createMcpChannel({
       actor: expectedActor,
@@ -55,6 +55,7 @@ for (const expectedActor of [MEMORY_ACTORS.GPT, MEMORY_ACTORS.CLAUDE]) {
       'open_memory',
       'read_livingroom',
       'say_livingroom',
+      'read_livingroom_task',
     ])
     await channel.callTool('remember', {
       content: 'server actor wins',

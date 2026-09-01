@@ -61,6 +61,8 @@ export function createCodexChatHandler({
   threadBindings = new InMemoryThreadBindingStore(),
   routePrefix = '/api/codex',
   serviceName = 'lovehouse-codex-chat',
+  taskRepository = null,
+  transientStore = null,
 }) {
   assertRuntimeAdapter(runtime)
   if (typeof authenticate !== 'function') throw new TypeError('Chat runtime requires Owner auth')
@@ -73,6 +75,39 @@ export function createCodexChatHandler({
         service: serviceName,
         runtime: runtime.getCapabilities(),
       })
+    }
+    const threadMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/threads/([0-9a-f-]+)$`, 'i'))
+    const manualApprovalMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/tasks/([0-9a-f-]+)/approval$`, 'i'))
+    const decisionMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/approvals/([0-9a-f-]+)/decision$`, 'i'))
+    const localResumeMatch = pathname.match(new RegExp(`^${routePrefix}/livingroom/tasks/([0-9a-f-]+)/local-user/resume$`, 'i'))
+    if (taskRepository && (threadMatch || manualApprovalMatch || decisionMatch || localResumeMatch)) {
+      try {
+        await authenticate(req.headers.authorization)
+        if (threadMatch && req.method === 'GET') {
+          const task = await taskRepository.getThread(threadMatch[1])
+          return json(res, task ? 200 : 404, task ? {
+            thread_id: threadMatch[1], task, transient_events: transientStore?.read(threadMatch[1]) || [],
+          } : { error: { code: 'THREAD_NOT_FOUND' } })
+        }
+        const body = await readJson(req)
+        if (manualApprovalMatch && req.method === 'POST') {
+          if (typeof body.request !== 'string' || !body.request.trim()) return json(res, 400, { error: { code: 'APPROVAL_REQUEST_REQUIRED' } })
+          const approval = await taskRepository.createManualApproval(manualApprovalMatch[1], body.request.trim())
+          return json(res, approval ? 201 : 409, approval || { error: { code: 'TASK_NOT_RUNNING' } })
+        }
+        if (decisionMatch && req.method === 'POST') {
+          if (!['approved', 'rejected', 'expired'].includes(body.decision)) return json(res, 400, { error: { code: 'APPROVAL_DECISION_INVALID' } })
+          const approval = await taskRepository.decideApproval(decisionMatch[1], body.decision)
+          return json(res, approval ? 200 : 409, approval || { error: { code: 'APPROVAL_NOT_PENDING' } })
+        }
+        if (localResumeMatch && req.method === 'POST') {
+          const task = await taskRepository.resumeLocalUser(localResumeMatch[1])
+          return json(res, task ? 200 : 409, task || { error: { code: 'LOCAL_ACTION_NOT_PENDING' } })
+        }
+        return json(res, 405, { error: { code: 'METHOD_NOT_ALLOWED' } })
+      } catch (error) {
+        return json(res, error.status || 500, { error: publicRuntimeError(error) })
+      }
     }
     if (pathname !== `${routePrefix}/chat`) {
       return json(res, 404, { error: publicRuntimeError(new ChatRuntimeError(

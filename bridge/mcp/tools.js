@@ -10,6 +10,7 @@ export const MCP_TOOL_ROUTES = Object.freeze({
   open_memory: 'memory-v2.open',
   read_livingroom: 'livingroom.read',
   say_livingroom: 'livingroom.write',
+  read_livingroom_task: 'livingroom-task.read',
 })
 
 const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
@@ -164,6 +165,14 @@ export function createMcpToolDefinitions(actor) {
         required: ['message'],
       },
     },
+    {
+      name: 'read_livingroom_task',
+      description: '只读查看一个 LivingRoom 工单及其私有临时线程、当前状态和最终结果；不提供审批或状态写入。',
+      inputSchema: {
+        ...closedObject({ task_id: uuidField, thread_id: uuidField }),
+        anyOf: [{ required: ['task_id'] }, { required: ['thread_id'] }],
+      },
+    },
   ]
 }
 
@@ -181,7 +190,7 @@ function parseSince(value) {
   return new Date(value).toISOString()
 }
 
-export function createMcpToolHandler({ actor, memoryV2Service, engineeringMemoryService, livingroomRest }) {
+export function createMcpToolHandler({ actor, memoryV2Service, engineeringMemoryService, livingroomRest, livingroomTaskReader = null }) {
   if (!Object.values(MEMORY_ACTORS).includes(actor)) throw new Error('A fixed MCP actor is required')
   if (!memoryV2Service || typeof memoryV2Service.forActor !== 'function') {
     throw new Error('MemoryV2Service is required')
@@ -269,6 +278,28 @@ export function createMcpToolHandler({ actor, memoryV2Service, engineeringMemory
         message: args.message.trim(),
       })
       return JSON.stringify(rows[0])
+    }
+    if (name === 'read_livingroom_task') {
+      if (!livingroomTaskReader) throw new Error('LivingRoom task reader is unavailable')
+      const hasTaskId = typeof args.task_id === 'string' && args.task_id.length > 0
+      const hasThreadId = typeof args.thread_id === 'string' && args.thread_id.length > 0
+      if (hasTaskId === hasThreadId) throw new TypeError('exactly one of task_id or thread_id is required')
+      const task = hasTaskId
+        ? await livingroomTaskReader.getTask(args.task_id)
+        : await livingroomTaskReader.getThread(args.thread_id)
+      if (!task) return JSON.stringify({ found: false })
+      const events = livingroomTaskReader.readPrivateThread(task.thread_id)
+      return JSON.stringify({
+        found: true,
+        task: {
+          id: task.id, thread_id: task.thread_id, status: task.status,
+          target_agent: task.target_agent, request_summary: task.request_summary,
+          created_at: task.created_at, updated_at: task.updated_at, completed_at: task.completed_at,
+        },
+        status: task.status,
+        private_thread: events,
+        final_result: task.final_result_summary || events.findLast?.(event => event.type === 'result')?.content || null,
+      })
     }
     throw new Error(`unknown tool: ${name}`)
   }
