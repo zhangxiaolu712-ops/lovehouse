@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -280,6 +281,7 @@ fun NativeLabScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
+            .safeDrawingPadding()
             .padding(horizontal = LoveHouseSpacing.Page),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             top = LoveHouseSpacing.XLarge,

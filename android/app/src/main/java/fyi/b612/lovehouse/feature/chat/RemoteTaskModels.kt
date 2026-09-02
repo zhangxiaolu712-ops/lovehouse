@@ -62,18 +62,19 @@ data class RemoteAgentTask(
 fun RemoteAgentTask.applyMockApproval(eventId: String, approved: Boolean): RemoteAgentTask {
     val target = workflow.firstOrNull { it.id == eventId } ?: return this
     if (target.status != WorkflowEventStatus.WaitingApproval) return this
+    val targetIndex = workflow.indexOfFirst { it.id == eventId }
 
     return copy(
         status = if (approved) RemoteTaskStatus.Running else RemoteTaskStatus.Failed,
         latestMilestone = if (approved) "审批已通过，等待继续" else "审批已拒绝",
         workflow = workflow.map { event ->
-            if (event.id != eventId) {
-                event
-            } else {
-                event.copy(
+            when {
+                event.id == eventId -> event.copy(
                     status = if (approved) WorkflowEventStatus.Completed else WorkflowEventStatus.Failed,
                     summary = if (approved) "已批准（本地 Mock），尚未调用任何远程接口。" else "已拒绝（本地 Mock）。",
                 )
+                approved && workflow.indexOf(event) == targetIndex + 1 -> event.copy(status = WorkflowEventStatus.Current, timestamp = "刚刚")
+                else -> event
             }
         },
         failureReason = if (approved) failureReason else "用户拒绝了本次本地 Mock 审批。",

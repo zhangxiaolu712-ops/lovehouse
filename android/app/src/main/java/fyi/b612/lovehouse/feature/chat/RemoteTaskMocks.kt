@@ -18,16 +18,16 @@ object RemoteTaskMocks {
     private fun running() = RemoteAgentTask(
         taskId = "mock-running-001",
         runtime = AgentRuntime.Vps,
-        title = "恢复 MCP 回执展示",
-        summary = "让小客厅能用短摘要展示远程任务进度。",
+        title = "Chat 专项返修",
+        summary = "活化临时任务 Workflow，并收口 ChatList 顶栏。",
         status = RemoteTaskStatus.Running,
-        latestMilestone = "正在修改 MCP 回执层",
+        latestMilestone = "正在活化临时 Workflow",
         updatedAt = "刚刚 · 21:18",
         workflow = baseWorkflow() + listOf(
-            event("editing", "实现", "修改 MCP 回执层", "Android UI", "正在整理统一的任务事件展示。", WorkflowEventStatus.Current, "21:18"),
+            event("editing", "实现", "活化临时 Workflow", "Android UI", "正在连接节点地图、正文日志与任务状态。", WorkflowEventStatus.Current, "21:18"),
             event("targeted-test", "验证", "运行针对性测试", "Android", "等待当前修改完成。", WorkflowEventStatus.Pending, "—"),
             event("full-test", "验证", "运行完整测试", "Android", "等待针对性测试通过。", WorkflowEventStatus.Pending, "—"),
-            event("approval", "交付", "等待审批", "变更", "完成后等待用户查看。", WorkflowEventStatus.Pending, "—"),
+            event("approval", "审批", "等待审批", "工作区写入", "继续前需要确认本次低风险前端变更。", WorkflowEventStatus.Pending, "—", ApprovalRequest("继续执行前端 Mock 施工", "仅当前 Android 工作区", ApprovalRisk.Low)),
             event("done", "完成", "完成", "任务", "尚未完成。", WorkflowEventStatus.Pending, "—"),
         ),
     )

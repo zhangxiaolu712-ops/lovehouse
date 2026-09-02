@@ -14,17 +14,23 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navDeepLink
+import androidx.navigation.navArgument
 import fyi.b612.lovehouse.app.AppDependencies
-import fyi.b612.lovehouse.feature.chat.RemoteTaskChatScreen
+import fyi.b612.lovehouse.core.designsystem.LoveHouseAppShell
+import fyi.b612.lovehouse.feature.chat.ChatListScreen
+import fyi.b612.lovehouse.feature.chat.ChatSessionStore
+import fyi.b612.lovehouse.feature.chat.ChatShellScreen
 import fyi.b612.lovehouse.feature.home.HomeScreen
 import fyi.b612.lovehouse.feature.nativelab.NativeLabScreen
 import fyi.b612.lovehouse.feature.settings.SettingsScreen
@@ -37,25 +43,8 @@ fun LoveHouseShell(
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController(),
 ) {
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val selected = AppDestination.selectedForRoute(backStackEntry?.destination?.route)
-
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        if (maxWidth >= 720.dp) {
-            Row(Modifier.fillMaxSize()) {
-                LoveHouseNavigationRail(selected = selected, onNavigate = { navController.openPrimary(it) })
-                LoveHouseContent(navController, dependencies, Modifier.weight(1f))
-            }
-        } else {
-            Scaffold(
-                containerColor = MaterialTheme.colorScheme.background,
-                bottomBar = {
-                    LoveHouseNavigationBar(selected = selected, onNavigate = { navController.openPrimary(it) })
-                },
-            ) { padding ->
-                LoveHouseContent(navController, dependencies, Modifier.padding(padding))
-            }
-        }
+    LoveHouseAppShell(localStorage = dependencies.localStorage, modifier = modifier.fillMaxSize()) {
+        LoveHouseContent(navController, dependencies, Modifier.fillMaxSize())
     }
 }
 
@@ -65,6 +54,7 @@ private fun LoveHouseContent(
     dependencies: AppDependencies,
     modifier: Modifier = Modifier,
 ) {
+    val chatStore = remember { ChatSessionStore() }
     NavHost(
         navController = navController,
         startDestination = AppDestination.Home.route,
@@ -73,13 +63,30 @@ private fun LoveHouseContent(
         composable(
             route = AppDestination.Home.route,
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Home.deepLink }),
-        ) { HomeScreen() }
+        ) {
+            HomeScreen(
+                onOpenChat = { navController.navigate(AppDestination.Chat.route) },
+                onOpenSettings = { navController.navigate(AppDestination.Settings.route) },
+                localStorage = dependencies.localStorage,
+            )
+        }
 
         composable(
             route = AppDestination.Chat.route,
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Chat.deepLink }),
         ) {
-            RemoteTaskChatScreen()
+            ChatListScreen(store = chatStore, onOpenThread = { thread ->
+                navController.navigate("chat/thread/${thread.threadId}")
+            })
+        }
+
+        composable(
+            route = AppDestination.ChatThread.route,
+            arguments = listOf(navArgument("threadId") { type = NavType.StringType }),
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ChatThread.deepLink }),
+        ) { entry ->
+            val threadId = entry.arguments?.getString("threadId").orEmpty()
+            ChatShellScreen(threadId = threadId, store = chatStore, onBack = { navController.popBackStack() })
         }
 
         composable(
@@ -176,8 +183,10 @@ private fun LoveHouseNavigationRail(
 
 private fun NavHostController.openPrimary(destination: AppDestination) {
     navigate(destination.route) {
-        popUpTo(graph.findStartDestination().id) { saveState = true }
+        popUpTo(graph.findStartDestination().id) {
+            saveState = destination != AppDestination.Chat
+        }
         launchSingleTop = true
-        restoreState = true
+        restoreState = destination != AppDestination.Chat
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -61,6 +62,7 @@ fun RemoteTaskChatScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
+            .safeDrawingPadding()
             .padding(horizontal = LoveHouseSpacing.Page),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LoveHouseSpacing.XLarge),
         verticalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Large),
@@ -112,6 +114,21 @@ fun RemoteTaskChatScreen(
             },
         )
     }
+}
+
+@Composable
+fun RemoteTaskWorkflowOverlay(taskId: String, onDismiss: () -> Unit) {
+    var tasks by remember { mutableStateOf(RemoteTaskMocks.scenarios) }
+    val task = tasks.firstOrNull { it.taskId == taskId } ?: tasks.first()
+    RemoteTaskDialog(
+        task = task,
+        onDismiss = onDismiss,
+        onApprovalDecision = { eventId, approved ->
+            tasks = tasks.map { candidate ->
+                if (candidate.taskId == task.taskId) candidate.applyMockApproval(eventId, approved) else candidate
+            }
+        },
+    )
 }
 
 @Composable
