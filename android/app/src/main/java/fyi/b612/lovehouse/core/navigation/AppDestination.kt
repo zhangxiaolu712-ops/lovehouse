@@ -12,6 +12,7 @@ enum class AppDestination(
     Memory("memory", "记忆", "忆", "lovehouse://memory", true),
     Engineering("engineering", "工程", "工", "lovehouse://engineering", true),
     Settings("settings", "设置", "设", "lovehouse://settings", true),
+    ChatThread("chat/thread/{threadId}", "聊天详情", "聊", "lovehouse://chat/thread/{threadId}", false),
     NativeLab("settings/native-lab", "原生能力测试", "验", "lovehouse://settings/native-lab", false),
     ;
 
@@ -20,6 +21,7 @@ enum class AppDestination(
 
         fun selectedForRoute(route: String?): AppDestination? = when {
             route == null -> null
+            route.startsWith(Chat.route) -> Chat
             route.startsWith(Settings.route) -> Settings
             else -> primary.firstOrNull { it.route == route }
         }

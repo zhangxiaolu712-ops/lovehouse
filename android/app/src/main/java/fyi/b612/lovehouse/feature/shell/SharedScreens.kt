@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,7 @@ fun LoveHouseLaunchScreen(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
+            .safeDrawingPadding()
             .background(
                 Brush.verticalGradient(
                     listOf(
@@ -81,6 +83,7 @@ fun PlaceholderScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            .safeDrawingPadding()
             .padding(horizontal = LoveHouseSpacing.Page, vertical = LoveHouseSpacing.XLarge),
         verticalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Large),
     ) {
