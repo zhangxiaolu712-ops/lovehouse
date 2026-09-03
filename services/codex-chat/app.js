@@ -202,6 +202,7 @@ export function createCodexChatHandler({
           })
         },
         onText: text => emit('text', { text }),
+        onThinking: thinking => emit('thinking', { thinking }),
         onEvent: (event, payload) => {
           emit(event, payload)
           if (event === 'reasoning_status') {
@@ -227,7 +228,11 @@ export function createCodexChatHandler({
       await bindingWrite
       sessions.bind(session.key, result.sessionId)
       sessions.complete(session.key, input.message, result.text)
-      emit('done', { ok: true, session_id: result.sessionId })
+      emit('done', {
+        ok: true,
+        session_id: result.sessionId,
+        ...(typeof result.model === 'string' && result.model ? { model: result.model } : {}),
+      })
       if (!clientClosed) res.end()
     } catch (error) {
       if (error?.code === 'QUOTA_EXHAUSTED') {

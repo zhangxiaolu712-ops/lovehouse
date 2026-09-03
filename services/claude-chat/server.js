@@ -12,6 +12,7 @@ const authenticate = createSupabaseOwnerAuth({
 const runtime = new ClaudeCliRuntimeAdapter({
   executable: process.env.CLAUDE_CHAT_PROVIDER_EXECUTABLE || '/usr/bin/claude',
   cwd: process.env.CLAUDE_CHAT_CWD || '/tmp',
+  model: process.env.CLAUDE_CHAT_MODEL || null,
 })
 const threadBindings = new FileThreadBindingStore({
   filePath: process.env.CLAUDE_CHAT_BINDINGS_FILE

@@ -64,6 +64,68 @@ async function chat(base) {
   })
 }
 
+test('Claude sidecar streams thinking separately and stores正文-only history', async t => {
+  const calls = []
+  const isolatedRuntime = {
+    getCapabilities() {
+      return {
+        runtime_type: 'claude_cli', adapter_id: 'claude-cli-v1', enabled: true,
+        capabilities: { streaming_text: true, reasoning_summary: 'conditional' },
+      }
+    },
+    getQuota() { return unknownQuota('claude_cli_unavailable') },
+    getUsage() { return null }, startOrResume() {}, sendMessage() {}, resetRuntime() {},
+    async streamEvents(input) {
+      calls.push({
+        sessionId: input.sessionId,
+        history: input.history.map(item => ({ ...item })),
+      })
+      input.onRuntimeBinding(input.sessionId || SESSION_ID)
+      input.onThinking('private-thought')
+      input.onText('正文')
+      return {
+        text: '正文', sessionId: input.sessionId || SESSION_ID,
+        usage: null, model: 'claude-opus-4-6',
+      }
+    },
+  }
+  const server = createChatRuntimeServer({
+    authenticate: async authorization => {
+      if (authorization !== 'Bearer good') {
+        throw new ChatRuntimeError('AUTH_FAILED', 'Owner token invalid', { stage: 'auth', status: 401 })
+      }
+      return { userId: 'owner' }
+    },
+    runtime: isolatedRuntime,
+    routePrefix: '/api/claude',
+    serviceName: 'lovehouse-claude-chat',
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(() => new Promise(resolve => server.close(resolve)))
+  const base = `http://127.0.0.1:${server.address().port}`
+
+  const first = await chat(base)
+  assert.equal(first.status, 200)
+  const firstStream = await first.text()
+  assert.match(firstStream, /event: thinking\ndata: \{"thinking":"private-thought"\}/)
+  assert.match(firstStream, /event: text\ndata: \{"text":"正文"\}/)
+  assert.match(firstStream, /"model":"claude-opus-4-6"/)
+
+  const second = await fetch(`${base}/api/claude/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer good' },
+    body: JSON.stringify({ thread_id: THREAD_ID, message: 'next' }),
+  })
+  assert.equal(second.status, 200)
+  await second.text()
+  assert.deepEqual(calls[1].history, [
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: '正文' },
+  ])
+  assert.equal(JSON.stringify(calls[1].history).includes('private-thought'), false)
+})
+
 test('Claude sidecar route and persistent binding survive sidecar restart', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lovehouse-claude-mainline-'))
   t.after(() => fs.rm(directory, { recursive: true, force: true }))
