@@ -9,6 +9,7 @@ export const CLIENT_API_VERSION = 1
 export const CLIENT_STREAM_EVENTS = Object.freeze([
   'message_start',
   'text_delta',
+  'thinking',
   'reasoning_status',
   'tool_call',
   'tool_result',

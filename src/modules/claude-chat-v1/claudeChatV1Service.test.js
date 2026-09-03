@@ -23,6 +23,8 @@ test('Claude experiment consumes only the unified /api/v1 stream contract', asyn
       return new Response([
         'event: message_start\ndata: {"thread_id":"11111111-1111-4111-8111-111111111111","runtime":"claude_cli","adapter_id":"claude-cli-v1"}',
         'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"claude_cli"}',
+        'event: thinking\ndata: {"thinking":"先检查"}',
+        'event: thinking\ndata: {"thinking":"当前状态。"}',
         'event: usage\ndata: {"estimated_input_tokens":8,"actual_input_tokens":12,"cached_input_tokens":4,"actual_output_tokens":5,"reasoning_output_tokens":null,"total_tokens":17,"usage_source":"claude_cli","baseline_status":"known"}',
         'event: quota\ndata: {"status":"unknown","remaining":null,"unit":null,"reset_at":null,"source":"claude_cli_unavailable"}',
         'event: context_breakdown\ndata: {"recent_chat":{"enabled":true},"memory":{"enabled":false},"worldbook":{"enabled":false},"persona":{"enabled":false},"current_message":{"enabled":true},"reasoning":{"enabled":true,"available":false,"status":"unavailable","summary":null,"active_context":true,"resumes_with_thread":true,"compaction":"claude_native"},"estimated_tokens":2}',
@@ -43,9 +45,10 @@ test('Claude experiment consumes only the unified /api/v1 stream contract', asyn
   assert.deepEqual(text, ['你', '你好'])
   assert.equal(result.text, '你好')
   assert.deepEqual(events.map(item => item.event), [
-    'message_start', 'reasoning_status', 'usage', 'quota', 'context_breakdown',
+    'message_start', 'reasoning_status', 'thinking', 'thinking', 'usage', 'quota', 'context_breakdown',
     'text_delta', 'text_delta', 'message_end',
   ])
+  assert.equal(events.filter(item => item.event === 'thinking').map(item => item.data.thinking).join(''), '先检查当前状态。')
 })
 
 test('Claude experiment preserves stable runtime errors and completes its stream', async () => {

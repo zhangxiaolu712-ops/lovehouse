@@ -38,6 +38,7 @@ export default function ClaudeChatV1Page() {
   const [loading, setLoading] = useState(false)
   const [runtime, setRuntime] = useState({ status: 'idle', runtime_type: 'claude_cli', adapter_id: 'claude-cli-v1' })
   const [reasoning, setReasoning] = useState(EMPTY_REASONING)
+  const [thinking, setThinking] = useState('')
   const [tools, setTools] = useState([])
   const [usage, setUsage] = useState(null)
   const [quota, setQuota] = useState(EMPTY_QUOTA)
@@ -56,6 +57,7 @@ export default function ClaudeChatV1Page() {
     setLoading(true)
     setRuntime(current => ({ ...current, status: 'connecting' }))
     setReasoning(EMPTY_REASONING)
+    setThinking('')
     setTools([])
     setUsage(null)
     setQuota(EMPTY_QUOTA)
@@ -78,7 +80,9 @@ export default function ClaudeChatV1Page() {
               adapter_id: data.adapter_id || current.adapter_id,
             }))
           } else if (name === 'runtime_status') setRuntime(data)
-          else if (name === 'reasoning_status') setReasoning(data)
+          else if (name === 'thinking' && typeof data?.thinking === 'string') {
+            setThinking(current => current + data.thinking)
+          } else if (name === 'reasoning_status') setReasoning(data)
           else if (['tool_call', 'tool_result', 'tool_error'].includes(name)) {
             setTools(current => upsertTool(current, name, data))
           } else if (name === 'usage') setUsage(deriveCurrentTurnUsage(data))
@@ -167,8 +171,10 @@ export default function ClaudeChatV1Page() {
         <aside className="codex-v1-observability">
           <section>
             <h2>我的思路</h2>
-            <p><strong>{reasoning.available ? 'available' : 'unavailable'}</strong> · {reasoning.status}</p>
-            <small>{reasoning.summary || '当前 Claude Runtime 不提供可安全展示的原生思路摘要；不会补写旁白。'}</small>
+            <p><strong>{thinking || reasoning.available ? 'available' : 'unavailable'}</strong> · {thinking ? (loading ? 'streaming' : 'completed') : reasoning.status}</p>
+            <small style={{ whiteSpace: 'pre-wrap' }}>
+              {thinking || reasoning.summary || '当前 Claude Runtime 不提供可安全展示的原生思路摘要；不会补写旁白。'}
+            </small>
           </section>
           <section>
             <h2>正在做</h2>
