@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { assertRuntimeAdapter } from '../codex-chat/runtimeContract.js'
-import { ClaudeCliRuntimeAdapter } from './claudeCliRuntimeAdapter.js'
+import { ClaudeCliRuntimeAdapter, createStreamParser } from './claudeCliRuntimeAdapter.js'
 
 const SESSION_ID = '22222222-2222-4222-8222-222222222222'
 
@@ -67,6 +67,50 @@ test('Claude CLI implements the shared runtime contract without requiring MCP', 
   assert.equal(adapter.getQuota().status, 'unknown')
 })
 
+test('model injection is explicit and configurable without relying on user settings', () => {
+  const withModel = new ClaudeCliRuntimeAdapter({
+    model: 'claude-opus-4-6', createSessionId: () => SESSION_ID,
+  })
+  const command = withModel.startOrResume({ prompt: 'hello' })
+  assert.equal(command.args[command.args.indexOf('--model') + 1], 'claude-opus-4-6')
+
+  const withoutModel = new ClaudeCliRuntimeAdapter({ createSessionId: () => SESSION_ID })
+  assert.equal(withoutModel.startOrResume({ prompt: 'hello' }).args.includes('--model'), false)
+})
+
+test('stream parser keeps thinking separate and getText returns正文 only', () => {
+  const thinking = []
+  const text = []
+  const parser = createStreamParser({
+    onThinking: value => thinking.push(value),
+    onText: value => text.push(value),
+  })
+  const line = event => `${JSON.stringify({ type: 'stream_event', event })}\n`
+  parser.feed(line({
+    type: 'content_block_start', index: 0,
+    content_block: { type: 'thinking', thinking: '', signature: 'must-not-leak' },
+  }))
+  parser.feed(line({
+    type: 'content_block_delta', index: 0,
+    delta: { type: 'thinking_delta', thinking: 'private-thought' },
+  }))
+  parser.feed(line({ type: 'content_block_stop', index: 0 }))
+  parser.feed(line({
+    type: 'content_block_start', index: 1,
+    content_block: { type: 'text', text: '' },
+  }))
+  parser.feed(line({
+    type: 'content_block_delta', index: 1,
+    delta: { type: 'text_delta', text: '正文' },
+  }))
+  parser.flush()
+  assert.deepEqual(thinking, ['private-thought'])
+  assert.deepEqual(text, ['正文'])
+  assert.equal(parser.getText(), '正文')
+  assert.equal(parser.getText().includes('private-thought'), false)
+  assert.equal(parser.getText().includes('must-not-leak'), false)
+})
+
 test('new Claude session streams text and usage while MCP is empty', async () => {
   const calls = []
   const events = []
@@ -109,23 +153,41 @@ test('new Claude session streams text and usage while MCP is empty', async () =>
   assert.equal(JSON.stringify(events).includes('official-headless-token'), false)
 })
 
-test('only a native Claude reasoning summary is exposed; thinking text is not republished', async () => {
+test('raw Claude thinking is streamed separately while reasoning summaries stay normalized', async () => {
   const events = []
+  const thinking = []
+  let text = ''
   const adapter = new ClaudeCliRuntimeAdapter({
+    model: 'claude-opus-4-6',
     createSessionId: () => SESSION_ID,
     spawnImpl: fakeSpawn([
-      { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      { type: 'system', subtype: 'init', session_id: SESSION_ID, model: 'claude-opus-4-6' },
       {
         type: 'stream_event', session_id: SESSION_ID,
-        event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hidden chain' } },
+        event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } },
+      },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hidden chain' } },
+      },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_stop', index: 0 },
       },
       ...successEvents({ reasoning: '先核对事实，再给出答案。' }).slice(1),
     ]),
   })
-  await adapter.streamEvents({
-    message: '分析', history: [], onRuntimeBinding() {}, onText() {},
+  const result = await adapter.streamEvents({
+    message: '分析', history: [], onRuntimeBinding() {},
+    onThinking(value) { thinking.push(value) },
+    onText(value) { text += value },
     onEvent(event, data) { events.push({ event, data }) },
   })
+  assert.deepEqual(thinking, ['hidden chain'])
+  assert.equal(text, '你好。')
+  assert.equal(result.text, '你好。')
+  assert.equal(result.model, 'claude-opus-4-6')
+  assert.equal(result.text.includes('hidden chain'), false)
   const reasoning = events.filter(item => item.event === 'reasoning_status')
   assert.deepEqual(reasoning, [{
     event: 'reasoning_status',

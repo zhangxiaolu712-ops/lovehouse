@@ -30,9 +30,65 @@ function buildPrompt(history, message) {
   return [CHAT_GUARDRAIL, ...transcript, `User: ${message}`, 'Assistant:'].join('\n\n')
 }
 
-function runtimeArgs({ prompt, sessionId, resume }) {
+export function createStreamParser(callbacks = {}) {
+  let buffer = ''
+  let fullText = ''
+  const blockTypes = new Map()
+
+  function accept(value) {
+    if (!value || value.type !== 'stream_event' || !value.event) return
+    const event = value.event
+    const index = Number.isInteger(event.index) ? event.index : 0
+    try {
+      if (event.type === 'content_block_start') {
+        blockTypes.set(index, event.content_block?.type || null)
+        return
+      }
+      if (event.type === 'content_block_stop') {
+        blockTypes.delete(index)
+        return
+      }
+      if (event.type !== 'content_block_delta') return
+      const blockType = blockTypes.get(index)
+      if ((blockType === 'thinking' || event.delta?.type === 'thinking_delta')
+        && typeof event.delta?.thinking === 'string') {
+        callbacks.onThinking?.(event.delta.thinking)
+        return
+      }
+      if ((blockType === 'text' || event.delta?.type === 'text_delta')
+        && typeof event.delta?.text === 'string') {
+        fullText += event.delta.text
+        callbacks.onText?.(event.delta.text)
+      }
+    } catch {
+      // A consumer callback must never break stream parsing.
+    }
+  }
+
+  function processLine(line) {
+    if (!line.trim()) return
+    try { accept(JSON.parse(line)) } catch { /* malformed diagnostics are ignored here */ }
+  }
+
+  function feed(chunk) {
+    buffer += chunk
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) processLine(line)
+  }
+
+  function flush() {
+    if (buffer.trim()) processLine(buffer)
+    buffer = ''
+  }
+
+  return { accept, feed, flush, getText: () => fullText }
+}
+
+function runtimeArgs({ prompt, sessionId, resume, model }) {
   return [
     '-p', prompt,
+    ...(model ? ['--model', model] : []),
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
@@ -108,12 +164,13 @@ function toolResultId(block) {
 export class ClaudeCliRuntimeAdapter {
   constructor({
     executable = '/usr/bin/claude', spawnImpl = spawn, cwd = '/tmp', env = process.env,
-    createSessionId = () => crypto.randomUUID(),
+    model = null, createSessionId = () => crypto.randomUUID(),
   } = {}) {
     this.executable = executable
     this.spawnImpl = spawnImpl
     this.cwd = cwd
     this.env = narrowRuntimeEnv(env)
+    this.model = typeof model === 'string' && model.trim() ? model.trim() : null
     this.createSessionId = createSessionId
   }
 
@@ -139,7 +196,9 @@ export class ClaudeCliRuntimeAdapter {
     return {
       session_id: runtimeSessionId,
       resumed: Boolean(sessionId),
-      args: runtimeArgs({ prompt, sessionId: runtimeSessionId, resume: Boolean(sessionId) }),
+      args: runtimeArgs({
+        prompt, sessionId: runtimeSessionId, resume: Boolean(sessionId), model: this.model,
+      }),
     }
   }
 
@@ -243,33 +302,40 @@ export class ClaudeCliRuntimeAdapter {
     })
   }
 
-  async #run({ message, history, sessionId, signal, onRuntimeBinding, onText, onEvent }) {
+  async #run({ message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent }) {
     const prompt = buildPrompt(sessionId ? [] : history, message)
     const estimatedInputTokens = estimateTokens(prompt)
     const command = this.startOrResume({ sessionId, prompt })
     const tools = new Map()
     let reportedSessionId = ''
-    let fullText = ''
+    let reportedModel = ''
+    let assistantFallbackText = ''
     let usage = null
     let resultEvent = null
     let providerErrorMessage = ''
     let streamedText = false
     let reasoningSeen = false
+    const streamParser = createStreamParser({
+      onText(value) {
+        streamedText = true
+        onText(value)
+      },
+      onThinking(value) {
+        onThinking(value)
+      },
+    })
 
     await this.sendMessage({
       command,
       signal,
       onJsonEvent: event => {
         if (typeof event.session_id === 'string') reportedSessionId = event.session_id
+        if (event.type === 'system' && typeof event.model === 'string') reportedModel = event.model
+        if (event.type === 'assistant' && typeof event.message?.model === 'string') reportedModel = event.message.model
+        streamParser.accept(event)
         if (event.type === 'stream_event') {
           const inner = event.event
           const delta = inner?.delta
-          if (inner?.type === 'content_block_delta' && delta?.type === 'text_delta'
-            && typeof delta.text === 'string') {
-            streamedText = true
-            fullText += delta.text
-            onText(delta.text)
-          }
           const summary = nativeReasoningSummary(delta)
           if (summary) {
             reasoningSeen = true
@@ -295,7 +361,7 @@ export class ClaudeCliRuntimeAdapter {
           }
           for (const block of event.message?.content || []) {
             if (!streamedText && block?.type === 'text' && typeof block.text === 'string') {
-              fullText += block.text
+              assistantFallbackText += block.text
               onText(block.text)
             }
             const summary = nativeReasoningSummary(block)
@@ -337,6 +403,8 @@ export class ClaudeCliRuntimeAdapter {
       },
     })
 
+    streamParser.flush()
+    let fullText = streamParser.getText() || assistantFallbackText
     const failure = resultEvent?.is_error === true
       || (resultEvent?.subtype && resultEvent.subtype !== 'success')
     if (failure) throw runtimeError(`${providerErrorMessage} ${errorText(resultEvent)}`, { sessionId })
@@ -362,17 +430,22 @@ export class ClaudeCliRuntimeAdapter {
         available: false, status: 'unavailable', summary: null, source: 'claude_cli',
       })
     }
-    return { text: fullText, sessionId: command.session_id, usage: normalizedUsage }
+    return {
+      text: fullText,
+      sessionId: command.session_id,
+      usage: normalizedUsage,
+      model: reportedModel || this.model,
+    }
   }
 
   async streamEvents({
     message, history = [], sessionId = null, signal,
-    onRuntimeBinding = () => {}, onText = () => {}, onEvent = () => {},
+    onRuntimeBinding = () => {}, onText = () => {}, onThinking = () => {}, onEvent = () => {},
     getContinuationContext,
   }) {
     try {
       return await this.#run({
-        message, history, sessionId, signal, onRuntimeBinding, onText, onEvent,
+        message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -384,7 +457,7 @@ export class ClaudeCliRuntimeAdapter {
       })
       return this.#run({
         message, history: fallbackHistory, sessionId: null, signal,
-        onRuntimeBinding, onText, onEvent,
+        onRuntimeBinding, onText, onThinking, onEvent,
       })
     }
   }
