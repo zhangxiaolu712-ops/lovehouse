@@ -305,6 +305,30 @@ test('Claude and Codex share the same stable SSE contract without exposing provi
   }
 })
 
+test('Claude thinking crosses the unified v1 stream as a current-turn event', async t => {
+  const base = await startHarness(t, {
+    adapters: {
+      claude: fakeAdapter('claude', {
+        async chat({ onText, onEvent }) {
+          onEvent('thinking', { thinking: '先检查当前状态。' })
+          onText('reply')
+          return { usage: null }
+        },
+      }),
+      codex: fakeAdapter('codex'),
+    },
+  })
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(chatBody()),
+  })
+  const events = parseSse(await response.text())
+  assert.deepEqual(events.map(item => item.event), [
+    'message_start', 'thinking', 'text_delta', 'message_end',
+  ])
+  assert.equal(events[1].data.thinking, '先检查当前状态。')
+  assert.equal(events[2].data.delta, 'reply')
+})
+
 test('Codex runtime metadata crosses the handler only through the unified safe event surface', async t => {
   const base = await startHarness(t, {
     adapters: {
@@ -606,6 +630,7 @@ test('Claude CLI adapter uses the same safe stream contract without exposing its
         'event: usage\ndata: {"estimated_input_tokens":10,"actual_input_tokens":12,"cached_input_tokens":4,"actual_output_tokens":5,"reasoning_output_tokens":null,"total_tokens":17,"usage_source":"claude_cli","baseline_status":"known"}',
         'event: quota\ndata: {"status":"unknown","remaining":null,"unit":null,"reset_at":null,"source":"claude_cli_unavailable"}',
         'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"claude_native_session","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"reasoning":{"enabled":true,"available":false,"status":"unavailable","summary":null,"source":"claude_native_session","active_context":true,"resumes_with_thread":true,"compaction":"claude_native"},"estimated_tokens":2}',
+        'event: thinking\ndata: {"thinking":"先检查当前状态。","signature":"must-not-pass"}',
         'event: text\ndata: {"text":"hello"}',
         'event: done\ndata: {"ok":true}',
         '',
@@ -629,7 +654,7 @@ test('Claude CLI adapter uses the same safe stream contract without exposing its
   assert.deepEqual(text, ['hello'])
   assert.deepEqual(events.map(item => item.event), [
     'runtime_status', 'reasoning_status', 'tool_call', 'tool_result', 'usage', 'quota',
-    'context_breakdown',
+    'context_breakdown', 'thinking',
   ])
   assert.equal(events[0].data.runtime_type, 'claude_cli')
   assert.equal(events[0].data.adapter_id, 'claude-cli-v1')
@@ -637,6 +662,7 @@ test('Claude CLI adapter uses the same safe stream contract without exposing its
   assert.equal(events[4].data.usage_source, 'claude_cli')
   assert.equal(events[6].data.reasoning.source, 'claude_native_session')
   assert.equal(events[6].data.reasoning.compaction, 'claude_native')
+  assert.equal(events[7].data.thinking, '先检查当前状态。')
   assert.equal(JSON.stringify(events).includes('must-not-pass'), false)
   assert.equal(JSON.stringify(events).includes('session_id'), false)
 })

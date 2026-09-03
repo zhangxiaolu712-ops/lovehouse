@@ -33,10 +33,12 @@ test('Claude local UI history is bounded and strips provider metadata', () => {
   const messages = Array.from({ length: 20 }, (_, index) => ({
     role: index % 2 ? 'assistant' : 'user', content: `message-${index}`,
     provider_session_id: 'must-not-persist',
+    thinking: 'must-not-persist',
   }))
   const saved = saveClaudeV1History(messages, local)
   assert.equal(saved.length, 12)
   assert.deepEqual(loadClaudeV1History(local), saved)
   assert.equal(JSON.stringify(saved).includes('provider_session_id'), false)
+  assert.equal(JSON.stringify(saved).includes('thinking'), false)
   assert.deepEqual(boundClaudeV1History(null), [])
 })

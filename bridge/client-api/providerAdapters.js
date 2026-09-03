@@ -203,6 +203,10 @@ function safeRuntimeEvent(event, data, profile) {
         : null,
     }
   }
+  if (event === 'thinking') {
+    const thinking = typeof data?.thinking === 'string' ? data.thinking : ''
+    return thinking ? { thinking } : null
+  }
   if (event === 'reasoning_status') {
     return {
       available: data?.available === true,
@@ -365,7 +369,7 @@ function createCliSidecarAdapter({ baseUrl, fetchImpl, healthTimeoutMs, profile 
       const onFrame = (event, data) => {
         if (event === 'text' && data?.text) onText?.(data.text)
         if ([
-          'runtime_status', 'reasoning_status', 'tool_call', 'tool_result', 'tool_error',
+          'runtime_status', 'thinking', 'reasoning_status', 'tool_call', 'tool_result', 'tool_error',
           'usage', 'quota', 'context_breakdown',
         ].includes(event)) {
           const safe = safeRuntimeEvent(event, data, profile)
