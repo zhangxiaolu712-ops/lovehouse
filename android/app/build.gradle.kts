@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+fun quotedBuildConfig(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 android {
     namespace = "fyi.b612.lovehouse"
     compileSdk = 36
@@ -16,6 +18,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        val chatBaseUrl = providers.gradleProperty("lovehouse.chatBaseUrl")
+            .orElse("https://tingtunehouse.duckdns.org/api/v1/chat")
+        val ownerToken = providers.gradleProperty("lovehouse.ownerToken").orElse("")
+        buildConfigField("String", "LOVEHOUSE_CHAT_URL", quotedBuildConfig(chatBaseUrl.get()))
+        buildConfigField("String", "LOVEHOUSE_OWNER_TOKEN", quotedBuildConfig(ownerToken.get()))
     }
 
     buildTypes {

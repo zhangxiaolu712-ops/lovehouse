@@ -3,6 +3,8 @@ package fyi.b612.lovehouse.feature.chat
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class ChatPersona(
     val personaId: String,
@@ -41,7 +43,9 @@ data class ChatMessageUi(
     val forwarded: List<ForwardedMessage> = emptyList(),
 )
 
-class ChatSessionStore {
+class ChatSessionStore(
+    private val codexClient: CodexChatClient = HttpCodexChatClient(),
+) {
     val threads = mutableStateListOf<ChatThreadSummary>().apply { addAll(MockChatRepository.mockThreads.filter { it.kind != ChatThreadKind.Archive }) }
     val personas = mutableStateListOf(
         ChatPersona("g", "G老师", "G", "gpt_private"),
@@ -78,7 +82,9 @@ class ChatSessionStore {
         messagesByThread["task-claude-copy"] = mutableStateListOf(
             message("c1", "Claude", "C", "文案整理已完成，等待最终回执。", "昨天"),
         )
-        messagesByThread["agent-codex"] = mutableStateListOf(message("a1", "Codex", "⌘", "长期 Agent 窗口已恢复。", "周日"))
+        // The production Codex window starts empty: assistant text must only
+        // come from the real runtime stream, never from a local placeholder.
+        messagesByThread["agent-codex"] = mutableStateListOf()
         membersByThread["living-room"] = mutableStateListOf(
             ChatMember("g", "GPT", "G", "在线"),
             ChatMember("claude", "Claude", "C", "在线"),
@@ -97,6 +103,24 @@ class ChatSessionStore {
         if (body.isBlank()) return
         messages(threadId) += message("sent-${UUID.randomUUID()}", "我", "我", body, "刚刚", mine = true)
         updateThread(threadId) { it.copy(preview = body, updatedAt = "刚刚") }
+    }
+
+    suspend fun sendCodexMessage(threadId: String, body: String, onText: (String) -> Unit): Result<CodexChatResult> {
+        if (body.isBlank()) return Result.failure(CodexChatException("消息不能为空"))
+        messages(threadId) += message("sent-${UUID.randomUUID()}", "我", "我", body, "刚刚", mine = true)
+        updateThread(threadId) { it.copy(preview = body, updatedAt = "刚刚") }
+        val assistantId = "codex-${UUID.randomUUID()}"
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                codexClient.streamMessage(stableCodexThreadId(), body) { fullText ->
+                    messages(threadId).removeAll { it.messageId == assistantId }
+                    messages(threadId) += message(assistantId, "Codex", "⌘", fullText, "刚刚")
+                    onText(fullText)
+                }
+            }
+        }.onFailure {
+            messages(threadId).removeAll { message -> message.messageId == assistantId && message.body.isBlank() }
+        }
     }
 
     fun importPersona(name: String): ChatPersona {

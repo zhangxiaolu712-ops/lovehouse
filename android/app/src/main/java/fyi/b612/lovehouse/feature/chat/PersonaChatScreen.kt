@@ -108,8 +108,9 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
     var panel by remember { mutableStateOf<PersonaPanel?>(null) }
     var bubbleStyle by remember { mutableStateOf(BubbleStyle.Soft) }
     var backdrop by remember(threadId) { mutableStateOf(ChatBackdrop.entries.firstOrNull { it.name.lowercase() == store.background(threadId) } ?: ChatBackdrop.Green) }
-    var selectedModel by remember { mutableStateOf("GPT-5.6 Sol") }
+    var selectedModel by remember { mutableStateOf(if (threadId == "agent-codex") "Codex · 现有 Runtime" else "GPT-5.6 Sol") }
     var input by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
     var selectedMessages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var forwardingIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var openedBundle by remember { mutableStateOf<ChatMessageUi?>(null) }
@@ -171,8 +172,30 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
             if (selectedMessages.isNotEmpty()) MultiSelectBar(selectedMessages.size, onCancel = { selectedMessages = emptySet() }) {
                 forwardingIds = selectedMessages; panel = PersonaPanel.ForwardTarget
             } else PersonaComposer(
-                value = input, model = selectedModel, onValueChange = { input = it }, onModelSelected = { selectedModel = it },
-                onSend = { store.sendMessage(threadId, input); input = "" }, onToolAction = { actionNotice = it },
+                value = input, model = selectedModel, onValueChange = { input = it },
+                onModelSelected = { if (threadId != "agent-codex") selectedModel = it },
+                modelSelectionEnabled = threadId != "agent-codex",
+                onSend = {
+                    if (sending || input.isBlank()) return@PersonaComposer
+                    if (threadId != "agent-codex") {
+                        store.sendMessage(threadId, input)
+                        input = ""
+                    } else {
+                        val pending = input
+                        sending = true
+                        actionNotice = "正在连接 Codex…"
+                        chatScope.launch {
+                            val result = store.sendCodexMessage(threadId, pending) { }
+                            sending = false
+                            result.onSuccess { reply ->
+                                input = ""
+                                actionNotice = "Codex · ${reply.evidence.adapterId} · 同一 Thread"
+                            }.onFailure { error ->
+                                actionNotice = error.message ?: "发送失败"
+                            }
+                        }
+                    }
+                }, onToolAction = { actionNotice = it },
             )
         }
         if (panel != null) {
@@ -518,7 +541,7 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
 @Composable
 private fun PersonaComposer(
     value: String, model: String, onValueChange: (String) -> Unit, onModelSelected: (String) -> Unit,
-    onSend: () -> Unit, onToolAction: (String) -> Unit,
+    onSend: () -> Unit, onToolAction: (String) -> Unit, modelSelectionEnabled: Boolean = true,
 ) {
     var showAttachments by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
@@ -560,13 +583,13 @@ private fun PersonaComposer(
                 ChatIconButton(LoveHouseIcon.VoiceMessage, "录制语音消息") { onToolAction("语音消息录制状态已切换") }
                 Box {
                     Row(
-                        Modifier.clip(CircleShape).background(Color.White.copy(alpha = .24f)).clickable { showModels = true }.padding(horizontal = 10.dp, vertical = 6.dp),
+                        Modifier.clip(CircleShape).background(Color.White.copy(alpha = .24f)).clickable(enabled = modelSelectionEnabled) { showModels = true }.padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(model, color = PersonaInk, fontSize = 8.5.sp)
                         LoveHouseIconView(LoveHouseIcon.ModelSwitch, null, Modifier.padding(start = 4.dp).size(12.dp), PersonaMuted, LoveHouseIconOpticalSize.Compact)
                     }
-                    DropdownMenu(expanded = showModels, onDismissRequest = { showModels = false }, modifier = Modifier.widthIn(min = 140.dp, max = 180.dp)) {
+                    DropdownMenu(expanded = showModels && modelSelectionEnabled, onDismissRequest = { showModels = false }, modifier = Modifier.widthIn(min = 140.dp, max = 180.dp)) {
                         listOf("GPT-5.6 Sol", "Claude", "Gemini").forEach { option ->
                             DropdownMenuItem(text = { Text(if (option == model) "✓  $option" else option, color = PersonaInk, fontSize = 10.sp) }, onClick = { onModelSelected(option); showModels = false })
                         }

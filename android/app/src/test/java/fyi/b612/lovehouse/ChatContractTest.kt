@@ -9,8 +9,31 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 
 class ChatContractTest {
+    @Test
+    fun `codex messages use one fixed LoveHouse thread and real runtime evidence`() = runBlocking {
+        val observedThreads = mutableListOf<String>()
+        val client = object : fyi.b612.lovehouse.feature.chat.CodexChatClient {
+            override suspend fun streamMessage(threadId: String, message: String, onText: (String) -> Unit): fyi.b612.lovehouse.feature.chat.CodexChatResult {
+                observedThreads += threadId
+                onText("reply to $message")
+                return fyi.b612.lovehouse.feature.chat.CodexChatResult(
+                    "reply to $message",
+                    fyi.b612.lovehouse.feature.chat.CodexRuntimeEvidence("codex_cli", "codex-cli-v1", threadId),
+                )
+            }
+        }
+        val store = ChatSessionStore(client)
+
+        assertTrue(store.sendCodexMessage("agent-codex", "turn one") {}.isSuccess)
+        assertTrue(store.sendCodexMessage("agent-codex", "turn two") {}.isSuccess)
+
+        assertEquals(2, observedThreads.size)
+        assertEquals(observedThreads.first(), observedThreads.last())
+        assertTrue(store.messages("agent-codex").any { it.body == "reply to turn two" })
+    }
     @Test
     fun `chat list carries every planned conversation kind`() {
         val threads = MockChatRepository.mockThreads
