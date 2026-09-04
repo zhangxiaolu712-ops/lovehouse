@@ -78,6 +78,31 @@ test('model injection is explicit and configurable without relying on user setti
   assert.equal(withoutModel.startOrResume({ prompt: 'hello' }).args.includes('--model'), false)
 })
 
+test('--thinking-display summarized is injected when configured', () => {
+  const adapter = new ClaudeCliRuntimeAdapter({
+    thinkingDisplay: 'summarized', createSessionId: () => SESSION_ID,
+  })
+  const command = adapter.startOrResume({ prompt: 'hello' })
+  assert.equal(command.args[command.args.indexOf('--thinking-display') + 1], 'summarized')
+})
+
+test('--thinking-display omitted is accepted', () => {
+  const adapter = new ClaudeCliRuntimeAdapter({
+    thinkingDisplay: 'omitted', createSessionId: () => SESSION_ID,
+  })
+  const command = adapter.startOrResume({ prompt: 'hello' })
+  assert.equal(command.args[command.args.indexOf('--thinking-display') + 1], 'omitted')
+})
+
+test('invalid thinking-display values are silently ignored', () => {
+  for (const bad of ['raw', 'full', '', 42, null, undefined]) {
+    const adapter = new ClaudeCliRuntimeAdapter({
+      thinkingDisplay: bad, createSessionId: () => SESSION_ID,
+    })
+    assert.equal(adapter.startOrResume({ prompt: 'hello' }).args.includes('--thinking-display'), false)
+  }
+})
+
 test('stream parser keeps thinking separate and getText returns正文 only', () => {
   const thinking = []
   const text = []
@@ -151,6 +176,75 @@ test('new Claude session streams text and usage while MCP is empty', async () =>
     HOME: '/root', PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'official-headless-token',
   })
   assert.equal(JSON.stringify(events).includes('official-headless-token'), false)
+})
+
+test('non-empty thinking summaries from --thinking-display summarized are forwarded via onThinking', async () => {
+  const thinking = []
+  let text = ''
+  const adapter = new ClaudeCliRuntimeAdapter({
+    thinkingDisplay: 'summarized',
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn([
+      { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } },
+      },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '让我仔细想想' } },
+      },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '这是理论题' } },
+      },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_stop', index: 0 },
+      },
+      ...successEvents().slice(1),
+    ]),
+  })
+  const result = await adapter.streamEvents({
+    message: '分析', history: [], onRuntimeBinding() {},
+    onThinking(value) { thinking.push(value) },
+    onText(value) { text += value },
+    onEvent() {},
+  })
+  assert.deepEqual(thinking, ['让我仔细想想', '这是理论题'])
+  assert.equal(text, '你好。')
+  assert.equal(result.text, '你好。')
+  assert.equal(result.text.includes('让我仔细想想'), false)
+})
+
+test('empty thinking deltas do not produce fake onThinking content', async () => {
+  const thinking = []
+  const adapter = new ClaudeCliRuntimeAdapter({
+    thinkingDisplay: 'summarized',
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn([
+      { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } },
+      },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } },
+      },
+      {
+        type: 'stream_event', session_id: SESSION_ID,
+        event: { type: 'content_block_stop', index: 0 },
+      },
+      ...successEvents().slice(1),
+    ]),
+  })
+  await adapter.streamEvents({
+    message: 'hello', history: [], onRuntimeBinding() {},
+    onThinking(value) { thinking.push(value) },
+    onText() {}, onEvent() {},
+  })
+  assert.deepEqual(thinking, [''])
 })
 
 test('raw Claude thinking is streamed separately while reasoning summaries stay normalized', async () => {
