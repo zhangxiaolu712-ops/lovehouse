@@ -85,10 +85,13 @@ export function createStreamParser(callbacks = {}) {
   return { accept, feed, flush, getText: () => fullText }
 }
 
-function runtimeArgs({ prompt, sessionId, resume, model }) {
+const VALID_THINKING_DISPLAY = new Set(['summarized', 'omitted'])
+
+function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay }) {
   return [
     '-p', prompt,
     ...(model ? ['--model', model] : []),
+    ...(thinkingDisplay ? ['--thinking-display', thinkingDisplay] : []),
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
@@ -164,13 +167,15 @@ function toolResultId(block) {
 export class ClaudeCliRuntimeAdapter {
   constructor({
     executable = '/usr/bin/claude', spawnImpl = spawn, cwd = '/tmp', env = process.env,
-    model = null, createSessionId = () => crypto.randomUUID(),
+    model = null, thinkingDisplay = null, createSessionId = () => crypto.randomUUID(),
   } = {}) {
     this.executable = executable
     this.spawnImpl = spawnImpl
     this.cwd = cwd
     this.env = narrowRuntimeEnv(env)
     this.model = typeof model === 'string' && model.trim() ? model.trim() : null
+    this.thinkingDisplay = typeof thinkingDisplay === 'string' && VALID_THINKING_DISPLAY.has(thinkingDisplay)
+      ? thinkingDisplay : null
     this.createSessionId = createSessionId
   }
 
@@ -197,7 +202,8 @@ export class ClaudeCliRuntimeAdapter {
       session_id: runtimeSessionId,
       resumed: Boolean(sessionId),
       args: runtimeArgs({
-        prompt, sessionId: runtimeSessionId, resume: Boolean(sessionId), model: this.model,
+        prompt, sessionId: runtimeSessionId, resume: Boolean(sessionId),
+        model: this.model, thinkingDisplay: this.thinkingDisplay,
       }),
     }
   }

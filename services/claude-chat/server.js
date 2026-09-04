@@ -13,6 +13,7 @@ const runtime = new ClaudeCliRuntimeAdapter({
   executable: process.env.CLAUDE_CHAT_PROVIDER_EXECUTABLE || '/usr/bin/claude',
   cwd: process.env.CLAUDE_CHAT_CWD || '/tmp',
   model: process.env.CLAUDE_CHAT_MODEL || null,
+  thinkingDisplay: process.env.CLAUDE_CHAT_THINKING_DISPLAY || 'summarized',
 })
 const threadBindings = new FileThreadBindingStore({
   filePath: process.env.CLAUDE_CHAT_BINDINGS_FILE
