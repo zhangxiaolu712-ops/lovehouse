@@ -5,6 +5,10 @@ import fyi.b612.lovehouse.feature.chat.ChatMessageKind
 import fyi.b612.lovehouse.feature.chat.ChatSessionStore
 import fyi.b612.lovehouse.feature.chat.ChatThreadKind
 import fyi.b612.lovehouse.feature.chat.MockChatRepository
+import fyi.b612.lovehouse.feature.chat.LocalChatDeliveryStatus
+import fyi.b612.lovehouse.feature.chat.LocalChatMessage
+import fyi.b612.lovehouse.feature.chat.LocalChatMessageRepository
+import fyi.b612.lovehouse.feature.chat.LocalChatRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -12,6 +16,17 @@ import org.junit.Test
 import kotlinx.coroutines.runBlocking
 
 class ChatContractTest {
+    private class DurableLocalMessages : LocalChatMessageRepository {
+        private val rows = linkedMapOf<String, LocalChatMessage>()
+
+        override fun messages(threadId: String): List<LocalChatMessage> =
+            rows.values.filter { it.threadId == threadId }.sortedBy { it.createdAtEpochMillis }
+
+        override fun upsert(message: LocalChatMessage) {
+            rows[message.localMessageId] = message
+        }
+    }
+
     @Test
     fun `codex messages use one fixed LoveHouse thread and real runtime evidence`() = runBlocking {
         val observedThreads = mutableListOf<String>()
@@ -34,6 +49,45 @@ class ChatContractTest {
         assertEquals(observedThreads.first(), observedThreads.last())
         assertTrue(store.messages("agent-codex").any { it.body == "reply to turn two" })
     }
+
+    @Test
+    fun `real codex messages rehydrate as one canonical record per message`() = runBlocking {
+        val repository = DurableLocalMessages()
+        val observedThreads = mutableListOf<String>()
+        var clock = 1_000L
+        val client = object : fyi.b612.lovehouse.feature.chat.CodexChatClient {
+            override suspend fun streamMessage(threadId: String, message: String, onText: (String) -> Unit): fyi.b612.lovehouse.feature.chat.CodexChatResult {
+                observedThreads += threadId
+                onText("first segment")
+                onText("first segment\n\nfinal segment for $message")
+                return fyi.b612.lovehouse.feature.chat.CodexChatResult(
+                    "first segment\n\nfinal segment for $message",
+                    fyi.b612.lovehouse.feature.chat.CodexRuntimeEvidence("codex_cli", "codex-cli-v1", threadId),
+                )
+            }
+        }
+        val firstStore = ChatSessionStore(client, repository) { clock++ }
+
+        assertTrue(firstStore.sendCodexMessage("agent-codex", "turn one") {}.isSuccess)
+        assertTrue(firstStore.sendCodexMessage("agent-codex", "turn two") {}.isSuccess)
+
+        val persisted = repository.messages(observedThreads.singleDistinct())
+        assertEquals(4, persisted.size)
+        assertEquals(listOf(LocalChatRole.User, LocalChatRole.Assistant, LocalChatRole.User, LocalChatRole.Assistant), persisted.map { it.role })
+        assertEquals(2, persisted.count { it.role == LocalChatRole.Assistant })
+        assertTrue(persisted.all { it.status == LocalChatDeliveryStatus.Sent })
+        assertTrue(persisted.filter { it.role == LocalChatRole.User }.all { it.runtime == null && it.adapterId == null })
+        assertTrue(persisted.filter { it.role == LocalChatRole.Assistant }.all { it.runtime == "codex_cli" && it.adapterId == "codex-cli-v1" })
+
+        val reopenedStore = ChatSessionStore(client, repository) { clock++ }
+        assertEquals(4, reopenedStore.messages("agent-codex").size)
+        assertEquals(2, reopenedStore.messages("agent-codex").count { it.body.contains("first segment") })
+        assertTrue(reopenedStore.sendCodexMessage("agent-codex", "turn three") {}.isSuccess)
+        assertEquals(6, repository.messages(observedThreads.singleDistinct()).size)
+        assertEquals(1, observedThreads.distinct().size)
+    }
+
+    private fun <T> List<T>.singleDistinct(): T = distinct().single()
     @Test
     fun `chat list carries every planned conversation kind`() {
         val threads = MockChatRepository.mockThreads

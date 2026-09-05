@@ -54,7 +54,7 @@ private fun LoveHouseContent(
     dependencies: AppDependencies,
     modifier: Modifier = Modifier,
 ) {
-    val chatStore = remember { ChatSessionStore() }
+    val chatStore = remember(dependencies.chatMessages) { ChatSessionStore(messageRepository = dependencies.chatMessages) }
     NavHost(
         navController = navController,
         startDestination = AppDestination.Home.route,
