@@ -33,6 +33,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -141,13 +142,18 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 state = listState,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(11.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                item { DateDivider("2026.08.18") }
-                items(messages, key = { it.messageId }) { message ->
+                itemsIndexed(messages, key = { _, message -> message.messageId }) { index, message ->
+                    val previous = messages.getOrNull(index - 1)
+                    val next = messages.getOrNull(index + 1)
+                    val startsGroup = previous == null || previous.author != message.author || previous.mine != message.mine
+                    val endsGroup = next == null || next.author != message.author || next.mine != message.mine
                     MessageBubble(
                         message = message,
+                        startsGroup = startsGroup,
+                        endsGroup = endsGroup,
                         task = message.taskId?.let(store::task),
                         style = bubbleStyle,
                         selected = message.messageId in selectedMessages,
@@ -159,9 +165,8 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
                         onAction = { action ->
                             actionNotice = when (action) {
                                 "复制" -> { clipboard.setText(AnnotatedString(message.body)); "已复制" }
-                                "重试" -> "已加入本地重试队列"
+                                "重试" -> "重试尚未接入"
                                 "朗读" -> "朗读状态已切换"
-                                "翻译" -> "已生成本地 Mock 译文"
                                 else -> "已打开消息操作"
                             }
                         },
@@ -189,7 +194,7 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
                             sending = false
                             result.onSuccess { reply ->
                                 input = ""
-                                actionNotice = "Codex · ${reply.evidence.adapterId} · 同一 Thread"
+                                actionNotice = null
                             }.onFailure { error ->
                                 actionNotice = error.message ?: "发送失败"
                             }
@@ -454,6 +459,8 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
 
 @Composable private fun MessageBubble(
     message: ChatMessageUi,
+    startsGroup: Boolean,
+    endsGroup: Boolean,
     task: RemoteAgentTask?,
     style: BubbleStyle,
     selected: Boolean,
@@ -471,29 +478,41 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
             BubbleStyle.Glass -> Color.White.copy(alpha = .34f)
             BubbleStyle.Paper -> Color(0xFFF6F0E2).copy(alpha = .92f)
         }
-        if (!message.mine) MessageAvatar(message)
+        if (!message.mine) { if (startsGroup) MessageAvatar(message) else Spacer(Modifier.size(30.dp)) }
         Column(
             modifier = Modifier.widthIn(max = 300.dp).padding(horizontal = 7.dp),
             horizontalAlignment = if (message.mine) Alignment.End else Alignment.Start,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (message.mine) Text(message.time, color = PersonaMuted, fontSize = 8.sp)
-                Text(message.author, color = if (message.mine) PersonaMuted else PersonaAccent, fontSize = 9.sp, fontWeight = FontWeight.Medium)
-                if (!message.mine) Text(message.time, color = PersonaMuted, fontSize = 8.sp)
+            if (startsGroup) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                if (message.mine) Text(message.time, color = PersonaMuted, fontSize = 7.5.sp)
+                Text(message.author, color = if (message.mine) PersonaMuted else PersonaAccent, fontSize = 8.5.sp, fontWeight = FontWeight.Medium)
+                if (!message.mine) Text(message.time, color = PersonaMuted, fontSize = 7.5.sp)
             }
             if (!message.mine && message.thoughtDuration != null && message.thoughtSummary != null) {
                 ThoughtRow(message.thoughtDuration, message.thoughtSummary)
             }
-            Surface(
-                modifier = Modifier.padding(top = 3.dp).combinedClickable(
-                    onClick = { if (selectionMode) onToggleSelection() else when (message.kind) { ChatMessageKind.Task, ChatMessageKind.Workflow -> onOpenWorkflow(); ChatMessageKind.ForwardBundle -> onOpenBundle(); else -> Unit } },
-                    onLongClick = onToggleSelection,
-                ),
-                shape = RoundedCornerShape(16.dp), color = color,
-                border = when { selected -> BorderStroke(1.5.dp, PersonaAccent); style == BubbleStyle.Glass -> BorderStroke(1.dp, Color.White.copy(alpha = .72f)); else -> null },
+            val bubbleModifier = Modifier.combinedClickable(
+                onClick = { if (selectionMode) onToggleSelection() else when (message.kind) { ChatMessageKind.Task, ChatMessageKind.Workflow -> onOpenWorkflow(); ChatMessageKind.ForwardBundle -> onOpenBundle(); else -> Unit } },
+                onLongClick = onToggleSelection,
+            )
+            val bubbleBorder = when { selected -> BorderStroke(1.5.dp, PersonaAccent); style == BubbleStyle.Glass -> BorderStroke(1.dp, Color.White.copy(alpha = .72f)); else -> null }
+            if (message.kind == ChatMessageKind.Text) {
+                Column(
+                    Modifier.padding(top = if (startsGroup) 1.dp else 0.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalAlignment = if (message.mine) Alignment.End else Alignment.Start,
+                ) {
+                    message.body.naturalMessageSegments().forEach { segment ->
+                        Surface(modifier = bubbleModifier, shape = RoundedCornerShape(15.dp), color = color, border = bubbleBorder) {
+                            Text(segment, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = PersonaInk, fontSize = 11.5.sp, lineHeight = 17.sp)
+                        }
+                    }
+                }
+            } else Surface(
+                modifier = Modifier.padding(top = if (startsGroup) 1.dp else 0.dp).then(bubbleModifier),
+                shape = RoundedCornerShape(15.dp), color = color, border = bubbleBorder,
             ) {
                 when (message.kind) {
-                    ChatMessageKind.Text -> Text(message.body, Modifier.padding(horizontal = 11.dp, vertical = 8.dp), color = PersonaInk, fontSize = 12.sp, lineHeight = 18.sp)
                     ChatMessageKind.Task -> Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp)) {
                         Text("远程任务", color = PersonaAccent, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                         Text(message.body, color = PersonaInk, fontSize = 11.sp, lineHeight = 16.sp)
@@ -511,13 +530,18 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
                         message.forwarded.take(2).forEach { Text("${it.author}：${it.body}", Modifier.padding(top = 3.dp), color = PersonaMuted, fontSize = 8.sp, maxLines = 1) }
                         Text("点击查看聊天记录", Modifier.padding(top = 4.dp), color = PersonaAccent, fontSize = 8.sp)
                     }
+                    ChatMessageKind.Text -> Unit
                 }
             }
             MessageQuickActions(message.mine, onForward, onAction)
         }
-        if (message.mine) MessageAvatar(message)
+        if (message.mine) { if (startsGroup) MessageAvatar(message) else Spacer(Modifier.size(30.dp)) }
     }
+    if (endsGroup) Spacer(Modifier.height(3.dp))
 }
+
+internal fun String.naturalMessageSegments(): List<String> =
+    split(Regex("\\n\\s*\\n+")).map(String::trim).filter(String::isNotEmpty).ifEmpty { listOf(this) }
 
 @Composable private fun MessageAvatar(message: ChatMessageUi) {
     Box(Modifier.size(30.dp).background(if (message.mine) Color(0xFFE8DDD4) else Color(0xFFD8E7E1), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
@@ -526,14 +550,16 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
 }
 
 @Composable private fun MessageQuickActions(mine: Boolean, onForward: () -> Unit, onAction: (String) -> Unit) {
-    Row(Modifier.padding(top = 1.dp), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-        val actions = if (mine) {
-            listOf(LoveHouseIcon.Copy to "复制", LoveHouseIcon.ReadAloud to "朗读", LoveHouseIcon.Forward to "转发", LoveHouseIcon.More to "更多")
-        } else {
-            listOf(LoveHouseIcon.Copy to "复制", LoveHouseIcon.Retry to "重试", LoveHouseIcon.ReadAloud to "朗读", LoveHouseIcon.Translate to "翻译", LoveHouseIcon.Forward to "转发")
-        }
-        actions.forEach { (icon, description) ->
-            ChatIconButton(icon, description, iconSize = 18.dp, touchSize = 40.dp, opticalSize = LoveHouseIconOpticalSize.Compact) { if (description == "转发") onForward() else onAction(description) }
+    var showMore by remember { mutableStateOf(false) }
+    Row(Modifier.padding(top = 0.dp), horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+        ChatIconButton(LoveHouseIcon.Copy, "复制", iconSize = 15.dp, touchSize = 30.dp, opticalSize = LoveHouseIconOpticalSize.Compact) { onAction("复制") }
+        ChatIconButton(LoveHouseIcon.Forward, "转发", iconSize = 15.dp, touchSize = 30.dp, opticalSize = LoveHouseIconOpticalSize.Compact, onClick = onForward)
+        Box {
+            ChatIconButton(LoveHouseIcon.More, "更多", iconSize = 15.dp, touchSize = 30.dp, opticalSize = LoveHouseIconOpticalSize.Compact) { showMore = true }
+            DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                val secondary = if (mine) listOf("朗读", "引用", "详情") else listOf("朗读", "引用", "重试", "详情")
+                secondary.forEach { action -> DropdownMenuItem(text = { Text(action, fontSize = 10.sp) }, onClick = { showMore = false; onAction(action) }) }
+            }
         }
     }
 }
@@ -546,7 +572,7 @@ private fun PersonaComposer(
     var showAttachments by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
     Box(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
     ) {
         Column {
             Surface(
@@ -557,14 +583,14 @@ private fun PersonaComposer(
             ) {
                 BasicTextField(
                     value = value, onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 38.dp, max = 88.dp).padding(horizontal = 11.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 34.dp, max = 84.dp).padding(horizontal = 10.dp, vertical = 6.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(color = PersonaInk, fontSize = 12.sp),
                     decorationBox = { inner -> Box { if (value.isEmpty()) Text("ring the chime...", color = PersonaMuted, fontSize = 12.sp); inner() } },
                 )
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Box {
-                    ChatIconButton(LoveHouseIcon.Plus, "添加附件") { showAttachments = true }
+                    ChatIconButton(LoveHouseIcon.Plus, "添加附件", touchSize = 36.dp) { showAttachments = true }
                     DropdownMenu(expanded = showAttachments, onDismissRequest = { showAttachments = false }, modifier = Modifier.widthIn(min = 112.dp, max = 132.dp)) {
                         listOf(
                             LoveHouseIcon.Camera to "相机", LoveHouseIcon.Photo to "照片", LoveHouseIcon.File to "文件",
@@ -579,8 +605,8 @@ private fun PersonaComposer(
                         }
                     }
                 }
-                ChatIconButton(LoveHouseIcon.Emoji, "表情") { onToolAction("表情面板已切换") }
-                ChatIconButton(LoveHouseIcon.VoiceMessage, "录制语音消息") { onToolAction("语音消息录制状态已切换") }
+                ChatIconButton(LoveHouseIcon.Emoji, "表情", touchSize = 36.dp) { onToolAction("表情面板已切换") }
+                ChatIconButton(LoveHouseIcon.VoiceMessage, "录制语音消息", touchSize = 36.dp) { onToolAction("语音消息录制状态已切换") }
                 Box {
                     Row(
                         Modifier.clip(CircleShape).background(Color.White.copy(alpha = .24f)).clickable(enabled = modelSelectionEnabled) { showModels = true }.padding(horizontal = 10.dp, vertical = 6.dp),
