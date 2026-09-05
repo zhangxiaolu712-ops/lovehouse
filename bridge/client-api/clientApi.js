@@ -4,6 +4,8 @@ import { ClientApiError, normalizeClientApiError } from './errors.js'
 import { SCENES } from './personas.js'
 import { installMemoryTimeline } from './memoryTimeline.js'
 import { installProjectChecklistApi } from './projectChecklist.js'
+import { handleMcpMessage } from '../mcp/transports.js'
+import { normalizeToolPreferenceIds } from '../tool-center/catalog.js'
 
 export const CLIENT_API_VERSION = 1
 export const CLIENT_STREAM_EVENTS = Object.freeze([
@@ -165,6 +167,26 @@ function normalizeMessage(message) {
   return { type: 'text', text: message.text.trim(), source }
 }
 
+function normalizeAllowedToolIds(value) {
+  try {
+    return normalizeToolPreferenceIds(value)
+  } catch (cause) {
+    throw new ClientApiError('INVALID_TOOL_ALLOWLIST', cause.message, {
+      stage: 'validation', status: 400, cause,
+    })
+  }
+}
+
+export function resolveAllowedToolIdsForChat({
+  toolCenterService,
+  personaId,
+  threadId,
+  requestedIds,
+}) {
+  if (!toolCenterService || personaId !== 'codex' || requestedIds.length === 0) return []
+  return toolCenterService.validateRequest({ personaId, threadId, requestedIds })
+}
+
 function normalizeThread(body, { requireThread = false } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new ClientApiError('INVALID_REQUEST', 'JSON request object required', {
@@ -207,6 +229,9 @@ function normalizeThread(body, { requireThread = false } = {}) {
     windowId: body.window_id || null,
     requestedScene: body.scene || null,
     source: normalizeArchiveSource(body),
+    allowedToolIds: body.persona_id === 'codex'
+      ? normalizeAllowedToolIds(body.allowed_tool_ids)
+      : [],
   }
 }
 
@@ -240,6 +265,7 @@ export function installClientApi(app, {
   memoryV2Service = null,
   projectChecklistStore = null,
   runtimeStatusProvider = null,
+  toolCenterService = null,
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
@@ -254,6 +280,9 @@ export function installClientApi(app, {
   const ownerEngineering = engineeringMemoryService?.forActor('owner') || null
   if (runtimeStatusProvider && typeof runtimeStatusProvider.snapshot !== 'function') {
     throw new TypeError('Client API runtime status provider is invalid')
+  }
+  if (toolCenterService && typeof toolCenterService.capabilities !== 'function') {
+    throw new TypeError('Client API Tool Center service is invalid')
   }
 
   app.use('/v1', requestContext, verifyOwner)
@@ -322,6 +351,54 @@ export function installClientApi(app, {
       personas: providerRouter.listPersonas(),
     })
   })
+
+  if (toolCenterService) {
+    app.get('/v1/tools/capabilities', (req, res) => {
+      res.setHeader('Cache-Control', 'no-store')
+      return res.json({
+        ok: true,
+        request_id: req.clientRequestId,
+        persona_id: 'codex',
+        tools: toolCenterService.capabilities(),
+      })
+    })
+
+    app.post('/v1/tools/test', async (req, res) => {
+      try {
+        const result = await toolCenterService.test(req.body?.tool_id)
+        res.setHeader('Cache-Control', 'no-store')
+        return res.status(result.ok ? 200 : 409).json({
+          ...result, request_id: req.clientRequestId,
+        })
+      } catch (error) {
+        return sendJsonError(res, new ClientApiError(
+          'TOOL_TEST_FAILED', error.message || 'Tool test failed',
+          { stage: 'tool', status: error instanceof TypeError ? 400 : 503, retryable: !(error instanceof TypeError) },
+        ), req.clientRequestId)
+      }
+    })
+
+    app.post('/v1/tools/mcp', async (req, res) => {
+      try {
+        const requestedIds = toolCenterService.validateRequest({
+          personaId: req.query.persona_id,
+          threadId: req.query.thread_id,
+          requestedIds: String(req.query.allowed_tool_ids || '').split(',').filter(Boolean),
+        })
+        const response = await handleMcpMessage(req.body, {
+          channel: toolCenterService.channel(requestedIds),
+          serverName: 'lovehouse-codex-tools',
+          transportIdentity: `owner:${req.userId}:${req.query.thread_id}`,
+        })
+        return response ? res.json(response) : res.status(204).end()
+      } catch (error) {
+        return res.status(400).json({
+          jsonrpc: '2.0', id: req.body?.id ?? null,
+          error: { code: -32000, message: error.message || 'tool request rejected' },
+        })
+      }
+    })
+  }
 
   if (ownerEngineering) {
     app.get('/v1/engineering-memory', async (req, res) => {
@@ -405,6 +482,12 @@ export function installClientApi(app, {
       normalized = normalizeThread(req.body)
       resolved = providerRouter.resolve(normalized.personaId)
       normalized.message = normalizeMessage(req.body.message)
+      normalized.allowedToolIds = resolveAllowedToolIdsForChat({
+        toolCenterService,
+        personaId: normalized.personaId,
+        threadId: normalized.threadId,
+        requestedIds: normalized.allowedToolIds,
+      })
     } catch (error) {
       return sendJsonError(res, error, req.clientRequestId)
     }
@@ -451,6 +534,7 @@ export function installClientApi(app, {
         threadSource: normalized.source,
         authorization: req.headers.authorization,
         signal: controller.signal,
+        allowedToolIds: normalized.allowedToolIds,
         onText(delta) {
           if (!ended) emitSse(res, 'text_delta', { ...base, delta })
         },

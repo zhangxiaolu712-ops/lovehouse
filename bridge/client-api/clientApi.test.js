@@ -45,6 +45,7 @@ async function startHarness(t, {
   },
   engineeringMemoryService = null,
   runtimeStatusProvider = null,
+  toolCenterService = null,
 } = {}) {
   const app = express()
   app.use(express.json())
@@ -65,6 +66,7 @@ async function startHarness(t, {
     features: { memory: true, livingroom: true },
     engineeringMemoryService,
     runtimeStatusProvider,
+    toolCenterService,
   })
   const server = http.createServer(app)
   server.listen(0, '127.0.0.1')
@@ -72,6 +74,45 @@ async function startHarness(t, {
   t.after(() => server.close())
   return `http://127.0.0.1:${server.address().port}`
 }
+
+test('Tool Center validation does not affect Claude or legacy requests without tools', async t => {
+  const validationCalls = []
+  const adapterCalls = []
+  const toolCenterService = {
+    capabilities() { return [] },
+    async test() { return { ok: false } },
+    validateRequest(input) {
+      validationCalls.push(input)
+      return input.requestedIds
+    },
+  }
+  const adapters = {
+    claude: fakeAdapter('claude', {
+      async chat(input) {
+        adapterCalls.push(input)
+        input.onText?.('claude reply')
+        return { usage: null }
+      },
+    }),
+    codex: fakeAdapter('codex'),
+  }
+  const base = await startHarness(t, { adapters, toolCenterService })
+
+  for (const body of [
+    chatBody(),
+    chatBody({ allowed_tool_ids: ['not-a-codex-tool'] }),
+  ]) {
+    const response = await fetch(`${base}/v1/chat`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify(body),
+    })
+    assert.equal(response.status, 200)
+    await response.text()
+  }
+
+  assert.equal(validationCalls.length, 0)
+  assert.equal(adapterCalls.length, 2)
+  assert.deepEqual(adapterCalls.map(call => call.allowedToolIds), [[], []])
+})
 
 function fakeEngineeringMemoryService(calls) {
   return {

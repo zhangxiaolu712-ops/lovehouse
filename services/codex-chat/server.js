@@ -18,6 +18,7 @@ const authenticate = createSupabaseOwnerAuth({
 const runtime = new CodexCliRuntimeAdapter({
   executable: process.env.CODEX_CHAT_PROVIDER_EXECUTABLE || '/usr/bin/codex',
   cwd: process.env.CODEX_CHAT_CWD || '/tmp',
+  toolMcpUrl: process.env.CODEX_CHAT_TOOL_MCP_URL || 'http://127.0.0.1:3000/v1/tools/mcp',
 })
 const threadBindings = new FileThreadBindingStore({
   filePath: process.env.CODEX_CHAT_BINDINGS_FILE

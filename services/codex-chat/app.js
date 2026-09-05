@@ -5,6 +5,7 @@ import { ChatRuntimeError, publicRuntimeError } from './errors.js'
 import { assertRuntimeAdapter } from './runtimeContract.js'
 import { SessionStore } from './sessionStore.js'
 import { InMemoryThreadBindingStore } from './threadBindingStore.js'
+import { normalizeToolPreferenceIds } from '../../bridge/tool-center/catalog.js'
 
 function json(res, status, body) {
   const payload = JSON.stringify(body)
@@ -51,6 +52,7 @@ function normalizeBody(body) {
     threadId: body.thread_id || body.window_id,
     message: body.message.trim(),
     recentHistory: body.recent_history,
+    allowedToolIds: normalizeToolPreferenceIds(body.allowed_tool_ids),
   }
 }
 
@@ -185,6 +187,9 @@ export function createCodexChatHandler({
         previousUsage: persisted?.cumulative_usage || null,
         signal: controller.signal,
         getContinuationContext: async () => session.history,
+        allowedToolIds: input.allowedToolIds,
+        authorization: req.headers.authorization,
+        threadId: input.threadId,
         onRuntimeBinding: value => {
           runtimeSessionId = value
           sessions.bind(session.key, value)

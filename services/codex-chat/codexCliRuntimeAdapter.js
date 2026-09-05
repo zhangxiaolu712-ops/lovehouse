@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { estimateTokens } from './contextBreakdown.js'
 import { ChatRuntimeError } from './errors.js'
 import { unknownQuota } from './runtimeContract.js'
+import { normalizeToolPreferenceIds, toolById } from '../../bridge/tool-center/catalog.js'
 
 const CHAT_GUARDRAIL = [
   'You are the LoveHouse Codex chat companion.',
@@ -36,11 +37,47 @@ function buildPrompt(history, message) {
   return [CHAT_GUARDRAIL, ...turns, `User: ${message}`, 'Assistant:'].join('\n\n')
 }
 
-function newSessionArgs() {
+function mcpConfigArgs(toolContext) {
+  if (!toolContext?.url || !toolContext?.allowedToolIds?.length) return []
+  const names = toolContext.allowedToolIds.map(id => toolById(id)?.mcpName).filter(Boolean)
+  if (!names.length) return []
+  return [
+    '-c', `mcp_servers.lovehouse_tools.url=${JSON.stringify(toolContext.url)}`,
+    '-c', 'mcp_servers.lovehouse_tools.bearer_token_env_var="LOVEHOUSE_OWNER_TOKEN"',
+    '-c', `mcp_servers.lovehouse_tools.enabled_tools=${JSON.stringify(names)}`,
+  ]
+}
+
+const DEFAULT_INTERNAL_TOOL_MCP_URL = 'http://127.0.0.1:3000/v1/tools/mcp'
+const INTERNAL_TOOL_MCP_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+function normalizeInternalToolMcpUrl(value) {
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new TypeError('Tool MCP URL must be an internal trusted URL')
+  }
+  if (
+    parsed.protocol !== 'http:'
+    || !INTERNAL_TOOL_MCP_HOSTS.has(parsed.hostname)
+    || parsed.pathname !== '/v1/tools/mcp'
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new TypeError('Tool MCP URL must be an internal trusted URL')
+  }
+  return parsed.toString()
+}
+
+function newSessionArgs(toolContext = null) {
   return [
     'exec',
     '--json',
     ...REASONING_CONFIG,
+    ...mcpConfigArgs(toolContext),
     '--sandbox', 'read-only',
     '--ignore-user-config',
     '--ignore-rules',
@@ -49,11 +86,12 @@ function newSessionArgs() {
   ]
 }
 
-function resumeArgs(sessionId) {
+function resumeArgs(sessionId, toolContext = null) {
   return [
     'exec', 'resume', sessionId,
     '--json',
     ...REASONING_CONFIG,
+    ...mcpConfigArgs(toolContext),
     '--ignore-user-config',
     '--ignore-rules',
     '--skip-git-repo-check',
@@ -168,11 +206,13 @@ function usageDelta(current, previous, baselineKnown) {
 export class CodexCliRuntimeAdapter {
   constructor({
     executable = '/usr/bin/codex', spawnImpl = spawn, cwd = '/tmp', env = process.env,
+    toolMcpUrl = DEFAULT_INTERNAL_TOOL_MCP_URL,
   } = {}) {
     this.executable = executable
     this.spawnImpl = spawnImpl
     this.cwd = cwd
     this.env = narrowRuntimeEnv(env)
+    this.toolMcpUrl = normalizeInternalToolMcpUrl(toolMcpUrl)
   }
 
   getCapabilities() {
@@ -192,11 +232,11 @@ export class CodexCliRuntimeAdapter {
     }
   }
 
-  startOrResume({ sessionId = null } = {}) {
+  startOrResume({ sessionId = null, toolContext = null } = {}) {
     return {
       session_id: sessionId,
       resumed: Boolean(sessionId),
-      args: sessionId ? resumeArgs(sessionId) : newSessionArgs(),
+      args: sessionId ? resumeArgs(sessionId, toolContext) : newSessionArgs(toolContext),
     }
   }
 
@@ -286,7 +326,7 @@ export class CodexCliRuntimeAdapter {
       let stderr = ''
       const child = this.spawnImpl(this.executable, command.args, {
         cwd: this.cwd,
-        env: this.env,
+        env: { ...this.env, ...(command.ownerToken ? { LOVEHOUSE_OWNER_TOKEN: command.ownerToken } : {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       const finish = callback => value => {
@@ -340,8 +380,20 @@ export class CodexCliRuntimeAdapter {
 
   async #run({
     message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
+    allowedToolIds = [], authorization = null, threadId = null,
   }) {
-    const command = this.startOrResume({ sessionId })
+    const normalizedToolIds = normalizeToolPreferenceIds(allowedToolIds)
+    const ownerToken = typeof authorization === 'string' && authorization.startsWith('Bearer ')
+      ? authorization.slice(7)
+      : null
+    const toolContext = normalizedToolIds.length && ownerToken && threadId
+      ? {
+          allowedToolIds: normalizedToolIds,
+          url: `${this.toolMcpUrl}?persona_id=codex&thread_id=${encodeURIComponent(threadId)}&allowed_tool_ids=${encodeURIComponent(normalizedToolIds.join(','))}`,
+        }
+      : null
+    const command = this.startOrResume({ sessionId, toolContext })
+    command.ownerToken = toolContext ? ownerToken : null
     const prompt = buildPrompt(sessionId ? [] : history, message)
     const estimatedInputTokens = estimateTokens(prompt)
     const startedTools = new Set()
@@ -459,10 +511,14 @@ export class CodexCliRuntimeAdapter {
     onText = () => {},
     onEvent = () => {},
     getContinuationContext,
+    allowedToolIds = [],
+    authorization = null,
+    threadId = null,
   }) {
     try {
       return await this.#run({
         message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
+        allowedToolIds, authorization, threadId,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -483,6 +539,9 @@ export class CodexCliRuntimeAdapter {
         onRuntimeBinding,
         onText,
         onEvent,
+        allowedToolIds,
+        authorization,
+        threadId,
       })
     }
   }

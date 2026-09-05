@@ -46,6 +46,41 @@ test('Codex CLI implements the complete reusable runtime adapter contract', () =
   assert.equal(adapter.getQuota().status, 'unknown')
 })
 
+test('reviewed tool preferences become per-turn MCP config while Owner token stays out of args', async () => {
+  const calls = []
+  const adapter = new CodexCliRuntimeAdapter({
+    toolMcpUrl: 'http://127.0.0.1:3000/v1/tools/mcp',
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'ok' } },
+      { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 1 } },
+    ], { calls }),
+  })
+  await adapter.streamEvents({
+    message: 'read engineering',
+    threadId: '7c814f9a-7588-4e35-b4b6-a216f172c012',
+    authorization: 'Bearer owner-secret-value',
+    allowedToolIds: ['builtin.engineering.read_current'],
+    onRuntimeBinding() {}, onText() {}, onEvent() {},
+  })
+  const joined = calls[0].args.join(' ')
+  assert.match(joined, /mcp_servers\.lovehouse_tools\.enabled_tools=\["engineering_read_current"\]/)
+  assert.equal(joined.includes('owner-secret-value'), false)
+  assert.equal(calls[0].options.env.LOVEHOUSE_OWNER_TOKEN, 'owner-secret-value')
+  assert.equal(calls[0].args.includes('read-only'), true)
+})
+
+test('external Tool MCP URLs are rejected before a runtime session starts', () => {
+  assert.throws(
+    () => new CodexCliRuntimeAdapter({ toolMcpUrl: 'https://tools.example.com/v1/tools/mcp' }),
+    /internal trusted URL/,
+  )
+  assert.throws(
+    () => new CodexCliRuntimeAdapter({ toolMcpUrl: 'http://127.0.0.1:3000/v1/tools/mcp?target=external' }),
+    /internal trusted URL/,
+  )
+})
+
 test('real Codex 0.146 JSONL shape maps text, safe tool events, usage and unavailable reasoning', async () => {
   const calls = []
   const emitted = []

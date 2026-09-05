@@ -55,6 +55,7 @@ import {
 import { resolveBridgePort } from './runtimeConfig.js'
 import { ProjectChecklistStore } from './client-api/projectChecklist.js'
 import { createRuntimeStatusProvider } from './client-api/runtimeStatus.js'
+import { ToolCenterService } from './tool-center/service.js'
 import {
   createR2MediaService,
   installMediaRoutes,
@@ -340,6 +341,11 @@ const providerRouter = createProviderRouter({
     codex: createCodexAdapter({ baseUrl: CODEX_CHAT_INTERNAL_URL }),
   },
 })
+const toolCenterService = new ToolCenterService({
+  memoryV2Service,
+  engineeringMemoryService,
+  livingroomRest,
+})
 const verifyClientOwner = createClientOwnerAuth({ verifyOwnerToken, checkRate })
 
 app.post('/chat', verifyOwnerBearer, (req, res) => {
@@ -434,6 +440,7 @@ installClientApi(app, {
   memoryV2Service,
   projectChecklistStore,
   runtimeStatusProvider,
+  toolCenterService,
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {
