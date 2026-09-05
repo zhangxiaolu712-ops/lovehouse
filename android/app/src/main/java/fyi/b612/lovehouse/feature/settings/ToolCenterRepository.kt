@@ -3,12 +3,15 @@ package fyi.b612.lovehouse.feature.settings
 import fyi.b612.lovehouse.BuildConfig
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Base64
 import org.json.JSONObject
 
 interface ToolCenterRepository {
     suspend fun capabilities(): List<ToolCapability>
     suspend fun testTool(toolId: String): ToolTestResult
 }
+
+class ToolCenterAuthenticationException(message: String) : Exception(message)
 
 class HttpToolCenterRepository(
     chatEndpoint: String = BuildConfig.LOVEHOUSE_CHAT_URL,
@@ -41,7 +44,10 @@ class HttpToolCenterRepository(
     }
 
     private fun request(method: String, endpoint: String, body: String? = null, acceptConflict: Boolean = false): JSONObject {
-        if (ownerToken.isBlank()) error("缺少 Owner 登录凭据")
+        if (ownerToken.isBlank()) throw ToolCenterAuthenticationException("缺少 Owner 登录凭据")
+        if (ownerTokenIsExpired(ownerToken)) {
+            throw ToolCenterAuthenticationException("Owner 登录已过期")
+        }
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
@@ -58,7 +64,14 @@ class HttpToolCenterRepository(
             val accepted = connection.responseCode in 200..299 || (acceptConflict && connection.responseCode == 409)
             val text = (if (accepted) connection.inputStream else connection.errorStream)
                 ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (!accepted) error(JSONObject(text.ifBlank { "{}" }).optJSONObject("error")?.optString("message").orEmpty().ifBlank { "连接失败（HTTP ${connection.responseCode}）" })
+            if (!accepted) {
+                val message = JSONObject(text.ifBlank { "{}" }).optJSONObject("error")
+                    ?.optString("message").orEmpty()
+                if (connection.responseCode == 401 || connection.responseCode == 403) {
+                    throw ToolCenterAuthenticationException(message.ifBlank { "Owner 登录已失效" })
+                }
+                error(message.ifBlank { "连接失败（HTTP ${connection.responseCode}）" })
+            }
             JSONObject(text)
         } finally {
             connection.disconnect()
@@ -94,4 +107,17 @@ class HttpToolCenterRepository(
             buildList { for (index in 0 until array.length()) add(array.getString(index)) }
         }.orEmpty(),
     )
+}
+
+internal fun ownerTokenIsExpired(
+    token: String,
+    nowEpochSeconds: Long = System.currentTimeMillis() / 1_000,
+): Boolean {
+    val payload = token.split('.').getOrNull(1) ?: return false
+    val decoded = runCatching {
+        String(Base64.getUrlDecoder().decode(payload), Charsets.UTF_8)
+    }.getOrNull() ?: return false
+    val expiresAt = Regex("\\\"exp\\\"\\s*:\\s*(\\d+)")
+        .find(decoded)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: return false
+    return nowEpochSeconds >= expiresAt
 }

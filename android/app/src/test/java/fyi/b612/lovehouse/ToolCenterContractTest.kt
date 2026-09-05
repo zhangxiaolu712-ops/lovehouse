@@ -4,6 +4,8 @@ import fyi.b612.lovehouse.feature.chat.buildCodexChatPayload
 import fyi.b612.lovehouse.feature.settings.BuiltInToolIds
 import fyi.b612.lovehouse.feature.settings.LocalToolProfile
 import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
+import fyi.b612.lovehouse.feature.settings.ownerTokenIsExpired
+import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,6 +23,16 @@ class ToolCenterContractTest {
         assertEquals(2, profile.preferredToolIds.size)
         assertTrue(payload.contains("\"allowed_tool_ids\":[\"builtin.engineering.read_current\",\"builtin.livingroom.read\"]"))
         assertTrue(payload.contains("\"persona_id\":\"codex\""))
+    }
+
+    @Test
+    fun `expired owner session is detected locally without exposing its value`() {
+        val payload = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("{\"exp\":100}".toByteArray())
+        val token = "header.$payload.signature"
+
+        assertTrue(ownerTokenIsExpired(token, nowEpochSeconds = 101))
+        assertEquals(false, ownerTokenIsExpired(token, nowEpochSeconds = 99))
     }
 }
 

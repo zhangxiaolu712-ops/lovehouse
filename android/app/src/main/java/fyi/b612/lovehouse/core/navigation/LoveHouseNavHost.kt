@@ -165,6 +165,7 @@ private fun LoveHouseContent(
                 personaId = "codex",
                 threadId = stableCodexThreadId(),
                 onBack = { navController.popBackStack() },
+                onReconnect = { navController.navigate(AppDestination.ConnectionControl.route) },
             )
         }
 
