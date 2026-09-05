@@ -348,7 +348,7 @@ function createCliSidecarAdapter({ baseUrl, fetchImpl, healthTimeoutMs, profile 
           },
           body: JSON.stringify({
             thread_id: threadId, window_id: threadId, message: text,
-            allowed_tool_ids: allowedToolIds,
+            ...(allowedToolIds.length ? { allowed_tool_ids: allowedToolIds } : {}),
           }),
           signal,
         })
