@@ -116,6 +116,7 @@ private enum class DesktopEditSheet { Appearance, Effect, Widgets, Dock, Desktop
 fun HomeScreen(
     onOpenChat: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenLab: () -> Unit,
     localStorage: LocalStorage,
     modifier: Modifier = Modifier,
 ) {
@@ -201,7 +202,7 @@ fun HomeScreen(
                         .onGloballyPositioned { editor.updatePlaceableBounds(it.boundsInRoot()) },
                 ) {
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize(), pageSpacing = 12.dp, userScrollEnabled = editor.draggingId == null, key = { it }) { page ->
-                        DesktopPage(page, editor, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
+                        DesktopPage(page, editor, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
                     }
                     DesktopPageIndicator(pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
                 }
@@ -227,7 +228,7 @@ fun HomeScreen(
                 pageSpacing = 12.dp,
                 key = { it },
             ) { page ->
-                DesktopPage(page, editor, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
+                DesktopPage(page, editor, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
             }
 
             DesktopPageIndicator(pagerState.currentPage)
@@ -295,12 +296,12 @@ private fun DesktopPageIndicator(currentPage: Int, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun DesktopPage(page: Int, editor: DesktopEditor, modifier: Modifier) {
+private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenLab: () -> Unit, modifier: Modifier) {
     DynamicGridPage(page, editor, modifier) { geometry ->
         FirstDesktopItems(page, editor, geometry)
         SecondDesktopItems(page, editor, geometry)
         ThirdDesktopItems(page, editor, geometry)
-        FourthDesktopItems(page, editor, geometry)
+        FourthDesktopItems(page, editor, geometry, onOpenLab)
         FifthDesktopItems(page, editor, geometry)
         DockDesktopItems(page, editor, geometry)
     }
@@ -370,12 +371,18 @@ private fun GridGlassPanel(id: String, renderPage: Int, editor: DesktopEditor, d
 }
 
 @Composable
-private fun GridDesktopApp(glyph: String, label: String, renderPage: Int, editor: DesktopEditor, default: GridPlacement, geometry: GridGeometry, itemId: String = "page:${default.page}:app:$glyph:$label") {
+private fun GridDesktopApp(glyph: String, label: String, renderPage: Int, editor: DesktopEditor, default: GridPlacement, geometry: GridGeometry, itemId: String = "page:${default.page}:app:$glyph:$label", onClick: (() -> Unit)? = null) {
     val density = LocalDensity.current
     val contentScale = minOf(1f, 4f / editor.gridColumns, 4f / editor.gridRows)
     GridPlacedItem(itemId, renderPage, editor, default, geometry) {
         CompositionLocalProvider(LocalDensity provides Density(density.density * contentScale, density.fontScale)) {
-            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Column(
+                Modifier.fillMaxSize().then(
+                    if (onClick != null && !editor.isEditing) Modifier.clickable(onClick = onClick) else Modifier,
+                ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
                 Surface(Modifier.size((minOf(geometry.cellWidth.value, geometry.cellHeight.value) * .52f / contentScale).dp), RoundedCornerShape(15.dp), Color(0xDDF8F5EF), border = BorderStroke(1.dp, GlassBorder)) { Box(contentAlignment = Alignment.Center) { Text(glyph, color = DesktopInk, fontSize = 18.sp) } }
                 Text(label, Modifier.padding(top = 4.dp), color = DesktopInk, fontSize = 9.sp)
             }
@@ -449,9 +456,10 @@ private fun ThirdDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: 
 }
 
 @Composable
-private fun FourthDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry) {
+private fun FourthDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry, onOpenLab: () -> Unit) {
         listOf("A" to "背单词", "♫" to "音乐", "▥" to "小屋快报", "⌂" to "小屋档案").forEachIndexed { column, item -> GridDesktopApp(item.first, item.second, renderPage, editor, GridPlacement(3, 0, column, 1, 1), geometry) }
         listOf("✦" to "观星室", "◉" to "BOBO", "▤" to "万花筒").forEachIndexed { column, item -> GridDesktopApp(item.first, item.second, renderPage, editor, GridPlacement(3, 1, column, 1, 1), geometry) }
+        GridDesktopApp("⚗", "Lab", renderPage, editor, GridPlacement(3, 1, 3, 1, 1), geometry, onClick = onOpenLab)
         GridGlassPanel("p4-calendar", renderPage, editor, GridPlacement(3, 2, 0, 2, 4), geometry, 20.dp) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("2026 · 八月", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 13.sp)

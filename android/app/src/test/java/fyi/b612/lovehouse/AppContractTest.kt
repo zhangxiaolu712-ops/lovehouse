@@ -124,8 +124,8 @@ class AppContractTest {
     }
 
     @Test
-    fun `settings stays selected for native lab child route`() {
-        assertEquals(AppDestination.Settings, AppDestination.selectedForRoute(AppDestination.NativeLab.route))
+    fun `native lab is isolated from the formal settings destination`() {
+        assertEquals(null, AppDestination.selectedForRoute(AppDestination.NativeLab.route))
     }
 
     @Test

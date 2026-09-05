@@ -12,12 +12,18 @@ import fyi.b612.lovehouse.core.storage.DataStoreLocalStorage
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.feature.chat.LocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.SQLiteLocalChatMessageRepository
+import fyi.b612.lovehouse.feature.settings.AndroidToolProfilePreferenceStore
+import fyi.b612.lovehouse.feature.settings.HttpToolCenterRepository
+import fyi.b612.lovehouse.feature.settings.ToolCenterRepository
+import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
 
 data class AppDependencies(
     val permissions: PermissionStatusProvider,
     val localStorage: LocalStorage,
     val systemStatus: SystemStatusProvider,
     val chatMessages: LocalChatMessageRepository,
+    val toolCenter: ToolCenterRepository,
+    val toolProfiles: ToolProfilePreferenceStore,
 )
 
 fun createAppDependencies(context: Context): AppDependencies {
@@ -28,6 +34,8 @@ fun createAppDependencies(context: Context): AppDependencies {
         localStorage = DataStoreLocalStorage(appContext),
         systemStatus = DefaultSystemStatusProvider(permissions),
         chatMessages = SQLiteLocalChatMessageRepository(appContext),
+        toolCenter = HttpToolCenterRepository(),
+        toolProfiles = AndroidToolProfilePreferenceStore(appContext),
     )
 }
 

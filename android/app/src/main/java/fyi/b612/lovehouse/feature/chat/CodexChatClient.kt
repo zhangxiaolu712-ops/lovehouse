@@ -29,6 +29,7 @@ interface CodexChatClient {
 class HttpCodexChatClient(
     private val endpoint: String = BuildConfig.LOVEHOUSE_CHAT_URL,
     private val ownerToken: String = BuildConfig.LOVEHOUSE_OWNER_TOKEN,
+    private val allowedToolIdsFor: (String) -> Set<String> = { emptySet() },
 ) : CodexChatClient {
     override suspend fun streamMessage(
         threadId: String,
@@ -45,7 +46,7 @@ class HttpCodexChatClient(
             setRequestProperty("Accept", "text/event-stream")
             setRequestProperty("Authorization", "Bearer $ownerToken")
         }
-        val payload = """{"persona_id":"codex","thread_id":"$threadId","window_id":"android-codex-main","scene":"work","message":{"type":"text","text":"${jsonEscape(message)}"}}"""
+        val payload = buildCodexChatPayload(threadId, message, allowedToolIdsFor(threadId))
         try {
             connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload) }
             if (connection.responseCode !in 200..299) {
@@ -114,6 +115,11 @@ class HttpCodexChatClient(
         401, 403 -> "鉴权失败：请重新登录后再试"
         else -> jsonString(body, "message") ?: "连接失败（HTTP $status）"
     }
+}
+
+internal fun buildCodexChatPayload(threadId: String, message: String, allowedToolIds: Set<String>): String {
+    val tools = allowedToolIds.sorted().joinToString(",") { "\"${jsonEscape(it)}\"" }
+    return """{"persona_id":"codex","thread_id":"$threadId","window_id":"android-codex-main","scene":"work","allowed_tool_ids":[$tools],"message":{"type":"text","text":"${jsonEscape(message)}"}}"""
 }
 
 internal fun jsonEscape(value: String): String = buildString {

@@ -13,7 +13,10 @@ enum class AppDestination(
     Engineering("engineering", "工程", "工", "lovehouse://engineering", true),
     Settings("settings", "设置", "设", "lovehouse://settings", true),
     ChatThread("chat/thread/{threadId}", "聊天详情", "聊", "lovehouse://chat/thread/{threadId}", false),
-    NativeLab("settings/native-lab", "原生能力测试", "验", "lovehouse://settings/native-lab", false),
+    Lab("lab", "Lab", "验", "lovehouse://lab", false),
+    ConnectionControl("lab/connection-control", "连接与工程控制", "连", "lovehouse://lab/connection-control", false),
+    NativeLab("lab/native", "原生能力测试", "验", "lovehouse://lab/native", false),
+    ToolCenterLab("lab/tool-center", "MCP Tools Lab", "验", "lovehouse://lab/tool-center", false),
     ;
 
     companion object {
