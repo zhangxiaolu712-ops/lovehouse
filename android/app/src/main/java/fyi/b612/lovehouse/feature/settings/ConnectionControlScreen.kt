@@ -27,15 +27,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import fyi.b612.lovehouse.core.auth.OwnerSessionSource
+import fyi.b612.lovehouse.core.auth.OwnerSessionStatus
+import fyi.b612.lovehouse.core.auth.OwnerSessionStore
 import fyi.b612.lovehouse.core.designsystem.LoveHouseCard
 import fyi.b612.lovehouse.core.designsystem.LoveHouseSpacing
 import fyi.b612.lovehouse.core.designsystem.SectionLabel
 import fyi.b612.lovehouse.core.designsystem.StatusPill
+import java.text.DateFormat
+import java.util.Date
 
 @Composable
 fun ConnectionControlScreen(
+    ownerSession: OwnerSessionStore,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = viewModel(factory = SettingsViewModel.factory()),
@@ -43,6 +50,7 @@ fun ConnectionControlScreen(
     BackHandler(onBack = onBack)
     val connections by viewModel.connections.collectAsStateWithLifecycle()
     val addState by viewModel.addConnectionState.collectAsStateWithLifecycle()
+    val ownerSessionState by ownerSession.state.collectAsStateWithLifecycle()
     var showAddConnection by remember { mutableStateOf(false) }
 
     LazyColumn(
@@ -64,6 +72,9 @@ fun ConnectionControlScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        item {
+            OwnerSessionCard(ownerSession, ownerSessionState)
         }
         item {
             LoveHouseCard(modifier = Modifier.fillMaxWidth()) {
@@ -109,6 +120,95 @@ fun ConnectionControlScreen(
         )
     }
 }
+
+@Composable
+private fun OwnerSessionCard(
+    ownerSession: OwnerSessionStore,
+    state: fyi.b612.lovehouse.core.auth.OwnerSessionSummary,
+) {
+    var tokenInput by remember { mutableStateOf("") }
+    var feedback by remember { mutableStateOf<String?>(null) }
+    LoveHouseCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Owner Session", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Chat 与 Tool Center 共用的运行时登录会话",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            StatusPill(
+                when (state.status) {
+                    OwnerSessionStatus.Active -> "已连接"
+                    OwnerSessionStatus.Expired -> "已过期"
+                    OwnerSessionStatus.Rejected -> "需重连"
+                    OwnerSessionStatus.Missing -> "未连接"
+                },
+            )
+        }
+        state.expiresAtEpochSeconds?.let { expiresAt ->
+            Text("有效期至 ${formatOwnerSessionExpiry(expiresAt)}", style = MaterialTheme.typography.bodySmall)
+        }
+        state.fingerprint?.let { fingerprint ->
+            Text("会话指纹 $fingerprint", style = MaterialTheme.typography.bodySmall)
+        }
+        if (state.source == OwnerSessionSource.DebugBootstrap) {
+            Text(
+                "当前来自 Debug bootstrap；保存运行时会话后将优先使用安全存储。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        OutlinedTextField(
+            value = tokenInput,
+            onValueChange = { tokenInput = it; feedback = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Owner access token") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            supportingText = { Text("仅保存到 Android Keystore 加密的本机私有存储，不会回显或写入日志。") },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Medium)) {
+            Button(
+                onClick = {
+                    feedback = runCatching { ownerSession.saveAccessToken(tokenInput) }
+                        .fold(
+                            onSuccess = {
+                                tokenInput = ""
+                                "Owner Session 已安全保存"
+                            },
+                            onFailure = { it.message ?: "Owner Session 无法保存" },
+                        )
+                },
+                enabled = tokenInput.isNotBlank(),
+            ) { Text("保存会话") }
+            OutlinedButton(
+                onClick = {
+                    ownerSession.clear()
+                    tokenInput = ""
+                    feedback = "Owner Session 已清除"
+                },
+                enabled = state.status != OwnerSessionStatus.Missing,
+            ) { Text("清除") }
+        }
+        feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        if (state.status != OwnerSessionStatus.Active) {
+            Text(
+                "请重新登录 LoveHouse，并在这里重新连接服务器。",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+private fun formatOwnerSessionExpiry(epochSeconds: Long): String =
+    DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(epochSeconds * 1_000))
 
 @Composable
 private fun AddConnectionDialog(state: AddConnectionState, onSubmit: (String) -> Unit, onDismiss: () -> Unit) {

@@ -1,9 +1,10 @@
 package fyi.b612.lovehouse.feature.settings
 
 import fyi.b612.lovehouse.BuildConfig
+import fyi.b612.lovehouse.core.auth.OwnerSessionException
+import fyi.b612.lovehouse.core.auth.OwnerSessionStore
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Base64
 import org.json.JSONObject
 
 interface ToolCenterRepository {
@@ -15,7 +16,7 @@ class ToolCenterAuthenticationException(message: String) : Exception(message)
 
 class HttpToolCenterRepository(
     chatEndpoint: String = BuildConfig.LOVEHOUSE_CHAT_URL,
-    private val ownerToken: String = BuildConfig.LOVEHOUSE_OWNER_TOKEN,
+    private val ownerSession: OwnerSessionStore,
 ) : ToolCenterRepository {
     private val apiBase = chatEndpoint.substringBeforeLast("/chat")
 
@@ -44,16 +45,17 @@ class HttpToolCenterRepository(
     }
 
     private fun request(method: String, endpoint: String, body: String? = null, acceptConflict: Boolean = false): JSONObject {
-        if (ownerToken.isBlank()) throw ToolCenterAuthenticationException("缺少 Owner 登录凭据")
-        if (ownerTokenIsExpired(ownerToken)) {
-            throw ToolCenterAuthenticationException("Owner 登录已过期")
+        val bearer = try {
+            ownerSession.currentBearer()
+        } catch (error: OwnerSessionException) {
+            throw ToolCenterAuthenticationException(error.message ?: "Owner 登录已失效")
         }
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
             readTimeout = 30_000
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("Authorization", "Bearer $ownerToken")
+            setRequestProperty("Authorization", "Bearer ${bearer.value}")
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
@@ -68,6 +70,7 @@ class HttpToolCenterRepository(
                 val message = JSONObject(text.ifBlank { "{}" }).optJSONObject("error")
                     ?.optString("message").orEmpty()
                 if (connection.responseCode == 401 || connection.responseCode == 403) {
+                    ownerSession.reject(bearer.fingerprint)
                     throw ToolCenterAuthenticationException(message.ifBlank { "Owner 登录已失效" })
                 }
                 error(message.ifBlank { "连接失败（HTTP ${connection.responseCode}）" })
@@ -107,17 +110,4 @@ class HttpToolCenterRepository(
             buildList { for (index in 0 until array.length()) add(array.getString(index)) }
         }.orEmpty(),
     )
-}
-
-internal fun ownerTokenIsExpired(
-    token: String,
-    nowEpochSeconds: Long = System.currentTimeMillis() / 1_000,
-): Boolean {
-    val payload = token.split('.').getOrNull(1) ?: return false
-    val decoded = runCatching {
-        String(Base64.getUrlDecoder().decode(payload), Charsets.UTF_8)
-    }.getOrNull() ?: return false
-    val expiresAt = Regex("\\\"exp\\\"\\s*:\\s*(\\d+)")
-        .find(decoded)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: return false
-    return nowEpochSeconds >= expiresAt
 }
