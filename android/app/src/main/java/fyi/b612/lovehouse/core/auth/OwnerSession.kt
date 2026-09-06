@@ -89,6 +89,23 @@ internal data class StoredOwnerSession(
     val source: OwnerSessionSource,
 )
 
+internal sealed interface StoredOwnerSessionResolution {
+    data class Session(val session: StoredOwnerSession) : StoredOwnerSessionResolution
+    data class Rejected(val fingerprint: String) : StoredOwnerSessionResolution
+    data object Missing : StoredOwnerSessionResolution
+}
+
+internal fun resolveStoredOwnerSession(
+    runtimeSession: StoredOwnerSession?,
+    rejectedFingerprint: String?,
+    debugBootstrapSession: StoredOwnerSession?,
+): StoredOwnerSessionResolution = when {
+    rejectedFingerprint != null -> StoredOwnerSessionResolution.Rejected(rejectedFingerprint)
+    runtimeSession != null -> StoredOwnerSessionResolution.Session(runtimeSession)
+    debugBootstrapSession != null -> StoredOwnerSessionResolution.Session(debugBootstrapSession)
+    else -> StoredOwnerSessionResolution.Missing
+}
+
 internal fun parseOwnerAccessToken(token: String): ParsedOwnerAccessToken {
     val normalized = token.trim()
     if (normalized.isEmpty() || normalized.startsWith("sb_secret_", ignoreCase = true)) {

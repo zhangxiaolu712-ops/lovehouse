@@ -31,10 +31,11 @@ class AndroidOwnerSessionStore(
     )
 
     init {
-        if (!hasRuntimeSession()) {
-            debugBootstrapToken?.takeIf(String::isNotBlank)?.let { bootstrap ->
-                runCatching { saveAccessToken(bootstrap) }
-            }
+        val resolved = resolveStoredSession()
+        if (resolved is StoredOwnerSessionResolution.Session &&
+            resolved.session.source == OwnerSessionSource.DebugBootstrap
+        ) {
+            runCatching { saveAccessToken(resolved.session.accessToken) }
         }
     }
 
@@ -109,29 +110,45 @@ class AndroidOwnerSessionStore(
         }
     }
 
-    private fun hasRuntimeSession(): Boolean =
-        preferences.contains(KEY_SESSION_CIPHERTEXT) || preferences.contains(KEY_ACCESS_CIPHERTEXT)
-
-    private fun resolve(): ResolvedSession {
-        loadCurrentSession()?.let { session ->
+    private fun resolve(): ResolvedSession = when (val resolved = resolveStoredSession()) {
+        is StoredOwnerSessionResolution.Session -> {
+            val session = resolved.session
             val expired = isExpired(session.expiresAtEpochSeconds, nowEpochSeconds())
-            val summary = OwnerSessionSummary(
-                status = if (expired) OwnerSessionStatus.Expired else OwnerSessionStatus.Active,
-                source = session.source,
-                expiresAtEpochSeconds = session.expiresAtEpochSeconds,
-                fingerprint = session.fingerprint,
-                canRefresh = session.refreshToken != null,
+            ResolvedSession(
+                OwnerSessionSummary(
+                    status = if (expired) OwnerSessionStatus.Expired else OwnerSessionStatus.Active,
+                    source = session.source,
+                    expiresAtEpochSeconds = session.expiresAtEpochSeconds,
+                    fingerprint = session.fingerprint,
+                    canRefresh = session.refreshToken != null,
+                ),
             )
-            return ResolvedSession(summary)
         }
-        val rejectedFingerprint = preferences.getString(KEY_REJECTED_FINGERPRINT, null)
-        return ResolvedSession(
-            if (rejectedFingerprint == null) OwnerSessionSummary(OwnerSessionStatus.Missing)
-            else OwnerSessionSummary(OwnerSessionStatus.Rejected, fingerprint = rejectedFingerprint),
+        is StoredOwnerSessionResolution.Rejected -> ResolvedSession(
+            OwnerSessionSummary(OwnerSessionStatus.Rejected, fingerprint = resolved.fingerprint),
+        )
+        StoredOwnerSessionResolution.Missing -> ResolvedSession(
+            OwnerSessionSummary(OwnerSessionStatus.Missing),
         )
     }
 
-    private fun loadCurrentSession(): StoredOwnerSession? {
+    private fun resolveStoredSession(): StoredOwnerSessionResolution {
+        val rejectedFingerprint = preferences.getString(KEY_REJECTED_FINGERPRINT, null)
+        if (rejectedFingerprint != null) {
+            return resolveStoredOwnerSession(null, rejectedFingerprint, null)
+        }
+        val runtimeSession = loadRuntimeSession()
+        return resolveStoredOwnerSession(
+            runtimeSession = runtimeSession,
+            rejectedFingerprint = null,
+            debugBootstrapSession = if (runtimeSession == null) loadDebugBootstrapSession() else null,
+        )
+    }
+
+    private fun loadCurrentSession(): StoredOwnerSession? =
+        (resolveStoredSession() as? StoredOwnerSessionResolution.Session)?.session
+
+    private fun loadRuntimeSession(): StoredOwnerSession? {
         decryptV2Session()?.let { return it }
         decryptV1AccessToken()?.let { token ->
             val parsed = runCatching { parseOwnerAccessToken(token) }.getOrNull() ?: return@let
@@ -144,10 +161,14 @@ class AndroidOwnerSessionStore(
                 source = OwnerSessionSource.Runtime,
             )
         }
+        return null
+    }
+
+    private fun loadDebugBootstrapSession(): StoredOwnerSession? {
         val bootstrap = debugBootstrapToken?.trim().orEmpty()
         if (bootstrap.isNotEmpty()) {
             val parsed = runCatching { parseOwnerAccessToken(bootstrap) }.getOrNull()
-            if (parsed != null && preferences.getString(KEY_REJECTED_FINGERPRINT, null) != parsed.fingerprint) {
+            if (parsed != null) {
                 return StoredOwnerSession(
                     accessToken = bootstrap,
                     refreshToken = null,

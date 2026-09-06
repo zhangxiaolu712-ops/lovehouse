@@ -7,11 +7,13 @@ import fyi.b612.lovehouse.core.auth.OwnerSessionRefreshCoordinator
 import fyi.b612.lovehouse.core.auth.OwnerSessionRefreshException
 import fyi.b612.lovehouse.core.auth.OwnerSessionRefresher
 import fyi.b612.lovehouse.core.auth.OwnerSessionSource
+import fyi.b612.lovehouse.core.auth.StoredOwnerSessionResolution
 import fyi.b612.lovehouse.core.auth.StoredOwnerSession
 import fyi.b612.lovehouse.core.auth.isExpired
 import fyi.b612.lovehouse.core.auth.needsRefresh
 import fyi.b612.lovehouse.core.auth.parseOwnerAccessToken
 import fyi.b612.lovehouse.core.auth.parseOwnerSessionPayload
+import fyi.b612.lovehouse.core.auth.resolveStoredOwnerSession
 import fyi.b612.lovehouse.core.auth.validatePublishableKey
 import fyi.b612.lovehouse.core.auth.validateRefreshToken
 import java.util.Base64
@@ -116,6 +118,71 @@ class OwnerSessionContractTest {
         assertEquals(null, stored)
     }
 
+    @Test
+    fun `rejected marker overrides a different debug bootstrap`() {
+        val debugBootstrap = storedSession(
+            accessExpiresAt = 1_000,
+            refreshToken = "debug-refresh",
+            source = OwnerSessionSource.DebugBootstrap,
+        )
+
+        val resolved = resolveStoredOwnerSession(
+            runtimeSession = null,
+            rejectedFingerprint = "rejected123",
+            debugBootstrapSession = debugBootstrap,
+        )
+
+        assertEquals(StoredOwnerSessionResolution.Rejected("rejected123"), resolved)
+    }
+
+    @Test
+    fun `rejected state survives store recreation`() {
+        val persistedRejectedFingerprint = "rejected123"
+
+        repeat(2) {
+            val resolved = resolveStoredOwnerSession(
+                runtimeSession = null,
+                rejectedFingerprint = persistedRejectedFingerprint,
+                debugBootstrapSession = storedSession(
+                    accessExpiresAt = 1_000,
+                    refreshToken = "debug-refresh",
+                    source = OwnerSessionSource.DebugBootstrap,
+                ),
+            )
+            assertEquals(StoredOwnerSessionResolution.Rejected(persistedRejectedFingerprint), resolved)
+        }
+    }
+
+    @Test
+    fun `saving a fresh valid session clears rejected marker and restores runtime`() {
+        val freshRuntime = storedSession(accessExpiresAt = 1_000, refreshToken = "fresh-refresh")
+
+        val resolvedAfterSave = resolveStoredOwnerSession(
+            runtimeSession = freshRuntime,
+            rejectedFingerprint = null,
+            debugBootstrapSession = null,
+        )
+
+        assertEquals(StoredOwnerSessionResolution.Session(freshRuntime), resolvedAfterSave)
+    }
+
+    @Test
+    fun `debug bootstrap works normally without rejected marker`() {
+        val debugBootstrap = storedSession(
+            accessExpiresAt = 1_000,
+            refreshToken = "debug-refresh",
+            source = OwnerSessionSource.DebugBootstrap,
+        )
+
+        val resolved = resolveStoredOwnerSession(
+            runtimeSession = null,
+            rejectedFingerprint = null,
+            debugBootstrapSession = debugBootstrap,
+        )
+
+        assertEquals(StoredOwnerSessionResolution.Session(debugBootstrap), resolved)
+    }
+
     private fun assertInvalid(value: String) {
         val error = runCatching { parseOwnerAccessToken(value) }.exceptionOrNull()
         assertTrue(error is OwnerSessionException)
@@ -128,7 +195,11 @@ class OwnerSessionContractTest {
         return "header.$payload.signature"
     }
 
-    private fun storedSession(accessExpiresAt: Long, refreshToken: String): StoredOwnerSession {
+    private fun storedSession(
+        accessExpiresAt: Long,
+        refreshToken: String,
+        source: OwnerSessionSource = OwnerSessionSource.Runtime,
+    ): StoredOwnerSession {
         val token = jwt(role = "authenticated", expiresAt = accessExpiresAt)
         val parsed = parseOwnerAccessToken(token)
         return StoredOwnerSession(
@@ -137,7 +208,7 @@ class OwnerSessionContractTest {
             expiresAtEpochSeconds = accessExpiresAt,
             tokenType = "bearer",
             fingerprint = parsed.fingerprint,
-            source = OwnerSessionSource.Runtime,
+            source = source,
         )
     }
 }
