@@ -11,68 +11,60 @@ import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
 
 class AndroidOwnerSessionStore(
     context: Context,
+    private val refresher: OwnerSessionRefresher,
     private val debugBootstrapToken: String? = null,
     private val nowEpochSeconds: () -> Long = { System.currentTimeMillis() / 1_000 },
 ) : OwnerSessionStore {
     private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val mutableState = MutableStateFlow(resolve().summary)
     override val state: StateFlow<OwnerSessionSummary> = mutableState.asStateFlow()
+    private val refreshCoordinator = OwnerSessionRefreshCoordinator(
+        nowEpochSeconds = nowEpochSeconds,
+        load = ::loadCurrentSession,
+        save = ::persistSession,
+        reject = ::reject,
+        refresher = refresher,
+    )
 
     init {
-        if (!preferences.contains(KEY_CIPHERTEXT)) {
+        if (!hasRuntimeSession()) {
             debugBootstrapToken?.takeIf(String::isNotBlank)?.let { bootstrap ->
                 runCatching { saveAccessToken(bootstrap) }
             }
         }
     }
 
-    @Synchronized
-    override fun currentBearer(): OwnerBearerToken {
-        val resolved = resolve()
-        mutableState.value = resolved.summary
-        return resolved.bearer ?: throw OwnerSessionException(
-            failure = when (resolved.summary.status) {
-                OwnerSessionStatus.Expired -> OwnerSessionFailure.Expired
-                OwnerSessionStatus.Rejected -> OwnerSessionFailure.Rejected
-                else -> OwnerSessionFailure.Missing
-            },
-            message = ownerSessionMessage(
-                when (resolved.summary.status) {
-                    OwnerSessionStatus.Expired -> OwnerSessionFailure.Expired
-                    OwnerSessionStatus.Rejected -> OwnerSessionFailure.Rejected
-                    else -> OwnerSessionFailure.Missing
-                },
-            ),
-        )
+    override suspend fun currentBearer(forceRefresh: Boolean): OwnerBearerToken {
+        return try {
+            val session = refreshCoordinator.validSession(forceRefresh)
+            updateState(session)
+            OwnerBearerToken(session.accessToken, session.fingerprint)
+        } catch (error: OwnerSessionException) {
+            mutableState.value = resolve().summary
+            throw error
+        }
     }
 
     @Synchronized
-    override fun saveAccessToken(token: String): OwnerSessionSummary {
-        val normalized = token.trim()
-        val parsed = parseOwnerAccessToken(normalized)
-        if (isExpired(parsed.expiresAtEpochSeconds, nowEpochSeconds())) {
-            throw OwnerSessionException(OwnerSessionFailure.Expired, ownerSessionMessage(OwnerSessionFailure.Expired))
-        }
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, secretKey()) }
-        val encrypted = cipher.doFinal(normalized.toByteArray(Charsets.UTF_8))
-        preferences.edit()
-            .putString(KEY_CIPHERTEXT, android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP))
-            .putString(KEY_IV, android.util.Base64.encodeToString(cipher.iv, android.util.Base64.NO_WRAP))
-            .remove(KEY_REJECTED_FINGERPRINT)
-            .apply()
-        return resolve().summary.also { mutableState.value = it }
+    override fun saveSession(session: OwnerSessionInput): OwnerSessionSummary {
+        val normalized = normalizeOwnerSession(session, nowEpochSeconds())
+        persistSession(normalized)
+        return updateState(normalized)
     }
 
     @Synchronized
     override fun reject(fingerprint: String) {
         preferences.edit()
-            .remove(KEY_CIPHERTEXT)
-            .remove(KEY_IV)
+            .remove(KEY_SESSION_CIPHERTEXT)
+            .remove(KEY_SESSION_IV)
+            .remove(KEY_ACCESS_CIPHERTEXT)
+            .remove(KEY_ACCESS_IV)
             .putString(KEY_REJECTED_FINGERPRINT, fingerprint)
-            .apply()
+            .commit()
         mutableState.value = OwnerSessionSummary(
             status = OwnerSessionStatus.Rejected,
             fingerprint = fingerprint,
@@ -84,57 +76,122 @@ class AndroidOwnerSessionStore(
         val currentFingerprint = resolve().summary.fingerprint
             ?: debugBootstrapToken?.takeIf(String::isNotBlank)?.let(::ownerTokenFingerprint)
         preferences.edit()
-            .remove(KEY_CIPHERTEXT)
-            .remove(KEY_IV)
+            .remove(KEY_SESSION_CIPHERTEXT)
+            .remove(KEY_SESSION_IV)
+            .remove(KEY_ACCESS_CIPHERTEXT)
+            .remove(KEY_ACCESS_IV)
             .apply {
                 if (currentFingerprint == null) remove(KEY_REJECTED_FINGERPRINT)
                 else putString(KEY_REJECTED_FINGERPRINT, currentFingerprint)
             }
-            .apply()
+            .commit()
         mutableState.value = OwnerSessionSummary(status = OwnerSessionStatus.Missing)
     }
 
-    private fun resolve(): ResolvedSession {
-        decryptRuntimeToken()?.let { token ->
-            val parsed = runCatching { parseOwnerAccessToken(token) }.getOrNull()
-            if (parsed != null) {
-                val summary = OwnerSessionSummary(
-                    status = if (isExpired(parsed.expiresAtEpochSeconds, nowEpochSeconds())) OwnerSessionStatus.Expired else OwnerSessionStatus.Active,
-                    source = OwnerSessionSource.Runtime,
-                    expiresAtEpochSeconds = parsed.expiresAtEpochSeconds,
-                    fingerprint = parsed.fingerprint,
-                )
-                return ResolvedSession(
-                    summary,
-                    token.takeUnless { summary.status == OwnerSessionStatus.Expired }
-                        ?.let { OwnerBearerToken(it, parsed.fingerprint) },
-                )
-            }
+    @Synchronized
+    private fun persistSession(session: StoredOwnerSession) {
+        val payload = JSONObject()
+            .put("access_token", session.accessToken)
+            .put("expires_at", session.expiresAtEpochSeconds)
+            .put("token_type", session.tokenType)
+            .apply { session.refreshToken?.let { put("refresh_token", it) } }
+            .toString()
+        val encrypted = encrypt(payload)
+        val committed = preferences.edit()
+            .putString(KEY_SESSION_CIPHERTEXT, encrypted.ciphertext)
+            .putString(KEY_SESSION_IV, encrypted.iv)
+            .remove(KEY_ACCESS_CIPHERTEXT)
+            .remove(KEY_ACCESS_IV)
+            .remove(KEY_REJECTED_FINGERPRINT)
+            .commit()
+        if (!committed) {
+            throw OwnerSessionException(OwnerSessionFailure.Invalid, "Owner Session 无法安全保存")
         }
+    }
 
+    private fun hasRuntimeSession(): Boolean =
+        preferences.contains(KEY_SESSION_CIPHERTEXT) || preferences.contains(KEY_ACCESS_CIPHERTEXT)
+
+    private fun resolve(): ResolvedSession {
+        loadCurrentSession()?.let { session ->
+            val expired = isExpired(session.expiresAtEpochSeconds, nowEpochSeconds())
+            val summary = OwnerSessionSummary(
+                status = if (expired) OwnerSessionStatus.Expired else OwnerSessionStatus.Active,
+                source = session.source,
+                expiresAtEpochSeconds = session.expiresAtEpochSeconds,
+                fingerprint = session.fingerprint,
+                canRefresh = session.refreshToken != null,
+            )
+            return ResolvedSession(summary)
+        }
+        val rejectedFingerprint = preferences.getString(KEY_REJECTED_FINGERPRINT, null)
+        return ResolvedSession(
+            if (rejectedFingerprint == null) OwnerSessionSummary(OwnerSessionStatus.Missing)
+            else OwnerSessionSummary(OwnerSessionStatus.Rejected, fingerprint = rejectedFingerprint),
+        )
+    }
+
+    private fun loadCurrentSession(): StoredOwnerSession? {
+        decryptV2Session()?.let { return it }
+        decryptV1AccessToken()?.let { token ->
+            val parsed = runCatching { parseOwnerAccessToken(token) }.getOrNull() ?: return@let
+            return StoredOwnerSession(
+                accessToken = token,
+                refreshToken = null,
+                expiresAtEpochSeconds = parsed.expiresAtEpochSeconds,
+                tokenType = "bearer",
+                fingerprint = parsed.fingerprint,
+                source = OwnerSessionSource.Runtime,
+            )
+        }
         val bootstrap = debugBootstrapToken?.trim().orEmpty()
         if (bootstrap.isNotEmpty()) {
             val parsed = runCatching { parseOwnerAccessToken(bootstrap) }.getOrNull()
-            if (parsed != null) {
-                val rejected = preferences.getString(KEY_REJECTED_FINGERPRINT, null) == parsed.fingerprint
-                val status = when {
-                    rejected -> OwnerSessionStatus.Rejected
-                    isExpired(parsed.expiresAtEpochSeconds, nowEpochSeconds()) -> OwnerSessionStatus.Expired
-                    else -> OwnerSessionStatus.Active
-                }
-                return ResolvedSession(
-                    OwnerSessionSummary(status, OwnerSessionSource.DebugBootstrap, parsed.expiresAtEpochSeconds, parsed.fingerprint),
-                    bootstrap.takeIf { status == OwnerSessionStatus.Active }
-                        ?.let { OwnerBearerToken(it, parsed.fingerprint) },
+            if (parsed != null && preferences.getString(KEY_REJECTED_FINGERPRINT, null) != parsed.fingerprint) {
+                return StoredOwnerSession(
+                    accessToken = bootstrap,
+                    refreshToken = null,
+                    expiresAtEpochSeconds = parsed.expiresAtEpochSeconds,
+                    tokenType = "bearer",
+                    fingerprint = parsed.fingerprint,
+                    source = OwnerSessionSource.DebugBootstrap,
                 )
             }
         }
-        return ResolvedSession(OwnerSessionSummary(OwnerSessionStatus.Missing), null)
+        return null
     }
 
-    private fun decryptRuntimeToken(): String? {
-        val encodedCiphertext = preferences.getString(KEY_CIPHERTEXT, null) ?: return null
-        val encodedIv = preferences.getString(KEY_IV, null) ?: return null
+    private fun decryptV2Session(): StoredOwnerSession? {
+        val payload = decrypt(KEY_SESSION_CIPHERTEXT, KEY_SESSION_IV) ?: return null
+        return runCatching {
+            val json = JSONObject(payload)
+            val accessToken = json.getString("access_token")
+            val parsed = parseOwnerAccessToken(accessToken)
+            StoredOwnerSession(
+                accessToken = accessToken,
+                refreshToken = json.optString("refresh_token").takeIf(String::isNotBlank)?.also(::validateRefreshToken),
+                expiresAtEpochSeconds = json.optLong("expires_at", parsed.expiresAtEpochSeconds),
+                tokenType = json.optString("token_type").takeIf(String::isNotBlank),
+                fingerprint = parsed.fingerprint,
+                source = OwnerSessionSource.Runtime,
+            )
+        }.getOrNull()
+    }
+
+    private fun decryptV1AccessToken(): String? = decrypt(KEY_ACCESS_CIPHERTEXT, KEY_ACCESS_IV)
+
+    private fun encrypt(value: String): EncryptedValue {
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, secretKey()) }
+        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        return EncryptedValue(
+            ciphertext = android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP),
+            iv = android.util.Base64.encodeToString(cipher.iv, android.util.Base64.NO_WRAP),
+        )
+    }
+
+    private fun decrypt(ciphertextKey: String, ivKey: String): String? {
+        val encodedCiphertext = preferences.getString(ciphertextKey, null) ?: return null
+        val encodedIv = preferences.getString(ivKey, null) ?: return null
         return runCatching {
             val cipher = Cipher.getInstance(TRANSFORMATION).apply {
                 init(
@@ -167,18 +224,26 @@ class AndroidOwnerSessionStore(
         }
     }
 
-    private data class ResolvedSession(
-        val summary: OwnerSessionSummary,
-        val bearer: OwnerBearerToken?,
-    )
+    private fun updateState(session: StoredOwnerSession): OwnerSessionSummary = OwnerSessionSummary(
+        status = if (isExpired(session.expiresAtEpochSeconds, nowEpochSeconds())) OwnerSessionStatus.Expired else OwnerSessionStatus.Active,
+        source = session.source,
+        expiresAtEpochSeconds = session.expiresAtEpochSeconds,
+        fingerprint = session.fingerprint,
+        canRefresh = session.refreshToken != null,
+    ).also { mutableState.value = it }
+
+    private data class ResolvedSession(val summary: OwnerSessionSummary)
+    private data class EncryptedValue(val ciphertext: String, val iv: String)
 
     private companion object {
         const val PREFERENCES = "owner_session_v1"
         const val KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "lovehouse_owner_session_v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val KEY_CIPHERTEXT = "access_token_ciphertext"
-        const val KEY_IV = "access_token_iv"
+        const val KEY_SESSION_CIPHERTEXT = "session_v2_ciphertext"
+        const val KEY_SESSION_IV = "session_v2_iv"
+        const val KEY_ACCESS_CIPHERTEXT = "access_token_ciphertext"
+        const val KEY_ACCESS_IV = "access_token_iv"
         const val KEY_REJECTED_FINGERPRINT = "rejected_fingerprint"
     }
 }

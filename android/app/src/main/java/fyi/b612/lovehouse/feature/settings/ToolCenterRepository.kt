@@ -44,7 +44,7 @@ class HttpToolCenterRepository(
         )
     }
 
-    private fun request(method: String, endpoint: String, body: String? = null, acceptConflict: Boolean = false): JSONObject {
+    private suspend fun request(method: String, endpoint: String, body: String? = null, acceptConflict: Boolean = false): JSONObject {
         val bearer = try {
             ownerSession.currentBearer()
         } catch (error: OwnerSessionException) {
