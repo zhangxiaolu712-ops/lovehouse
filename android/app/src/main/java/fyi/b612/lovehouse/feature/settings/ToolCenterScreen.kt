@@ -32,6 +32,7 @@ fun ToolCenterLabScreen(
     personaId: String,
     threadId: String,
     onBack: () -> Unit,
+    onReconnect: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ToolCenterViewModel = viewModel(
         factory = ToolCenterViewModel.factory(repository, profiles, personaId, threadId),
@@ -64,6 +65,14 @@ fun ToolCenterLabScreen(
         }
         when (val current = state) {
             ToolCenterUiState.Loading -> item { LoveHouseCard { Text("正在读取真实工具状态…") } }
+            is ToolCenterUiState.AuthenticationRequired -> item {
+                LoveHouseCard {
+                    Text("Owner 登录已失效", style = MaterialTheme.typography.titleMedium)
+                    Text(current.message, color = MaterialTheme.colorScheme.error)
+                    Text("请重新登录 LoveHouse，或重新连接服务器后再检测工具。", style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = onReconnect) { Text("重新登录 / 重新连接服务器") }
+                }
+            }
             is ToolCenterUiState.Error -> item {
                 LoveHouseCard {
                     Text("连接失败", style = MaterialTheme.typography.titleMedium)

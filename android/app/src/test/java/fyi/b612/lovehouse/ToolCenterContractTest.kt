@@ -22,6 +22,7 @@ class ToolCenterContractTest {
         assertTrue(payload.contains("\"allowed_tool_ids\":[\"builtin.engineering.read_current\",\"builtin.livingroom.read\"]"))
         assertTrue(payload.contains("\"persona_id\":\"codex\""))
     }
+
 }
 
 private class InMemoryToolProfileStore : ToolProfilePreferenceStore {

@@ -33,6 +33,7 @@ data class LocalToolProfile(
 sealed interface ToolCenterUiState {
     data object Loading : ToolCenterUiState
     data class Ready(val tools: List<ToolCapability>) : ToolCenterUiState
+    data class AuthenticationRequired(val message: String) : ToolCenterUiState
     data class Error(val message: String) : ToolCenterUiState
 }
 

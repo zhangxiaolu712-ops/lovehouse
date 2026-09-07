@@ -4,6 +4,10 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import fyi.b612.lovehouse.BuildConfig
+import fyi.b612.lovehouse.core.auth.AndroidOwnerSessionStore
+import fyi.b612.lovehouse.core.auth.OwnerSessionStore
+import fyi.b612.lovehouse.core.auth.SupabaseOwnerSessionRefresher
 import fyi.b612.lovehouse.core.permissions.AndroidPermissionStatusProvider
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.status.DefaultSystemStatusProvider
@@ -22,6 +26,7 @@ data class AppDependencies(
     val localStorage: LocalStorage,
     val systemStatus: SystemStatusProvider,
     val chatMessages: LocalChatMessageRepository,
+    val ownerSession: OwnerSessionStore,
     val toolCenter: ToolCenterRepository,
     val toolProfiles: ToolProfilePreferenceStore,
 )
@@ -29,12 +34,21 @@ data class AppDependencies(
 fun createAppDependencies(context: Context): AppDependencies {
     val appContext = context.applicationContext
     val permissions = AndroidPermissionStatusProvider(appContext)
+    val ownerSession = AndroidOwnerSessionStore(
+        context = appContext,
+        refresher = SupabaseOwnerSessionRefresher(
+            baseUrl = BuildConfig.LOVEHOUSE_SUPABASE_URL,
+            publishableKey = BuildConfig.LOVEHOUSE_SUPABASE_PUBLISHABLE_KEY,
+        ),
+        debugBootstrapToken = BuildConfig.LOVEHOUSE_OWNER_TOKEN.takeIf { BuildConfig.DEBUG },
+    )
     return AppDependencies(
         permissions = permissions,
         localStorage = DataStoreLocalStorage(appContext),
         systemStatus = DefaultSystemStatusProvider(permissions),
         chatMessages = SQLiteLocalChatMessageRepository(appContext),
-        toolCenter = HttpToolCenterRepository(),
+        ownerSession = ownerSession,
+        toolCenter = HttpToolCenterRepository(ownerSession = ownerSession),
         toolProfiles = AndroidToolProfilePreferenceStore(appContext),
     )
 }

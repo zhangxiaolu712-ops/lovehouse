@@ -28,7 +28,16 @@ class ToolCenterViewModel(
     fun refresh() = viewModelScope.launch {
         mutableState.value = ToolCenterUiState.Loading
         mutableState.value = runCatching { withContext(Dispatchers.IO) { repository.capabilities() } }
-            .fold({ ToolCenterUiState.Ready(it) }, { ToolCenterUiState.Error(it.message ?: "Tool Center 连接失败") })
+            .fold(
+                { ToolCenterUiState.Ready(it) },
+                {
+                    if (it is ToolCenterAuthenticationException) {
+                        ToolCenterUiState.AuthenticationRequired(it.message ?: "Owner 登录已失效")
+                    } else {
+                        ToolCenterUiState.Error(it.message ?: "Tool Center 连接失败")
+                    }
+                },
+            )
     }
 
     fun setEnabled(toolId: String, enabled: Boolean) {
@@ -39,7 +48,12 @@ class ToolCenterViewModel(
     fun test(toolId: String) = viewModelScope.launch {
         mutableTests.value = mutableTests.value - toolId
         val result = runCatching { withContext(Dispatchers.IO) { repository.testTool(toolId) } }
-            .getOrElse { ToolTestResult(toolId, false, it.message ?: "工具测试失败") }
+            .getOrElse {
+                if (it is ToolCenterAuthenticationException) {
+                    mutableState.value = ToolCenterUiState.AuthenticationRequired(it.message ?: "Owner 登录已失效")
+                }
+                ToolTestResult(toolId, false, it.message ?: "工具测试失败")
+            }
         mutableTests.value = mutableTests.value + (toolId to result)
     }
 

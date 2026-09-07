@@ -61,9 +61,12 @@ private fun LoveHouseContent(
 ) {
     val chatStore = remember(dependencies.chatMessages, dependencies.toolProfiles) {
         ChatSessionStore(
-            codexClient = HttpCodexChatClient { threadId ->
-                dependencies.toolProfiles.profile("codex", threadId).preferredToolIds
-            },
+            codexClient = HttpCodexChatClient(
+                ownerSession = dependencies.ownerSession,
+                allowedToolIdsFor = { threadId ->
+                    dependencies.toolProfiles.profile("codex", threadId).preferredToolIds
+                },
+            ),
             messageRepository = dependencies.chatMessages,
         )
     }
@@ -152,7 +155,10 @@ private fun LoveHouseContent(
             route = AppDestination.ConnectionControl.route,
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ConnectionControl.deepLink }),
         ) {
-            ConnectionControlScreen(onBack = { navController.popBackStack() })
+            ConnectionControlScreen(
+                ownerSession = dependencies.ownerSession,
+                onBack = { navController.popBackStack() },
+            )
         }
 
         composable(
@@ -165,6 +171,7 @@ private fun LoveHouseContent(
                 personaId = "codex",
                 threadId = stableCodexThreadId(),
                 onBack = { navController.popBackStack() },
+                onReconnect = { navController.navigate(AppDestination.ConnectionControl.route) },
             )
         }
 
