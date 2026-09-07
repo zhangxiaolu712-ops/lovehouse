@@ -102,7 +102,12 @@ private fun LoveHouseContent(
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ChatThread.deepLink }),
         ) { entry ->
             val threadId = entry.arguments?.getString("threadId").orEmpty()
-            ChatShellScreen(threadId = threadId, store = chatStore, onBack = { navController.popBackStack() })
+            ChatShellScreen(
+                threadId = threadId,
+                store = chatStore,
+                localStorage = dependencies.localStorage,
+                onBack = { navController.popBackStack() },
+            )
         }
 
         composable(

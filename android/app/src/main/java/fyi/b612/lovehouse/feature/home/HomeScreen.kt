@@ -1,5 +1,8 @@
 package fyi.b612.lovehouse.feature.home
 
+import android.graphics.Typeface
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -32,6 +35,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -58,11 +62,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -72,6 +76,18 @@ import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.core.designsystem.APPEARANCE_EFFECT_KEY
 import fyi.b612.lovehouse.core.designsystem.APPEARANCE_WALLPAPER_KEY
+import fyi.b612.lovehouse.core.designsystem.APPEARANCE_CUSTOM_FONT_KEY
+import fyi.b612.lovehouse.core.designsystem.APPEARANCE_CUSTOM_WALLPAPER_KEY
+import fyi.b612.lovehouse.core.designsystem.APPEARANCE_FOG_STRENGTH_KEY
+import fyi.b612.lovehouse.core.designsystem.APPEARANCE_FONT_KEY
+import fyi.b612.lovehouse.core.designsystem.APPEARANCE_ICON_STYLE_KEY
+import fyi.b612.lovehouse.core.designsystem.LocalLoveHouseAppearance
+import fyi.b612.lovehouse.core.designsystem.LocalLoveHouseFontFamily
+import fyi.b612.lovehouse.core.designsystem.LoveHouseFontStyle
+import fyi.b612.lovehouse.core.designsystem.LoveHouseAppearance
+import fyi.b612.lovehouse.core.designsystem.LoveHouseIconStyle
+import fyi.b612.lovehouse.core.designsystem.MAX_FOG_STRENGTH
+import fyi.b612.lovehouse.core.designsystem.importAppearanceAsset
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -83,7 +99,18 @@ private val GlassBorder = Color.White.copy(alpha = 0.70f)
 private val GlassShadow = Color(0x21614641)
 private const val DesktopEditScale = 0.80f
 
-private enum class DesktopGridMode(val storageValue: String, val columns: Int, val rows: Int) {
+private object FontFamily {
+    val Serif: androidx.compose.ui.text.font.FontFamily
+        @Composable get() = LocalLoveHouseFontFamily.current
+}
+
+@Composable
+private fun desktopGlassColor(): Color {
+    val fog = LocalLoveHouseAppearance.current.fogStrength / MAX_FOG_STRENGTH.toFloat()
+    return Color(0xFFF8F5EF).copy(alpha = 0.28f + fog * 0.38f)
+}
+
+internal enum class DesktopGridMode(val storageValue: String, val columns: Int, val rows: Int) {
     FourByFour("4x4", 4, 4),
     FourByFive("4x5", 4, 5),
     FiveByFour("5x4", 5, 4),
@@ -92,7 +119,7 @@ private enum class DesktopGridMode(val storageValue: String, val columns: Int, v
     Custom("custom", 6, 6),
 }
 
-private data class GridPlacement(val page: Int, val row: Int, val column: Int, val rowSpan: Int, val columnSpan: Int)
+internal data class GridPlacement(val page: Int, val row: Int, val column: Int, val rowSpan: Int, val columnSpan: Int)
 private sealed interface ItemPlacement {
     data class Desktop(val grid: GridPlacement) : ItemPlacement
     data class Dock(val slot: Int) : ItemPlacement
@@ -111,6 +138,48 @@ private data class GridGeometry(
 }
 
 private enum class DesktopEditSheet { Appearance, Effect, Widgets, Dock, Desktop }
+internal enum class DesktopIconSize(val storageValue: String, val scale: Float) {
+    Small("small", 0.86f), Standard("medium", 1f), Large("large", 1.14f),
+}
+
+internal fun reflowGridPlacements(
+    placements: Map<String, GridPlacement>,
+    columns: Int,
+    rows: Int,
+): Map<String, GridPlacement>? {
+    if (columns !in 3..8 || rows !in 3..8) return null
+    val result = linkedMapOf<String, GridPlacement>()
+    placements.entries.groupBy { it.value.page }.toSortedMap().forEach { (_, pageItems) ->
+        val occupied = mutableListOf<GridPlacement>()
+        pageItems.sortedWith(compareBy({ it.value.row }, { it.value.column }, { it.key })).forEach { (id, original) ->
+            if (original.columnSpan > columns || original.rowSpan > rows) return null
+            val originalFits = original.column >= 0 && original.row >= 0 &&
+                original.column + original.columnSpan <= columns && original.row + original.rowSpan <= rows &&
+                occupied.none { cellsOverlapCells(original, it) }
+            val placed = if (originalFits) original else {
+                var candidate: GridPlacement? = null
+                for (row in 0..(rows - original.rowSpan)) {
+                    for (column in 0..(columns - original.columnSpan)) {
+                        val next = original.copy(row = row, column = column)
+                        if (occupied.none { cellsOverlapCells(next, it) }) {
+                            candidate = next
+                            break
+                        }
+                    }
+                    if (candidate != null) break
+                }
+                candidate ?: return null
+            }
+            occupied += placed
+            result[id] = placed
+        }
+    }
+    return result
+}
+
+private fun cellsOverlapCells(a: GridPlacement, b: GridPlacement): Boolean =
+    a.column < b.column + b.columnSpan && a.column + a.columnSpan > b.column &&
+        a.row < b.row + b.rowSpan && a.row + a.rowSpan > b.row
 
 @Composable
 fun HomeScreen(
@@ -120,11 +189,36 @@ fun HomeScreen(
     localStorage: LocalStorage,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val appearance = LocalLoveHouseAppearance.current
     val pagerState = rememberPagerState(pageCount = { 5 })
     val scope = rememberCoroutineScope()
     var activeSheet by remember { mutableStateOf<DesktopEditSheet?>(null) }
+    var appearanceFeedback by remember { mutableStateOf<String?>(null) }
+    val wallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        importAppearanceAsset(context, uri, "wallpapers", "global-wallpaper")
+            .onSuccess { path -> scope.launch {
+                localStorage.writeString(APPEARANCE_CUSTOM_WALLPAPER_KEY, path)
+                localStorage.writeString(APPEARANCE_WALLPAPER_KEY, "custom")
+                appearanceFeedback = "自定义壁纸已保存在本机"
+            } }
+            .onFailure { appearanceFeedback = "壁纸导入失败：${it.message.orEmpty()}" }
+    }
+    val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        importAppearanceAsset(context, uri, "fonts", "global-font")
+            .onSuccess { path ->
+                if (runCatching { Typeface.createFromFile(path) }.isSuccess) scope.launch {
+                    localStorage.writeString(APPEARANCE_CUSTOM_FONT_KEY, path)
+                    localStorage.writeString(APPEARANCE_FONT_KEY, LoveHouseFontStyle.Imported.storageValue)
+                    appearanceFeedback = "字体已导入并应用"
+                } else appearanceFeedback = "所选文件不是可用字体"
+            }
+            .onFailure { appearanceFeedback = "字体导入失败：${it.message.orEmpty()}" }
+    }
     val editor = remember {
-        DesktopEditor(onPersist = { placements, hidden, gridMode, dockItems, looseDockItems, customColumns, customRows ->
+        DesktopEditor(onPersist = { placements, hidden, gridMode, dockItems, looseDockItems, customColumns, customRows, iconSize ->
             scope.launch {
                 localStorage.writeString(DESKTOP_GRID_SLOTS_KEY, encodeGridPlacements(placements))
                 localStorage.writeString(DESKTOP_HIDDEN_KEY, hidden.sorted().joinToString(","))
@@ -132,6 +226,7 @@ fun HomeScreen(
                 localStorage.writeString(DESKTOP_DOCK_KEY, dockItems.joinToString(","))
                 localStorage.writeString(DESKTOP_LOOSE_DOCK_KEY, looseDockItems.joinToString(","))
                 localStorage.writeString(DESKTOP_CUSTOM_GRID_KEY, "$customColumns,$customRows")
+                localStorage.writeString(DESKTOP_ICON_SIZE_KEY, iconSize.storageValue)
             }
         })
     }
@@ -146,6 +241,8 @@ fun HomeScreen(
             dockItems = localStorage.readString(DESKTOP_DOCK_KEY)?.split(',')?.filter(String::isNotBlank) ?: DEFAULT_DOCK_IDS,
             looseDockItems = localStorage.readString(DESKTOP_LOOSE_DOCK_KEY)?.split(',')?.filter(String::isNotBlank).orEmpty(),
             customGrid = localStorage.readString(DESKTOP_CUSTOM_GRID_KEY),
+            iconSize = DesktopIconSize.entries.firstOrNull { it.storageValue == localStorage.readString(DESKTOP_ICON_SIZE_KEY) }
+                ?: DesktopIconSize.Standard,
         )
     }
     LaunchedEffect(pagerState.currentPage) { editor.currentPage = pagerState.currentPage }
@@ -253,7 +350,18 @@ fun HomeScreen(
                 customColumns = editor.customColumns,
                 customRows = editor.customRows,
                 onCustomGrid = editor::selectCustomGrid,
-                onWallpaper = { value -> scope.launch { localStorage.writeString(APPEARANCE_WALLPAPER_KEY, value) } },
+                gridConflict = editor.gridConflictFeedback,
+                iconSize = editor.iconSize,
+                onIconSize = editor::selectIconSize,
+                onRestoreHidden = editor::restoreHidden,
+                onResetLayout = editor::resetLayout,
+                appearance = appearance,
+                appearanceFeedback = appearanceFeedback,
+                onFont = { value -> scope.launch { localStorage.writeString(APPEARANCE_FONT_KEY, value) } },
+                onImportFont = { fontPicker.launch("*/*") },
+                onWallpaper = { value -> if (value == "upload") wallpaperPicker.launch("image/*") else scope.launch { localStorage.writeString(APPEARANCE_WALLPAPER_KEY, value) } },
+                onIconStyle = { value -> scope.launch { localStorage.writeString(APPEARANCE_ICON_STYLE_KEY, value) } },
+                onFogStrength = { value -> scope.launch { localStorage.writeString(APPEARANCE_FOG_STRENGTH_KEY, value.toString()) } },
                 onEffect = { value -> scope.launch { localStorage.writeString(APPEARANCE_EFFECT_KEY, value) } },
                 onClose = { activeSheet = null },
             )
@@ -362,7 +470,7 @@ private fun GridGlassPanel(id: String, renderPage: Int, editor: DesktopEditor, d
     val density = LocalDensity.current
     val contentScale = minOf(1f, 4f / editor.gridColumns, 4f / editor.gridRows)
     GridPlacedItem(id, renderPage, editor, default, geometry) {
-        Surface(Modifier.fillMaxSize(), RoundedCornerShape(radius * contentScale), Glass, border = BorderStroke(1.dp, GlassBorder)) {
+        Surface(Modifier.fillMaxSize(), RoundedCornerShape(radius * contentScale), desktopGlassColor(), border = BorderStroke(1.dp, GlassBorder)) {
             CompositionLocalProvider(LocalDensity provides Density(density.density * contentScale, density.fontScale)) {
                 Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp), content = content)
             }
@@ -374,17 +482,25 @@ private fun GridGlassPanel(id: String, renderPage: Int, editor: DesktopEditor, d
 private fun GridDesktopApp(glyph: String, label: String, renderPage: Int, editor: DesktopEditor, default: GridPlacement, geometry: GridGeometry, itemId: String = "page:${default.page}:app:$glyph:$label", onClick: (() -> Unit)? = null) {
     val density = LocalDensity.current
     val contentScale = minOf(1f, 4f / editor.gridColumns, 4f / editor.gridRows)
+    val iconStyle = LocalLoveHouseAppearance.current.iconStyle
     GridPlacedItem(itemId, renderPage, editor, default, geometry) {
         CompositionLocalProvider(LocalDensity provides Density(density.density * contentScale, density.fontScale)) {
             Column(
-                Modifier.fillMaxSize().then(
+                Modifier.fillMaxSize().graphicsLayer(scaleX = editor.iconSize.scale, scaleY = editor.iconSize.scale).then(
                     if (onClick != null && !editor.isEditing) Modifier.clickable(onClick = onClick) else Modifier,
                 ),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Surface(Modifier.size((minOf(geometry.cellWidth.value, geometry.cellHeight.value) * .52f / contentScale).dp), RoundedCornerShape(15.dp), Color(0xDDF8F5EF), border = BorderStroke(1.dp, GlassBorder)) { Box(contentAlignment = Alignment.Center) { Text(glyph, color = DesktopInk, fontSize = 18.sp) } }
-                Text(label, Modifier.padding(top = 4.dp), color = DesktopInk, fontSize = 9.sp)
+                val iconColor = when (iconStyle) {
+                    LoveHouseIconStyle.Line -> Color.White.copy(alpha = .20f)
+                    LoveHouseIconStyle.SoftGlass -> Color.White.copy(alpha = .56f)
+                    LoveHouseIconStyle.Ink -> Color(0xBFE7E2D9)
+                    LoveHouseIconStyle.Original -> Color(0xDDF8F5EF)
+                }
+                val iconBorder = if (iconStyle == LoveHouseIconStyle.Ink) DesktopInk.copy(alpha = .68f) else if (iconStyle == LoveHouseIconStyle.Line) DesktopInk.copy(alpha = .42f) else GlassBorder
+                Surface(Modifier.size((minOf(geometry.cellWidth.value, geometry.cellHeight.value) * .52f / contentScale).dp), RoundedCornerShape(if (iconStyle == LoveHouseIconStyle.Ink) 11.dp else 15.dp), iconColor, border = BorderStroke(if (iconStyle == LoveHouseIconStyle.Line) .7.dp else 1.dp, iconBorder)) { Box(contentAlignment = Alignment.Center) { Text(glyph, color = DesktopInk, fontSize = 18.sp, fontWeight = if (iconStyle == LoveHouseIconStyle.Ink) FontWeight.Bold else FontWeight.Normal) } }
+                Text(label, Modifier.padding(top = 4.dp), color = DesktopInk, fontSize = 9.sp, fontWeight = if (iconStyle == LoveHouseIconStyle.Ink) FontWeight.Medium else FontWeight.Normal)
             }
         }
     }
@@ -533,7 +649,7 @@ private fun GlassPanel(
     Surface(
         modifier = Modifier.fillMaxSize().shadow(10.dp, RoundedCornerShape(radius), ambientColor = GlassShadow, spotColor = GlassShadow),
         shape = RoundedCornerShape(radius),
-        color = Glass,
+        color = desktopGlassColor(),
         border = BorderStroke(1.dp, GlassBorder),
     ) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp), content = content)
@@ -599,6 +715,7 @@ private fun DesktopDock(onOpenChat: () -> Unit, onOpenSettings: () -> Unit, edit
 @Composable
 private fun DockEntry(spec: DockSpec, editor: DesktopEditor, onClick: (() -> Unit)? = null) {
     val scale by animateFloatAsState(if (editor.isEditing) DesktopEditScale else 1f, label = "dock edit scale")
+    val iconStyle = LocalLoveHouseAppearance.current.iconStyle
     val itemOffset = editor.offsets[spec.id] ?: Offset.Zero
     val dockVisual: @Composable () -> Unit = {
         Column(
@@ -606,7 +723,17 @@ private fun DockEntry(spec: DockSpec, editor: DesktopEditor, onClick: (() -> Uni
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Surface(Modifier.size(39.dp), RoundedCornerShape(13.dp), Color.White.copy(alpha = 0.50f), border = BorderStroke(1.dp, Color.White.copy(alpha = 0.70f))) {
+            Surface(
+                Modifier.size(39.dp),
+                RoundedCornerShape(if (iconStyle == LoveHouseIconStyle.Ink) 10.dp else 13.dp),
+                when (iconStyle) {
+                    LoveHouseIconStyle.Line -> Color.White.copy(alpha = .18f)
+                    LoveHouseIconStyle.SoftGlass -> Color.White.copy(alpha = .58f)
+                    LoveHouseIconStyle.Ink -> Color(0xBFE7E2D9)
+                    LoveHouseIconStyle.Original -> Color.White.copy(alpha = .50f)
+                },
+                border = BorderStroke(if (iconStyle == LoveHouseIconStyle.Line) .7.dp else 1.dp, if (iconStyle == LoveHouseIconStyle.Ink) DesktopInk.copy(alpha = .68f) else GlassBorder),
+            ) {
                 Box(contentAlignment = Alignment.Center) { Text(spec.glyph, color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Clip) }
             }
             Text(spec.label, Modifier.padding(top = 4.dp), color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 8.sp)
@@ -624,7 +751,7 @@ private fun DockEntry(spec: DockSpec, editor: DesktopEditor, onClick: (() -> Uni
     ) {
         Column(
             Modifier.fillMaxSize().graphicsLayer {
-                scaleX = scale; scaleY = scale; transformOrigin = TransformOrigin.Center
+                scaleX = scale * editor.iconSize.scale; scaleY = scale * editor.iconSize.scale; transformOrigin = TransformOrigin.Center
             }.onGloballyPositioned { editor.visualBounds[spec.id] = it.boundsInRoot() },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -649,7 +776,7 @@ private fun LooseDockEntry(id: String, editor: DesktopEditor, onOpenChat: () -> 
         .pointerInput(id) { detectDragGesturesAfterLongPress(onDragStart = { editor.startDrag(id) }, onDragEnd = { editor.finishDrag(id) }, onDragCancel = editor::cancelDrag, onDrag = { change, amount -> change.consume(); editor.drag(id, amount) }) }
         .then(if (!editor.isEditing && onClick != null) Modifier.clickable(onClick = onClick) else Modifier)) {
         Column(
-            Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = TransformOrigin.Center }
+            Modifier.fillMaxSize().graphicsLayer { scaleX = scale * editor.iconSize.scale; scaleY = scale * editor.iconSize.scale; transformOrigin = TransformOrigin.Center }
                 .onGloballyPositioned { editor.visualBounds[id] = it.boundsInRoot() },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -665,14 +792,16 @@ private const val DESKTOP_GRID_KEY = "desktop_grid_mode_v1"
 private const val DESKTOP_DOCK_KEY = "desktop_dock_items_v1"
 private const val DESKTOP_LOOSE_DOCK_KEY = "desktop_loose_dock_items_v1"
 private const val DESKTOP_CUSTOM_GRID_KEY = "desktop_custom_grid_v1"
+private const val DESKTOP_ICON_SIZE_KEY = "desktop_icon_size_v1"
 
-private class DesktopEditor(
-    private val onPersist: (Map<String, GridPlacement>, Set<String>, DesktopGridMode, List<String>, List<String>, Int, Int) -> Unit,
+internal class DesktopEditor(
+    private val onPersist: (Map<String, GridPlacement>, Set<String>, DesktopGridMode, List<String>, List<String>, Int, Int, DesktopIconSize) -> Unit,
 ) {
     val offsets = mutableStateMapOf<String, Offset>()
     private val gridSlots = mutableStateMapOf<String, Offset>()
     private val gridDefaults = mutableStateMapOf<String, GridPlacement>()
     private val savedPlacements = mutableStateMapOf<String, GridPlacement>()
+    private val factoryDefaults = mutableStateMapOf<String, GridPlacement>()
     private val placementStates = mutableStateMapOf<String, ItemPlacement>()
     val hidden = mutableStateMapOf<String, Boolean>()
     val itemBounds = mutableStateMapOf<String, Rect>()
@@ -701,6 +830,8 @@ private class DesktopEditor(
         private set
     var customRows by mutableStateOf(6)
         private set
+    var iconSize by mutableStateOf(DesktopIconSize.Standard)
+        private set
     val gridColumns: Int get() = if (gridMode == DesktopGridMode.Custom) customColumns else gridMode.columns
     val gridRows: Int get() = if (gridMode == DesktopGridMode.Custom) customRows else gridMode.rows
     var gridConflictFeedback by mutableStateOf(false)
@@ -721,7 +852,7 @@ private class DesktopEditor(
     private var draggedScreenBounds: Rect? = null
     private var hasDragged = false
 
-    fun restore(placements: Map<String, GridPlacement>, hidden: Set<String>, gridMode: DesktopGridMode, dockItems: List<String>, looseDockItems: List<String>, customGrid: String?) {
+    fun restore(placements: Map<String, GridPlacement>, hidden: Set<String>, gridMode: DesktopGridMode, dockItems: List<String>, looseDockItems: List<String>, customGrid: String?, iconSize: DesktopIconSize) {
         this.offsets.clear()
         this.gridSlots.clear()
         this.savedPlacements.clear(); this.savedPlacements.putAll(placements)
@@ -736,6 +867,7 @@ private class DesktopEditor(
             customColumns = values.getOrNull(0)?.toIntOrNull()?.coerceIn(3, 8) ?: 6
             customRows = values.getOrNull(1)?.toIntOrNull()?.coerceIn(3, 8) ?: 6
         }
+        this.iconSize = iconSize
         this.dockItems.clear(); this.dockItems.addAll(dockItems.take(4))
         this.dockItems.forEachIndexed { slot, id -> placementStates[id] = ItemPlacement.Dock(slot) }
         this.looseDockItems.clear(); this.looseDockItems.addAll(looseDockItems)
@@ -790,6 +922,7 @@ private class DesktopEditor(
     }
 
     fun gridPlacement(id: String, default: GridPlacement): GridPlacement {
+        factoryDefaults.putIfAbsent(id, default)
         val durable = (placementStates[id] as? ItemPlacement.Desktop)?.grid ?: savedPlacements[id] ?: default
         gridDefaults[id] = durable
         if (placementStates[id] == null && id !in dockItems) placementStates[id] = ItemPlacement.Desktop(durable)
@@ -973,18 +1106,76 @@ private class DesktopEditor(
     }
 
     fun selectGridMode(mode: DesktopGridMode) {
-        val placements = gridDefaults.map { (id, fallback) ->
-            val slot = gridSlots[id]
-            fallback.copy(column = slot?.x?.roundToInt() ?: fallback.column, row = slot?.y?.roundToInt() ?: fallback.row)
-        }
-        val fits = placements.all { it.column + it.columnSpan <= mode.columns && it.row + it.rowSpan <= mode.rows } &&
-            placements.withIndex().all { (index, item) -> placements.drop(index + 1).none { other -> item.page == other.page && cellsOverlap(item, other) } }
-        if (fits) { gridMode = mode; gridConflictFeedback = false; persist() } else gridConflictFeedback = true
+        val targetColumns = if (mode == DesktopGridMode.Custom) customColumns else mode.columns
+        val targetRows = if (mode == DesktopGridMode.Custom) customRows else mode.rows
+        applyGrid(mode, targetColumns, targetRows)
     }
     fun selectCustomGrid(columns: Int, rows: Int) {
-        customColumns = columns.coerceIn(3, 8)
-        customRows = rows.coerceIn(3, 8)
-        selectGridMode(DesktopGridMode.Custom)
+        val targetColumns = columns.coerceIn(3, 8)
+        val targetRows = rows.coerceIn(3, 8)
+        applyGrid(DesktopGridMode.Custom, targetColumns, targetRows)
+    }
+
+    private fun applyGrid(mode: DesktopGridMode, columns: Int, rows: Int) {
+        val canonical = (savedPlacements.toMap() + gridDefaults.toMap()).mapValues { (id, fallback) ->
+            (placementStates[id] as? ItemPlacement.Desktop)?.grid ?: savedPlacements[id] ?: fallback
+        }.filterKeys { it !in dockItems }
+        val migrated = reflowGridPlacements(canonical, columns, rows)
+        if (migrated == null) {
+            gridConflictFeedback = true
+            return
+        }
+        if (mode == DesktopGridMode.Custom) {
+            customColumns = columns
+            customRows = rows
+        }
+        gridMode = mode
+        migrated.forEach { (id, placement) ->
+            gridDefaults[id] = placement
+            savedPlacements[id] = placement
+            placementStates[id] = ItemPlacement.Desktop(placement)
+            gridSlots[id] = Offset(placement.column.toFloat(), placement.row.toFloat())
+        }
+        offsets.clear()
+        gridConflictFeedback = false
+        persist()
+    }
+
+    fun selectIconSize(size: DesktopIconSize) {
+        iconSize = size
+        persist()
+    }
+
+    fun restoreHidden() {
+        hidden.clear()
+        gridDefaults.forEach { (id, placement) ->
+            if (id !in dockItems) placementStates[id] = ItemPlacement.Desktop(placement)
+        }
+        gridConflictFeedback = false
+        persist()
+    }
+
+    fun resetLayout() {
+        hidden.clear()
+        offsets.clear()
+        gridSlots.clear()
+        savedPlacements.clear()
+        placementStates.clear()
+        gridDefaults.clear()
+        factoryDefaults.forEach { (id, placement) ->
+            gridDefaults[id] = placement
+            placementStates[id] = ItemPlacement.Desktop(placement)
+        }
+        gridMode = DesktopGridMode.FourByFour
+        customColumns = 6
+        customRows = 6
+        iconSize = DesktopIconSize.Standard
+        dockItems.clear()
+        dockItems.addAll(DEFAULT_DOCK_IDS)
+        reindexDockPlacements()
+        looseDockItems.clear()
+        gridConflictFeedback = false
+        persist()
     }
 
     private fun slotFor(bounds: Rect): Offset {
@@ -1085,12 +1276,12 @@ private class DesktopEditor(
             kotlin.math.abs(first.height - second.height) < 24f
 
     private fun persist() {
-        val placements = gridDefaults.filterKeys { placementStates[it] is ItemPlacement.Desktop }.mapValues { (id, base) ->
+        val placements = (savedPlacements.toMap() + gridDefaults.toMap()).filterKeys { placementStates[it] is ItemPlacement.Desktop }.mapValues { (id, base) ->
             val slot = gridSlots[id]
             base.copy(column = slot?.x?.roundToInt() ?: base.column, row = slot?.y?.roundToInt() ?: base.row)
         }
         savedPlacements.clear(); savedPlacements.putAll(placements)
-        onPersist(placements, hidden.filterValues { it }.keys, gridMode, dockItems.toList(), looseDockItems.toList(), customColumns, customRows)
+        onPersist(placements, hidden.filterValues { it }.keys, gridMode, dockItems.toList(), looseDockItems.toList(), customColumns, customRows, iconSize)
     }
 }
 
@@ -1324,7 +1515,18 @@ private fun DesktopEditSheetPanel(
     customColumns: Int = 6,
     customRows: Int = 6,
     onCustomGrid: (Int, Int) -> Unit = { _, _ -> },
+    gridConflict: Boolean = false,
+    iconSize: DesktopIconSize = DesktopIconSize.Standard,
+    onIconSize: (DesktopIconSize) -> Unit = {},
+    onRestoreHidden: () -> Unit = {},
+    onResetLayout: () -> Unit = {},
+    appearance: LoveHouseAppearance = LoveHouseAppearance(),
+    appearanceFeedback: String? = null,
+    onFont: (String) -> Unit = {},
+    onImportFont: () -> Unit = {},
     onWallpaper: (String) -> Unit,
+    onIconStyle: (String) -> Unit = {},
+    onFogStrength: (Int) -> Unit = {},
     onEffect: (String) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -1341,11 +1543,27 @@ private fun DesktopEditSheetPanel(
                 Text("×", modifier = Modifier.clickable(onClick = onClose).padding(6.dp), color = DesktopInk, fontSize = 20.sp)
             }
             when (sheet) {
-                DesktopEditSheet.Appearance -> AppearanceSheet(onWallpaper)
-                DesktopEditSheet.Effect -> ChoiceSection("壁纸效果", listOf("清晰" to "clear", "模糊" to "blur", "压暗" to "dim", "柔雾" to "soft"), onEffect)
+                DesktopEditSheet.Appearance -> AppearanceSheet(
+                    appearance = appearance,
+                    feedback = appearanceFeedback,
+                    onFont = onFont,
+                    onImportFont = onImportFont,
+                    onWallpaper = onWallpaper,
+                    onIconStyle = onIconStyle,
+                    onFogStrength = onFogStrength,
+                )
+                DesktopEditSheet.Effect -> ChoiceSection(
+                    "壁纸效果",
+                    listOf("清晰" to "clear", "模糊" to "blur", "压暗" to "dim", "柔雾" to "soft"),
+                    selected = appearance.wallpaperEffect,
+                    onChoice = onEffect,
+                )
                 DesktopEditSheet.Widgets -> WidgetsSheet()
                 DesktopEditSheet.Dock -> DockSheet()
-                DesktopEditSheet.Desktop -> DesktopSheet(gridMode, onGridMode, customColumns, customRows, onCustomGrid)
+                DesktopEditSheet.Desktop -> DesktopSheet(
+                    gridMode, onGridMode, customColumns, customRows, onCustomGrid,
+                    iconSize, onIconSize, onRestoreHidden, onResetLayout, gridConflict,
+                )
             }
         }
     }
@@ -1360,24 +1578,63 @@ private fun DesktopEditSheet.title(): String = when (this) {
 }
 
 @Composable
-private fun AppearanceSheet(onWallpaper: (String) -> Unit) {
-    ChoiceSection("字体 · 全局", listOf("宋体" to "serif", "无衬线" to "sans", "小薇" to "xiaowei", "手写" to "mashan", "系统" to "system", "Gama Hand*" to "gama")) {}
-    ChoiceSection("壁纸 · 全局", listOf("绿荫" to "house", "暖纸" to "warm", "粉雾" to "rose", "夜空" to "night", "＋ 相册" to "upload"), onWallpaper)
-    ChoiceSection("图标 · 全局", listOf("原始" to "original", "细线" to "line", "柔玻璃" to "soft", "墨线" to "ink")) {}
-    Text("雾面效果    ━━━━━━━   10px", color = DesktopMuted, fontSize = 10.sp)
+private fun AppearanceSheet(
+    appearance: LoveHouseAppearance,
+    feedback: String?,
+    onFont: (String) -> Unit,
+    onImportFont: () -> Unit,
+    onWallpaper: (String) -> Unit,
+    onIconStyle: (String) -> Unit,
+    onFogStrength: (Int) -> Unit,
+) {
+    ChoiceSection(
+        "字体 · 全局",
+        listOf("宋体" to "serif", "无衬线" to "sans", "手写" to "handwriting", "系统" to "system"),
+        selected = appearance.fontStyle.storageValue,
+        onChoice = onFont,
+    )
+    ChoiceSection(
+        "本地字体",
+        listOf("导入字体" to "import"),
+        selected = if (appearance.fontStyle == LoveHouseFontStyle.Imported) "import" else null,
+        onChoice = { onImportFont() },
+    )
+    Text("小薇 / Gama Hand 尚未内置；导入有效字体后才会启用。", color = DesktopMuted, fontSize = 8.sp)
+    ChoiceSection(
+        "壁纸 · 全局",
+        listOf("绿荫" to "house", "暖纸" to "warm", "粉雾" to "rose", "夜空" to "night", "＋ 相册" to "upload"),
+        selected = appearance.wallpaper,
+        onChoice = onWallpaper,
+    )
+    ChoiceSection(
+        "图标 · 全局",
+        listOf("原始" to "original", "细线" to "line", "柔玻璃" to "soft", "墨线" to "ink"),
+        selected = appearance.iconStyle.storageValue,
+        onChoice = onIconStyle,
+    )
+    Text("雾面效果 · ${appearance.fogStrength}", color = DesktopMuted, fontSize = 10.sp)
+    Slider(
+        value = appearance.fogStrength.toFloat(),
+        onValueChange = { onFogStrength(it.roundToInt()) },
+        valueRange = 0f..MAX_FOG_STRENGTH.toFloat(),
+        steps = MAX_FOG_STRENGTH - 1,
+    )
+    feedback?.let { Text(it, color = DesktopInk, fontSize = 9.sp) }
     Text("这是全局主题层：母版、聊天、世界书、朋友圈及后续迁入页面优先继承这里。", color = DesktopMuted, fontSize = 9.sp, lineHeight = 14.sp)
 }
 
 @Composable
-private fun ChoiceSection(title: String, items: List<Pair<String, String>>, onChoice: (String) -> Unit) {
+private fun ChoiceSection(title: String, items: List<Pair<String, String>>, selected: String? = null, onChoice: (String) -> Unit) {
     Text(title, color = DesktopMuted, fontSize = 9.sp, letterSpacing = 0.7.sp)
     items.chunked(3).forEach { row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             row.forEach { (label, value) ->
                 Surface(
                     modifier = Modifier.weight(1f).height(42.dp).clickable { onChoice(value) },
-                    shape = RoundedCornerShape(15.dp), color = Color.White.copy(alpha = 0.42f), border = BorderStroke(1.dp, GlassBorder),
-                ) { Box(contentAlignment = Alignment.Center) { Text(label, color = DesktopInk, fontSize = 10.sp) } }
+                    shape = RoundedCornerShape(15.dp),
+                    color = if (value == selected) Color(0xB067755C) else Color.White.copy(alpha = 0.42f),
+                    border = BorderStroke(1.dp, GlassBorder),
+                ) { Box(contentAlignment = Alignment.Center) { Text(label, color = if (value == selected) Color.White else DesktopInk, fontSize = 10.sp) } }
             }
             repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
         }
@@ -1411,7 +1668,18 @@ private fun DockSheet() {
 }
 
 @Composable
-private fun DesktopSheet(gridMode: DesktopGridMode, onGridMode: (DesktopGridMode) -> Unit, customColumns: Int, customRows: Int, onCustomGrid: (Int, Int) -> Unit) {
+private fun DesktopSheet(
+    gridMode: DesktopGridMode,
+    onGridMode: (DesktopGridMode) -> Unit,
+    customColumns: Int,
+    customRows: Int,
+    onCustomGrid: (Int, Int) -> Unit,
+    iconSize: DesktopIconSize,
+    onIconSize: (DesktopIconSize) -> Unit,
+    onRestoreHidden: () -> Unit,
+    onResetLayout: () -> Unit,
+    gridConflict: Boolean,
+) {
     Text("布局密度", color = DesktopMuted, fontSize = 9.sp)
     DesktopGridMode.entries.chunked(3).forEach { modes ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -1433,8 +1701,16 @@ private fun DesktopSheet(gridMode: DesktopGridMode, onGridMode: (DesktopGridMode
         }
     }
     Text("画布范围固定，只改变里面的行列密度；切换后仍留在同一个小手机桌面。", color = DesktopMuted, fontSize = 9.sp)
-    ChoiceSection("图标尺寸", listOf("小图标" to "small", "标准" to "medium", "大图标" to "large")) {}
-    ChoiceSection("整理", listOf("恢复隐藏" to "restore", "重置布局" to "reset")) {}
+    if (gridConflict) Text("当前内容无法放入该网格，已保留原布局。", color = Color(0xFF9A6870), fontSize = 9.sp)
+    ChoiceSection(
+        "图标尺寸",
+        listOf("小图标" to "small", "标准" to "medium", "大图标" to "large"),
+        selected = iconSize.storageValue,
+        onChoice = { value -> DesktopIconSize.entries.firstOrNull { it.storageValue == value }?.let(onIconSize) },
+    )
+    ChoiceSection("整理", listOf("恢复隐藏" to "restore", "重置布局" to "reset")) { value ->
+        if (value == "restore") onRestoreHidden() else onResetLayout()
+    }
 }
 
 @Composable

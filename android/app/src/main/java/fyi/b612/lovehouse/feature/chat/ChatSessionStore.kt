@@ -107,8 +107,10 @@ class ChatSessionStore(
     fun messages(threadId: String) = messagesByThread.getOrPut(threadId) { mutableStateListOf() }
     fun members(threadId: String) = membersByThread.getOrPut(threadId) { mutableStateListOf() }
     fun background(threadId: String): String = backgrounds[threadId] ?: "green"
+    fun backgroundOverride(threadId: String): String? = backgrounds[threadId]
     fun task(taskId: String): RemoteAgentTask? = tasksById[taskId]
     fun setBackground(threadId: String, key: String) { backgrounds[threadId] = key }
+    fun clearBackground(threadId: String) { backgrounds.remove(threadId) }
 
     fun sendMessage(threadId: String, body: String) {
         if (body.isBlank()) return

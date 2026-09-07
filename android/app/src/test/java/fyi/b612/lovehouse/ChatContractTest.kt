@@ -9,8 +9,11 @@ import fyi.b612.lovehouse.feature.chat.LocalChatDeliveryStatus
 import fyi.b612.lovehouse.feature.chat.LocalChatMessage
 import fyi.b612.lovehouse.feature.chat.LocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.LocalChatRole
+import fyi.b612.lovehouse.feature.chat.resolveChatWallpaperKey
+import fyi.b612.lovehouse.feature.chat.resolveChatWallpaperPath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlinx.coroutines.runBlocking
@@ -88,6 +91,39 @@ class ChatContractTest {
     }
 
     private fun <T> List<T>.singleDistinct(): T = distinct().single()
+
+    @Test
+    fun `chat wallpaper override wins before global and default`() {
+        assertEquals("lavender", resolveChatWallpaperKey("lavender", "rose"))
+        assertEquals("rose", resolveChatWallpaperKey(null, "rose"))
+        assertEquals("green", resolveChatWallpaperKey(null, null))
+        assertEquals("green", resolveChatWallpaperKey(null, "house"))
+    }
+
+    @Test
+    fun `clearing chat wallpaper restores inherited resolution`() {
+        val store = ChatSessionStore()
+
+        store.setBackground("agent-codex", "lavender")
+        assertEquals("lavender", resolveChatWallpaperKey(store.backgroundOverride("agent-codex"), "rose"))
+
+        store.clearBackground("agent-codex")
+        assertEquals("rose", resolveChatWallpaperKey(store.backgroundOverride("agent-codex"), "rose"))
+    }
+
+    @Test
+    fun `global custom wallpaper path is inherited only without a chat override`() {
+        assertEquals(
+            "/local/global.jpg",
+            resolveChatWallpaperPath(null, null, "custom", "/local/global.jpg"),
+        )
+        assertNull(resolveChatWallpaperPath(null, "rose", "custom", "/local/global.jpg"))
+        assertEquals(
+            "/local/thread.jpg",
+            resolveChatWallpaperPath("/local/thread.jpg", null, "custom", "/local/global.jpg"),
+        )
+    }
+
     @Test
     fun `chat list carries every planned conversation kind`() {
         val threads = MockChatRepository.mockThreads

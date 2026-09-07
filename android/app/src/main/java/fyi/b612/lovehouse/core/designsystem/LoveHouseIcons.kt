@@ -50,27 +50,35 @@ fun LoveHouseIconView(
     tint: Color = LoveHouseGlass.Ink,
     opticalSize: LoveHouseIconOpticalSize = LoveHouseIconOpticalSize.Regular,
 ) {
+    val iconStyle = LocalLoveHouseAppearance.current.iconStyle
     Canvas(
         modifier.then(
             if (contentDescription == null) Modifier else Modifier.semantics { this.contentDescription = contentDescription },
         ),
     ) {
-        drawLoveHouseIcon(icon, tint, opticalSize)
+        drawLoveHouseIcon(icon, tint, opticalSize, iconStyle)
     }
 }
 
-private fun DrawScope.drawLoveHouseIcon(icon: LoveHouseIcon, tint: Color, opticalSize: LoveHouseIconOpticalSize) {
+private fun DrawScope.drawLoveHouseIcon(icon: LoveHouseIcon, tint: Color, opticalSize: LoveHouseIconOpticalSize, iconStyle: LoveHouseIconStyle) {
     val u = size.minDimension / 24f
     val ox = (size.width - 24f * u) / 2f
     val oy = (size.height - 24f * u) / 2f
     fun p(x: Float, y: Float) = Offset(ox + x * u, oy + y * u)
-    val strokeWidth = if (opticalSize == LoveHouseIconOpticalSize.Compact) 1.12.dp.toPx() else 1.55.dp.toPx()
+    val baseStroke = if (opticalSize == LoveHouseIconOpticalSize.Compact) 1.12f else 1.55f
+    val strokeWidth = (baseStroke * when (iconStyle) {
+        LoveHouseIconStyle.Original -> 1f
+        LoveHouseIconStyle.Line -> 0.78f
+        LoveHouseIconStyle.SoftGlass -> 0.9f
+        LoveHouseIconStyle.Ink -> 1.24f
+    }).dp.toPx()
+    val styledTint = if (iconStyle == LoveHouseIconStyle.SoftGlass) tint.copy(alpha = tint.alpha * 0.72f) else tint
     val line = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    fun segment(x1: Float, y1: Float, x2: Float, y2: Float) = drawLine(tint, p(x1, y1), p(x2, y2), strokeWidth, StrokeCap.Round)
-    fun circle(x: Float, y: Float, r: Float, filled: Boolean = false) = drawCircle(tint, r * u, p(x, y), style = if (filled) androidx.compose.ui.graphics.drawscope.Fill else line)
-    fun roundRect(x: Float, y: Float, w: Float, h: Float, r: Float = 2.5f) = drawRoundRect(tint, p(x, y), Size(w * u, h * u), CornerRadius(r * u), style = line)
-    fun strokedPath(block: Path.() -> Unit) = drawPath(Path().apply(block), tint, style = line)
-    fun arc(start: Float, sweep: Float, x: Float, y: Float, w: Float, h: Float) = drawArc(tint, start, sweep, false, p(x, y), Size(w * u, h * u), style = line)
+    fun segment(x1: Float, y1: Float, x2: Float, y2: Float) = drawLine(styledTint, p(x1, y1), p(x2, y2), strokeWidth, StrokeCap.Round)
+    fun circle(x: Float, y: Float, r: Float, filled: Boolean = false) = drawCircle(styledTint, r * u, p(x, y), style = if (filled) androidx.compose.ui.graphics.drawscope.Fill else line)
+    fun roundRect(x: Float, y: Float, w: Float, h: Float, r: Float = 2.5f) = drawRoundRect(styledTint, p(x, y), Size(w * u, h * u), CornerRadius(r * u), style = line)
+    fun strokedPath(block: Path.() -> Unit) = drawPath(Path().apply(block), styledTint, style = line)
+    fun arc(start: Float, sweep: Float, x: Float, y: Float, w: Float, h: Float) = drawArc(styledTint, start, sweep, false, p(x, y), Size(w * u, h * u), style = line)
 
     when (icon) {
         LoveHouseIcon.Back -> { segment(15.5f, 5f, 8.5f, 12f); segment(8.5f, 12f, 15.5f, 19f) }

@@ -5,6 +5,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -59,46 +61,46 @@ private val DarkColors = darkColorScheme(
     outline = Color(0xFF9C8E99),
 )
 
-val LoveHouseTypography = androidx.compose.material3.Typography(
+private fun loveHouseTypography(fontFamily: FontFamily) = androidx.compose.material3.Typography(
     displaySmall = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 34.sp,
         lineHeight = 40.sp,
         letterSpacing = (-0.4).sp,
     ),
     headlineMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 27.sp,
         lineHeight = 34.sp,
     ),
     titleLarge = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 21.sp,
         lineHeight = 27.sp,
     ),
     titleMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
         lineHeight = 22.sp,
     ),
     bodyLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = fontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 24.sp,
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = fontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 21.sp,
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 13.sp,
         lineHeight = 18.sp,
@@ -109,12 +111,19 @@ val LoveHouseTypography = androidx.compose.material3.Typography(
 @Composable
 fun LoveHouseTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    appearance: LoveHouseAppearance = LoveHouseAppearance(),
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
-        typography = LoveHouseTypography,
-        shapes = LoveHouseShapes,
-        content = content,
-    )
+    val fontFamily = remember(appearance.fontStyle, appearance.customFontPath) { appearance.fontFamily() }
+    CompositionLocalProvider(
+        LocalLoveHouseAppearance provides appearance,
+        LocalLoveHouseFontFamily provides fontFamily,
+    ) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkColors else LightColors,
+            typography = loveHouseTypography(fontFamily),
+            shapes = LoveHouseShapes,
+            content = content,
+        )
+    }
 }

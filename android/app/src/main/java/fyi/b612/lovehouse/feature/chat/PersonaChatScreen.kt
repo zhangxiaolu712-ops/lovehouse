@@ -1,15 +1,27 @@
 package fyi.b612.lovehouse.feature.chat
 
 import android.app.Activity
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +41,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -41,11 +55,14 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -56,14 +73,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -71,28 +96,128 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
 import fyi.b612.lovehouse.R
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
+import fyi.b612.lovehouse.core.designsystem.APPEARANCE_WALLPAPER_KEY
+import fyi.b612.lovehouse.core.designsystem.APPEARANCE_CUSTOM_WALLPAPER_KEY
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconGallery
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconOpticalSize
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
+import fyi.b612.lovehouse.core.storage.LocalStorage
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.absoluteValue
 
 private val PersonaInk = Color(0xFF3E4847)
 private val PersonaMuted = Color(0xFF7F8B88)
 private val PersonaAccent = Color(0xFF718E87)
 
-private enum class ChatBackdrop(
+private object ChatRhythm {
+    val SameSenderSpacing = 8.dp
+    val GroupSpacing = 24.dp
+}
+
+internal enum class ChatBackdrop(
+    val key: String,
     val title: String,
     val topTint: Color,
     val bottomTint: Color,
 ) {
-    Green("庭院绿", Color(0xFFB8CBC0), Color(0xFFADC5B5)),
-    Rose("雾粉", Color(0xFFE3BEC9), Color(0xFFD9AFBD)),
-    Lavender("雾蓝紫", Color(0xFFB9C5DF), Color(0xFFAEB9D7)),
+    Green("green", "庭院绿", Color(0xFFB8CBC0), Color(0xFFADC5B5)),
+    Rose("rose", "雾粉", Color(0xFFE3BEC9), Color(0xFFD9AFBD)),
+    Lavender("lavender", "雾蓝紫", Color(0xFFB9C5DF), Color(0xFFAEB9D7)),
+    Warm("warm", "暖米", Color(0xFFE4D8C0), Color(0xFFD6C8AC)),
+    Night("night", "夜色", Color(0xFF536174), Color(0xFF26374B)),
 }
+
+internal data class ChatVisualContext(
+    val wallpaper: ChatBackdrop,
+    val chatOverrideKey: String?,
+    val customWallpaper: ImageBitmap? = null,
+    val customTint: Color? = null,
+) {
+    val topTint: Color = customTint ?: wallpaper.topTint
+    val bottomTint: Color = customTint?.copy(
+        red = (customTint.red * .90f).coerceIn(0f, 1f),
+        green = (customTint.green * .90f).coerceIn(0f, 1f),
+        blue = (customTint.blue * .90f).coerceIn(0f, 1f),
+    ) ?: wallpaper.bottomTint
+    private val paleTint = Color(
+        red = topTint.red * .58f + .42f,
+        green = topTint.green * .58f + .42f,
+        blue = topTint.blue * .58f + .42f,
+    )
+    private val darkWallpaper = topTint.red * .2126f + topTint.green * .7152f + topTint.blue * .0722f < .46f
+    val panelGlass: Color = paleTint.copy(alpha = .48f)
+    val popupGlass: Color = paleTint.copy(alpha = .64f)
+    val popupBorder: Color = if (darkWallpaper) Color.White.copy(alpha = .24f) else Color.Black.copy(alpha = .14f)
+    val brightEdge: Color = Color.White.copy(alpha = .42f)
+    val outsideScrim: Color = bottomTint.copy(alpha = .025f)
+}
+
+private data class LocalChatWallpaper(val image: ImageBitmap, val tint: Color)
+
+private fun chatWallpaperPathKey(threadId: String) = "chat_wallpaper_local_path_v1_$threadId"
+
+private suspend fun cacheChatWallpaper(context: Context, threadId: String, source: Uri): String? = withContext(Dispatchers.IO) {
+    runCatching {
+        val directory = File(context.filesDir, "chat-wallpapers").apply { mkdirs() }
+        val target = File(directory, "${threadId.hashCode().toUInt().toString(16)}.image")
+        context.contentResolver.openInputStream(source)?.use { input -> target.outputStream().use(input::copyTo) }
+            ?: return@runCatching null
+        target.absolutePath
+    }.getOrNull()
+}
+
+private suspend fun loadChatWallpaper(path: String?): LocalChatWallpaper? = withContext(Dispatchers.IO) {
+    if (path.isNullOrBlank()) return@withContext null
+    runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        var sample = 1
+        while (bounds.outWidth / sample > 1440 || bounds.outHeight / sample > 1440) sample *= 2
+        val bitmap = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return@runCatching null
+        var red = 0L
+        var green = 0L
+        var blue = 0L
+        var count = 0L
+        val stride = (maxOf(bitmap.width, bitmap.height) / 48).coerceAtLeast(1)
+        for (y in 0 until bitmap.height step stride) for (x in 0 until bitmap.width step stride) {
+            val pixel = bitmap.getPixel(x, y)
+            red += android.graphics.Color.red(pixel)
+            green += android.graphics.Color.green(pixel)
+            blue += android.graphics.Color.blue(pixel)
+            count++
+        }
+        val hsv = FloatArray(3)
+        android.graphics.Color.RGBToHSV((red / count).toInt(), (green / count).toInt(), (blue / count).toInt(), hsv)
+        hsv[1] = hsv[1].coerceIn(.38f, .72f)
+        hsv[2] = hsv[2].coerceIn(.72f, .90f)
+        LocalChatWallpaper(bitmap.asImageBitmap(), Color(android.graphics.Color.HSVToColor(hsv)))
+    }.getOrNull()
+}
+
+internal fun resolveChatWallpaperKey(chatOverride: String?, globalWallpaper: String?): String = when (val key = chatOverride ?: globalWallpaper ?: "house") {
+    "house", "green" -> "green"
+    "rose", "lavender", "warm", "night" -> key
+    else -> "green"
+}
+
+internal fun resolveChatWallpaperPath(
+    threadWallpaperPath: String?,
+    chatOverride: String?,
+    globalWallpaper: String?,
+    globalWallpaperPath: String?,
+): String? = threadWallpaperPath ?: globalWallpaperPath?.takeIf {
+    chatOverride == null && globalWallpaper == "custom"
+}
+
+private fun chatBackdropFor(key: String): ChatBackdrop =
+    ChatBackdrop.entries.firstOrNull { it.key == key } ?: ChatBackdrop.Green
 
 private enum class PersonaPanel { Detail, Search, DateJump, Bookshelf, Appearance, Status, IconGallery, MemberPicker, ForwardTarget, WorkflowForward, ForwardBundle, AvatarPicker }
 private enum class BubbleStyle(val title: String, val subtitle: String) {
@@ -103,12 +228,40 @@ private enum class BubbleStyle(val title: String, val subtitle: String) {
 }
 
 @Composable
-fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: LocalStorage, onBack: () -> Unit, modifier: Modifier = Modifier) {
     val thread = store.thread(threadId) ?: return
     val messages = store.messages(threadId)
+    val context = LocalContext.current
+    val wallpaperScope = rememberCoroutineScope()
     var panel by remember { mutableStateOf<PersonaPanel?>(null) }
     var bubbleStyle by remember { mutableStateOf(BubbleStyle.Soft) }
-    var backdrop by remember(threadId) { mutableStateOf(ChatBackdrop.entries.firstOrNull { it.name.lowercase() == store.background(threadId) } ?: ChatBackdrop.Green) }
+    val globalWallpaper by localStorage.observeString(APPEARANCE_WALLPAPER_KEY).collectAsState(initial = null)
+    val chatWallpaperOverride = store.backgroundOverride(threadId)
+    val globalWallpaperPath by localStorage.observeString(APPEARANCE_CUSTOM_WALLPAPER_KEY).collectAsState(initial = null)
+    val threadWallpaperPath by localStorage.observeString(chatWallpaperPathKey(threadId)).collectAsState(initial = null)
+    val effectiveWallpaperPath = resolveChatWallpaperPath(
+        threadWallpaperPath = threadWallpaperPath,
+        chatOverride = chatWallpaperOverride,
+        globalWallpaper = globalWallpaper,
+        globalWallpaperPath = globalWallpaperPath,
+    )
+    val localWallpaper by produceState<LocalChatWallpaper?>(initialValue = null, effectiveWallpaperPath) {
+        value = loadChatWallpaper(effectiveWallpaperPath)
+    }
+    val visualContext = ChatVisualContext(
+        wallpaper = chatBackdropFor(resolveChatWallpaperKey(chatWallpaperOverride, globalWallpaper)),
+        chatOverrideKey = chatWallpaperOverride,
+        customWallpaper = localWallpaper?.image,
+        customTint = localWallpaper?.tint,
+    )
+    val customWallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) wallpaperScope.launch {
+            cacheChatWallpaper(context, threadId, uri)?.let { path ->
+                store.clearBackground(threadId)
+                localStorage.writeString(chatWallpaperPathKey(threadId), path)
+            }
+        }
+    }
     var selectedModel by remember { mutableStateOf(if (threadId == "agent-codex") "Codex · 现有 Runtime" else "GPT-5.6 Sol") }
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
@@ -116,12 +269,59 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
     var forwardingIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var openedBundle by remember { mutableStateOf<ChatMessageUi?>(null) }
     var actionNotice by remember { mutableStateOf<String?>(null) }
+    var expandedActionMessageId by remember(threadId) { mutableStateOf<String?>(null) }
+    var followLatest by remember(threadId) { mutableStateOf(true) }
+    var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var forwardingTaskId by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
+    val isAtBottom by remember { derivedStateOf { !listState.canScrollForward } }
+    val latestMessageRevision = messages.lastOrNull()?.let { message ->
+        Triple(message.messageId, message.body.length, message.deliveryStatus)
+    }
     val chatScope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    ChatNavigationBarTint(backdrop)
+    ChatNavigationBarTint(visualContext)
+
+    val submitMessage: (String) -> Unit = submit@{ outgoing ->
+        if (sending || outgoing.isBlank()) return@submit
+        input = ""
+        if (threadId != "agent-codex") {
+            store.sendMessage(threadId, outgoing)
+        } else {
+            sending = true
+            actionNotice = "正在连接 Codex…"
+            chatScope.launch {
+                val result = store.sendCodexMessage(threadId, outgoing) { }
+                sending = false
+                result.onSuccess {
+                    actionNotice = null
+                }.onFailure { error ->
+                    actionNotice = error.message ?: "发送失败"
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(isUserDragging, isAtBottom) {
+        when {
+            isAtBottom -> {
+                followLatest = true
+                showJumpToLatest = false
+            }
+            isUserDragging -> followLatest = false
+        }
+    }
+    LaunchedEffect(messages.size, latestMessageRevision) {
+        if (messages.isEmpty()) return@LaunchedEffect
+        if (followLatest || isAtBottom) {
+            listState.scrollToItem(messages.lastIndex)
+            showJumpToLatest = false
+        } else {
+            showJumpToLatest = true
+        }
+    }
 
     BackHandler(panel != null || selectedMessages.isNotEmpty()) {
         panel = when (panel) {
@@ -133,91 +333,123 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
         if (panel == null && selectedMessages.isNotEmpty()) selectedMessages = emptySet()
     }
     Box(modifier.fillMaxSize()) {
-        ChatBackdropLayer(backdrop)
-        ChatAtmosphere(backdrop)
+        ChatBackdropLayer(visualContext)
+        ChatAtmosphere(visualContext)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             PersonaTopBar(thread, onBack = onBack, onMore = {
                 if (thread.kind == ChatThreadKind.TemporaryTask) openWorkflowTaskId = thread.taskId ?: "mock-running-001" else panel = PersonaPanel.Detail
             })
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                state = listState,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
+            Box(
+                Modifier.weight(1f).fillMaxWidth().clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { expandedActionMessageId = null },
             ) {
-                itemsIndexed(messages, key = { _, message -> message.messageId }) { index, message ->
-                    val previous = messages.getOrNull(index - 1)
-                    val next = messages.getOrNull(index + 1)
-                    val startsGroup = previous == null || previous.author != message.author || previous.mine != message.mine
-                    val endsGroup = next == null || next.author != message.author || next.mine != message.mine
-                    MessageBubble(
-                        message = message,
-                        startsGroup = startsGroup,
-                        endsGroup = endsGroup,
-                        task = message.taskId?.let(store::task),
-                        style = bubbleStyle,
-                        selected = message.messageId in selectedMessages,
-                        selectionMode = selectedMessages.isNotEmpty(),
-                        onToggleSelection = { selectedMessages = if (message.messageId in selectedMessages) selectedMessages - message.messageId else selectedMessages + message.messageId },
-                        onForward = { forwardingIds = setOf(message.messageId); panel = PersonaPanel.ForwardTarget },
-                        onOpenBundle = { openedBundle = message; panel = PersonaPanel.ForwardBundle },
-                        onOpenWorkflow = { message.taskId?.let { openWorkflowTaskId = it } },
-                        onAction = { action ->
-                            actionNotice = when (action) {
-                                "复制" -> { clipboard.setText(AnnotatedString(message.body)); "已复制" }
-                                "重试" -> "重试尚未接入"
-                                "朗读" -> "朗读状态已切换"
-                                else -> "已打开消息操作"
-                            }
-                        },
-                    )
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                ) {
+                    itemsIndexed(messages, key = { _, message -> message.messageId }) { index, message ->
+                        val previous = messages.getOrNull(index - 1)
+                        val next = messages.getOrNull(index + 1)
+                        val startsGroup = previous == null || previous.author != message.author || previous.mine != message.mine
+                        val endsGroup = next == null || next.author != message.author || next.mine != message.mine
+                        val spacingAfter = when {
+                            next == null -> 0.dp
+                            endsGroup -> ChatRhythm.GroupSpacing
+                            else -> ChatRhythm.SameSenderSpacing
+                        }
+                        MessageBubble(
+                            message = message,
+                            startsGroup = startsGroup,
+                            spacingAfter = spacingAfter,
+                            task = message.taskId?.let(store::task),
+                            style = bubbleStyle,
+                            visualContext = visualContext,
+                            selected = message.messageId in selectedMessages,
+                            selectionMode = selectedMessages.isNotEmpty(),
+                            actionsExpanded = expandedActionMessageId == message.messageId,
+                            onToggleActions = {
+                                expandedActionMessageId = if (expandedActionMessageId == message.messageId) null else message.messageId
+                            },
+                            onToggleSelection = {
+                                expandedActionMessageId = null
+                                selectedMessages = if (message.messageId in selectedMessages) selectedMessages - message.messageId else selectedMessages + message.messageId
+                            },
+                            onForward = { forwardingIds = setOf(message.messageId); panel = PersonaPanel.ForwardTarget },
+                            onOpenBundle = { openedBundle = message; panel = PersonaPanel.ForwardBundle },
+                            onOpenWorkflow = { message.taskId?.let { openWorkflowTaskId = it } },
+                            onAction = { action ->
+                                actionNotice = when (action) {
+                                    "复制" -> { clipboard.setText(AnnotatedString(message.body)); "已复制" }
+                                    "重试" -> "重试尚未接入"
+                                    "朗读" -> "朗读状态已切换"
+                                    else -> "已打开消息操作"
+                                }
+                            },
+                        )
+                    }
+                }
+                if (showJumpToLatest && messages.isNotEmpty()) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 7.dp)
+                            .clickable {
+                                followLatest = true
+                                showJumpToLatest = false
+                                chatScope.launch { listState.animateScrollToItem(messages.lastIndex) }
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        color = visualContext.bottomTint.copy(alpha = .78f),
+                        border = BorderStroke(.6.dp, Color.White.copy(alpha = .58f)),
+                    ) {
+                        Text("↓  新消息", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = PersonaInk, fontSize = 9.sp)
+                    }
                 }
             }
             actionNotice?.let { Text(it, Modifier.align(Alignment.CenterHorizontally).padding(vertical = 2.dp), color = PersonaMuted, fontSize = 8.sp) }
             if (selectedMessages.isNotEmpty()) MultiSelectBar(selectedMessages.size, onCancel = { selectedMessages = emptySet() }) {
                 forwardingIds = selectedMessages; panel = PersonaPanel.ForwardTarget
             } else PersonaComposer(
-                value = input, model = selectedModel, onValueChange = { input = it },
-                onModelSelected = { if (threadId != "agent-codex") selectedModel = it },
-                modelSelectionEnabled = threadId != "agent-codex",
-                onSend = {
-                    if (sending || input.isBlank()) return@PersonaComposer
-                    if (threadId != "agent-codex") {
-                        store.sendMessage(threadId, input)
-                        input = ""
-                    } else {
-                        val pending = input
-                        sending = true
-                        actionNotice = "正在连接 Codex…"
-                        chatScope.launch {
-                            val result = store.sendCodexMessage(threadId, pending) { }
-                            sending = false
-                            result.onSuccess { reply ->
-                                input = ""
-                                actionNotice = null
-                            }.onFailure { error ->
-                                actionNotice = error.message ?: "发送失败"
-                            }
-                        }
-                    }
-                }, onToolAction = { actionNotice = it },
+                value = input,
+                visualContext = visualContext,
+                onValueChange = { input = it },
+                onSend = { submitMessage(input) },
+                onSendTranscript = submitMessage,
+                onToolAction = { actionNotice = it },
+                onHeightChanged = {
+                    if (followLatest && messages.isNotEmpty()) chatScope.launch { listState.scrollToItem(messages.lastIndex) }
+                },
             )
         }
         if (panel != null) {
             when (panel) {
-                PersonaPanel.ForwardTarget -> ForwardTargetSheet(store, threadId, forwardingIds.size > 1, backdrop, onClose = { panel = null }, onConfirm = { target -> store.forward(threadId, forwardingIds, target, forwardingIds.size > 1); selectedMessages = emptySet(); panel = null; actionNotice = "已转发到 ${store.thread(target)?.title}" })
-                PersonaPanel.WorkflowForward -> ForwardTargetSheet(store, threadId, false, backdrop, title = "转发 Workflow", onClose = { panel = null; forwardingTaskId = null }, onConfirm = { target -> forwardingTaskId?.let { store.forwardWorkflow(it, target) }; panel = null; forwardingTaskId = null; actionNotice = "Workflow 已转发到 ${store.thread(target)?.title}" })
-                PersonaPanel.MemberPicker -> MemberPickerSheet(store, threadId, backdrop, onClose = { panel = PersonaPanel.Detail }) { store.addMember(threadId, it); panel = PersonaPanel.Detail }
-                PersonaPanel.ForwardBundle -> ForwardBundleSheet(openedBundle, backdrop, onClose = { panel = null })
-                PersonaPanel.AvatarPicker -> AvatarPickerSheet(backdrop, onClose = { panel = PersonaPanel.Detail }) { store.updateAvatar(threadId, it); panel = PersonaPanel.Detail }
-                else -> PersonaSheet(panel!!, thread, store, selectedModel, bubbleStyle, backdrop, onClose = { panel = if (panel == PersonaPanel.Detail) null else PersonaPanel.Detail }, onNavigate = { panel = it }, onModel = { selectedModel = it }, onBubble = { bubbleStyle = it; panel = PersonaPanel.Detail }, onBackdrop = { backdrop = it; store.setBackground(threadId, it.name.lowercase()); panel = PersonaPanel.Detail })
+                PersonaPanel.ForwardTarget -> ForwardTargetSheet(store, threadId, forwardingIds.size > 1, visualContext, onClose = { panel = null }, onConfirm = { target -> store.forward(threadId, forwardingIds, target, forwardingIds.size > 1); selectedMessages = emptySet(); panel = null; actionNotice = "已转发到 ${store.thread(target)?.title}" })
+                PersonaPanel.WorkflowForward -> ForwardTargetSheet(store, threadId, false, visualContext, title = "转发 Workflow", onClose = { panel = null; forwardingTaskId = null }, onConfirm = { target -> forwardingTaskId?.let { store.forwardWorkflow(it, target) }; panel = null; forwardingTaskId = null; actionNotice = "Workflow 已转发到 ${store.thread(target)?.title}" })
+                PersonaPanel.MemberPicker -> MemberPickerSheet(store, threadId, visualContext, onClose = { panel = PersonaPanel.Detail }) { store.addMember(threadId, it); panel = PersonaPanel.Detail }
+                PersonaPanel.ForwardBundle -> ForwardBundleSheet(openedBundle, visualContext, onClose = { panel = null })
+                PersonaPanel.AvatarPicker -> AvatarPickerSheet(visualContext, onClose = { panel = PersonaPanel.Detail }) { store.updateAvatar(threadId, it); panel = PersonaPanel.Detail }
+                else -> PersonaSheet(
+                    panel!!, thread, store, selectedModel, bubbleStyle, visualContext,
+                    onClose = { panel = if (panel == PersonaPanel.Detail) null else PersonaPanel.Detail },
+                    onNavigate = { panel = it },
+                    onModel = { selectedModel = it },
+                    onBubble = { bubbleStyle = it; panel = PersonaPanel.Detail },
+                    onBackdrop = { choice ->
+                        wallpaperScope.launch { localStorage.remove(chatWallpaperPathKey(threadId)) }
+                        if (choice == null) store.clearBackground(threadId) else store.setBackground(threadId, choice.key)
+                        panel = PersonaPanel.Detail
+                    },
+                    onPickCustomWallpaper = { customWallpaperPicker.launch(arrayOf("image/*")) },
+                )
             }
         }
         openWorkflowTaskId?.let { taskId ->
             store.task(taskId)?.let { task ->
                 TaskWorkflowOverlay(
                     task = task,
-                    backgroundKey = backdrop.name.lowercase(),
+                    visualContext = visualContext,
                     onClose = { openWorkflowTaskId = null },
                     onForward = { forwardingTaskId = taskId; openWorkflowTaskId = null; panel = PersonaPanel.WorkflowForward },
                     onAdvance = { store.advanceTask(taskId) },
@@ -243,12 +475,12 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, onBack: () -> Uni
 }
 
 @Composable
-private fun ChatNavigationBarTint(backdrop: ChatBackdrop) {
+private fun ChatNavigationBarTint(visualContext: ChatVisualContext) {
     val window = (LocalView.current.context as? Activity)?.window ?: return
-    DisposableEffect(window, backdrop) {
+    DisposableEffect(window, visualContext.bottomTint) {
         val previousColor = window.navigationBarColor
         val previousContrast = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced else true
-        window.navigationBarColor = backdrop.bottomTint.toArgb()
+        window.navigationBarColor = visualContext.bottomTint.toArgb()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
         onDispose {
             window.navigationBarColor = previousColor
@@ -258,34 +490,40 @@ private fun ChatNavigationBarTint(backdrop: ChatBackdrop) {
 }
 
 @Composable
-private fun ChatBackdropLayer(backdrop: ChatBackdrop) {
-    when (backdrop) {
-        ChatBackdrop.Green -> Image(
-            painterResource(R.drawable.wallpaper_default_green),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-        )
-        ChatBackdrop.Rose -> Box(
-            Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFF2D9DF), Color(0xFFD9B8C4), Color(0xFFF4E9E4)))),
-        )
-        ChatBackdrop.Lavender -> Image(
-            painterResource(R.drawable.wallpaper_chat_lavender),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-        )
+internal fun ChatBackdropLayer(visualContext: ChatVisualContext) {
+    val backdrop = visualContext.wallpaper
+    visualContext.customWallpaper?.let { image ->
+        Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+    } ?: Image(
+        painterResource(if (backdrop == ChatBackdrop.Lavender) R.drawable.wallpaper_chat_lavender else R.drawable.wallpaper_default_green),
+        contentDescription = null,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop,
+    )
+    val tintAlpha = if (visualContext.customWallpaper != null) .10f else when (backdrop) {
+        ChatBackdrop.Green -> .06f
+        ChatBackdrop.Lavender -> .12f
+        ChatBackdrop.Rose -> .32f
+        ChatBackdrop.Warm -> .24f
+        ChatBackdrop.Night -> .42f
     }
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(
+                listOf(visualContext.topTint.copy(alpha = tintAlpha), visualContext.bottomTint.copy(alpha = tintAlpha * .82f)),
+            ),
+        ),
+    )
 }
 
 @Composable
-private fun ChatAtmosphere(backdrop: ChatBackdrop) {
+internal fun ChatAtmosphere(visualContext: ChatVisualContext) {
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier.fillMaxWidth().fillMaxHeight(.22f).align(Alignment.TopCenter).background(
                 Brush.verticalGradient(
-                    0f to backdrop.topTint.copy(alpha = .92f),
-                    .42f to backdrop.topTint.copy(alpha = .58f),
+                    0f to visualContext.topTint.copy(alpha = .72f),
+                    .42f to visualContext.topTint.copy(alpha = .42f),
                     1f to Color.Transparent,
                 ),
             ),
@@ -294,8 +532,8 @@ private fun ChatAtmosphere(backdrop: ChatBackdrop) {
             Modifier.fillMaxWidth().fillMaxHeight(.28f).align(Alignment.BottomCenter).background(
                 Brush.verticalGradient(
                     0f to Color.Transparent,
-                    .62f to backdrop.bottomTint.copy(alpha = .56f),
-                    1f to backdrop.bottomTint.copy(alpha = .94f),
+                    .62f to visualContext.bottomTint.copy(alpha = .42f),
+                    1f to visualContext.bottomTint.copy(alpha = .74f),
                 ),
             ),
         )
@@ -303,16 +541,16 @@ private fun ChatAtmosphere(backdrop: ChatBackdrop) {
 }
 
 @Composable
-private fun ChatOverlayFrame(backdrop: ChatBackdrop, onClose: () -> Unit, content: @Composable () -> Unit) {
+private fun ChatOverlayFrame(visualContext: ChatVisualContext, onClose: () -> Unit, content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize()) {
-        ChatBackdropLayer(backdrop)
-        ChatAtmosphere(backdrop)
-        Box(Modifier.fillMaxSize().background(Color(0x2426322F)).clickable(onClick = onClose))
+        ChatBackdropLayer(visualContext)
+        ChatAtmosphere(visualContext)
+        Box(Modifier.fillMaxSize().background(visualContext.outsideScrim).clickable(onClick = onClose))
         Surface(
             modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 14.dp, vertical = 22.dp),
             shape = RoundedCornerShape(26.dp),
-            color = Color(0xDDF5F3EB),
-            border = BorderStroke(1.dp, Color.White.copy(alpha = .82f)),
+            color = visualContext.panelGlass,
+            border = BorderStroke(.8.dp, visualContext.brightEdge),
         ) { content() }
     }
 }
@@ -322,13 +560,13 @@ private fun ForwardTargetSheet(
     store: ChatSessionStore,
     currentThreadId: String,
     merged: Boolean,
-    backdrop: ChatBackdrop,
+    visualContext: ChatVisualContext,
     title: String = if (merged) "合并转发" else "转发消息",
     onClose: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
     var selected by remember { mutableStateOf<String?>(null) }
-    ChatOverlayFrame(backdrop, onClose) {
+    ChatOverlayFrame(visualContext, onClose) {
         Column {
             SheetHeader(title, "选择目标聊天，确认后才会写入。", onClose)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
@@ -350,17 +588,17 @@ private fun ForwardTargetSheet(
             }
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
                 Text("取消", Modifier.clickable(onClick = onClose).padding(10.dp), color = PersonaMuted, fontSize = 11.sp)
-                Text("确认转发", Modifier.clip(RoundedCornerShape(12.dp)).background(if (selected == null) Color.White.copy(alpha = .35f) else PersonaAccent.copy(alpha = .18f)).clickable(enabled = selected != null) { selected?.let(onConfirm) }.padding(horizontal = 16.dp, vertical = 10.dp), color = if (selected == null) PersonaMuted else PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("确认转发", Modifier.clip(RoundedCornerShape(12.dp)).background(if (selected == null) Color.White.copy(alpha = .35f) else PersonaAccent.copy(alpha = .18f)).clickable(enabled = selected != null) { selected?.let(onConfirm) }.padding(horizontal = 16.dp, vertical = 10.dp), color = if (selected == null) PersonaMuted else PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
 }
 
 @Composable
-private fun MemberPickerSheet(store: ChatSessionStore, threadId: String, backdrop: ChatBackdrop, onClose: () -> Unit, onConfirm: (ChatPersona) -> Unit) {
+private fun MemberPickerSheet(store: ChatSessionStore, threadId: String, visualContext: ChatVisualContext, onClose: () -> Unit, onConfirm: (ChatPersona) -> Unit) {
     val existing = store.members(threadId).map { it.memberId }.toSet()
     var selected by remember { mutableStateOf<ChatPersona?>(null) }
-    ChatOverlayFrame(backdrop, onClose) {
+    ChatOverlayFrame(visualContext, onClose) {
         Column {
             SheetHeader("添加成员", "选择 Persona / 成员；确认后立即加入小客厅。", onClose)
             LazyColumn(Modifier.weight(1f)) {
@@ -372,14 +610,14 @@ private fun MemberPickerSheet(store: ChatSessionStore, threadId: String, backdro
                     }
                 }
             }
-            Text("确认加入", Modifier.align(Alignment.End).padding(18.dp).clip(RoundedCornerShape(12.dp)).background(PersonaAccent.copy(alpha = if (selected == null) .06f else .18f)).clickable(enabled = selected != null) { selected?.let(onConfirm) }.padding(horizontal = 18.dp, vertical = 10.dp), color = if (selected == null) PersonaMuted else PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("确认加入", Modifier.align(Alignment.End).padding(18.dp).clip(RoundedCornerShape(12.dp)).background(PersonaAccent.copy(alpha = if (selected == null) .06f else .18f)).clickable(enabled = selected != null) { selected?.let(onConfirm) }.padding(horizontal = 18.dp, vertical = 10.dp), color = if (selected == null) PersonaMuted else PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
 
 @Composable
-private fun ForwardBundleSheet(message: ChatMessageUi?, backdrop: ChatBackdrop, onClose: () -> Unit) {
-    ChatOverlayFrame(backdrop, onClose) {
+private fun ForwardBundleSheet(message: ChatMessageUi?, visualContext: ChatVisualContext, onClose: () -> Unit) {
+    ChatOverlayFrame(visualContext, onClose) {
         Column {
             SheetHeader("聊天记录", "${message?.forwarded?.size ?: 0} 条合并消息", onClose)
             LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -395,9 +633,9 @@ private fun ForwardBundleSheet(message: ChatMessageUi?, backdrop: ChatBackdrop, 
 }
 
 @Composable
-private fun AvatarPickerSheet(backdrop: ChatBackdrop, onClose: () -> Unit, onConfirm: (String) -> Unit) {
+private fun AvatarPickerSheet(visualContext: ChatVisualContext, onClose: () -> Unit, onConfirm: (String) -> Unit) {
     var selected by remember { mutableStateOf("G") }
-    ChatOverlayFrame(backdrop, onClose) {
+    ChatOverlayFrame(visualContext, onClose) {
         Column {
             SheetHeader("更换头像", "仅作用于当前 Persona 窗口。", onClose)
             Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -405,7 +643,7 @@ private fun AvatarPickerSheet(backdrop: ChatBackdrop, onClose: () -> Unit, onCon
                     Box(Modifier.size(46.dp).clip(RoundedCornerShape(15.dp)).background(if (selected == glyph) PersonaAccent.copy(alpha = .25f) else Color.White.copy(alpha = .45f)).clickable { selected = glyph }, contentAlignment = Alignment.Center) { Text(glyph, color = PersonaInk, fontWeight = FontWeight.Bold) }
                 }
             }
-            Text("确认", Modifier.align(Alignment.End).padding(18.dp).clip(RoundedCornerShape(12.dp)).background(PersonaAccent.copy(alpha = .18f)).clickable { onConfirm(selected) }.padding(horizontal = 18.dp, vertical = 10.dp), color = PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("确认", Modifier.align(Alignment.End).padding(18.dp).clip(RoundedCornerShape(12.dp)).background(PersonaAccent.copy(alpha = .18f)).clickable { onConfirm(selected) }.padding(horizontal = 18.dp, vertical = 10.dp), color = PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -460,11 +698,14 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
 @Composable private fun MessageBubble(
     message: ChatMessageUi,
     startsGroup: Boolean,
-    endsGroup: Boolean,
+    spacingAfter: Dp,
     task: RemoteAgentTask?,
     style: BubbleStyle,
+    visualContext: ChatVisualContext,
     selected: Boolean,
     selectionMode: Boolean,
+    actionsExpanded: Boolean,
+    onToggleActions: () -> Unit,
     onToggleSelection: () -> Unit,
     onForward: () -> Unit,
     onOpenBundle: () -> Unit,
@@ -492,7 +733,13 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
                 ThoughtRow(message.thoughtDuration, message.thoughtSummary)
             }
             val bubbleModifier = Modifier.combinedClickable(
-                onClick = { if (selectionMode) onToggleSelection() else when (message.kind) { ChatMessageKind.Task, ChatMessageKind.Workflow -> onOpenWorkflow(); ChatMessageKind.ForwardBundle -> onOpenBundle(); else -> Unit } },
+                onClick = {
+                    if (selectionMode) onToggleSelection() else when (message.kind) {
+                        ChatMessageKind.Task, ChatMessageKind.Workflow -> onOpenWorkflow()
+                        ChatMessageKind.ForwardBundle -> onOpenBundle()
+                        ChatMessageKind.Text -> onToggleActions()
+                    }
+                },
                 onLongClick = onToggleSelection,
             )
             val bubbleBorder = when { selected -> BorderStroke(1.5.dp, PersonaAccent); style == BubbleStyle.Glass -> BorderStroke(1.dp, Color.White.copy(alpha = .72f)); else -> null }
@@ -533,11 +780,11 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
                     ChatMessageKind.Text -> Unit
                 }
             }
-            MessageQuickActions(message.mine, onForward, onAction)
+            if (actionsExpanded) MessageQuickActions(visualContext, onForward, onAction)
         }
         if (message.mine) { if (startsGroup) MessageAvatar(message) else Spacer(Modifier.size(30.dp)) }
     }
-    if (endsGroup) Spacer(Modifier.height(3.dp))
+    if (spacingAfter > 0.dp) Spacer(Modifier.height(spacingAfter))
 }
 
 internal fun String.naturalMessageSegments(): List<String> =
@@ -549,16 +796,35 @@ internal fun String.naturalMessageSegments(): List<String> =
     }
 }
 
-@Composable private fun MessageQuickActions(mine: Boolean, onForward: () -> Unit, onAction: (String) -> Unit) {
+@Composable private fun MessageQuickActions(visualContext: ChatVisualContext, onForward: () -> Unit, onAction: (String) -> Unit) {
     var showMore by remember { mutableStateOf(false) }
     Row(Modifier.padding(top = 0.dp), horizontalArrangement = Arrangement.spacedBy(0.dp)) {
         ChatIconButton(LoveHouseIcon.Copy, "复制", iconSize = 15.dp, touchSize = 30.dp, opticalSize = LoveHouseIconOpticalSize.Compact) { onAction("复制") }
         ChatIconButton(LoveHouseIcon.Forward, "转发", iconSize = 15.dp, touchSize = 30.dp, opticalSize = LoveHouseIconOpticalSize.Compact, onClick = onForward)
         Box {
             ChatIconButton(LoveHouseIcon.More, "更多", iconSize = 15.dp, touchSize = 30.dp, opticalSize = LoveHouseIconOpticalSize.Compact) { showMore = true }
-            DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
-                val secondary = if (mine) listOf("朗读", "引用", "详情") else listOf("朗读", "引用", "重试", "详情")
-                secondary.forEach { action -> DropdownMenuItem(text = { Text(action, fontSize = 10.sp) }, onClick = { showMore = false; onAction(action) }) }
+            DropdownMenu(
+                expanded = showMore,
+                onDismissRequest = { showMore = false },
+                shape = RoundedCornerShape(17.dp),
+                containerColor = visualContext.popupGlass,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+                border = BorderStroke(.5.dp, visualContext.popupBorder),
+            ) {
+                Row(Modifier.padding(horizontal = 4.dp, vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                    LoveHouseIconView(LoveHouseIcon.Collapse, null, Modifier.padding(horizontal = 4.dp).size(11.dp), PersonaAccent, LoveHouseIconOpticalSize.Compact)
+                    listOf("朗读", "引用", "重试", "详情").forEach { action ->
+                        Text(
+                            action,
+                            Modifier.clip(RoundedCornerShape(10.dp)).clickable { showMore = false; onAction(action) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            color = PersonaInk,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Normal,
+                        )
+                    }
+                }
             }
         }
     }
@@ -566,63 +832,244 @@ internal fun String.naturalMessageSegments(): List<String> =
 
 @Composable
 private fun PersonaComposer(
-    value: String, model: String, onValueChange: (String) -> Unit, onModelSelected: (String) -> Unit,
-    onSend: () -> Unit, onToolAction: (String) -> Unit, modelSelectionEnabled: Boolean = true,
+    value: String,
+    visualContext: ChatVisualContext,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onSendTranscript: (String) -> Unit,
+    onToolAction: (String) -> Unit,
+    onHeightChanged: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
     var showAttachments by remember { mutableStateOf(false) }
-    var showModels by remember { mutableStateOf(false) }
+    var inputFocused by remember { mutableStateOf(false) }
+    var composerExpanded by remember { mutableStateOf(false) }
+    var imeShownDuringCurrentFocus by remember { mutableStateOf(false) }
+    var voiceState by remember { mutableStateOf(ChatVoiceInputState()) }
+    val voiceAvailable = remember(context) { android.speech.SpeechRecognizer.isRecognitionAvailable(context) }
+    val voiceController = remember(context, voiceAvailable) {
+        if (voiceAvailable) ChatVoiceInputController(context) { voiceState = it } else null
+    }
+    DisposableEffect(voiceController) { onDispose { voiceController?.destroy() } }
+    val microphonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) voiceState = ChatVoiceInputState(error = "需要麦克风权限才能语音输入")
+    }
+    val startVoiceInput = {
+        when {
+            !voiceAvailable -> voiceState = ChatVoiceInputState(error = "当前设备没有可用的系统语音识别服务")
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> {
+                voiceState = ChatVoiceInputState(error = "授权后请再次长按输入区")
+                microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            else -> voiceController?.start()
+        }
+    }
+    LaunchedEffect(inputFocused, imeVisible) {
+        when {
+            !inputFocused -> {
+                composerExpanded = false
+                imeShownDuringCurrentFocus = false
+            }
+            imeVisible -> {
+                composerExpanded = true
+                imeShownDuringCurrentFocus = true
+            }
+            imeShownDuringCurrentFocus -> {
+                composerExpanded = false
+                imeShownDuringCurrentFocus = false
+            }
+        }
+    }
     Box(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
+        modifier = Modifier.fillMaxWidth().onSizeChanged { onHeightChanged() }.padding(horizontal = 12.dp, vertical = 2.dp),
     ) {
-        Column {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (voiceState.listening || voiceState.processing || voiceState.transcript.isNotBlank() || voiceState.error != null) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(15.dp),
+                    color = visualContext.popupGlass,
+                    border = BorderStroke(.5.dp, visualContext.popupBorder),
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                ) {
+                    Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                when {
+                                    voiceState.transcript.isNotBlank() -> voiceState.transcript
+                                    voiceState.listening -> "正在聆听…"
+                                    voiceState.processing -> "正在整理转写…"
+                                    else -> voiceState.error.orEmpty()
+                                },
+                                Modifier.weight(1f),
+                                color = PersonaInk,
+                                fontSize = 10.5.sp,
+                                lineHeight = 15.sp,
+                            )
+                            ChatIconButton(LoveHouseIcon.Collapse, "收起语音输入", iconSize = 13.dp, touchSize = 30.dp) {
+                                voiceController?.dismiss()
+                                voiceState = ChatVoiceInputState()
+                            }
+                        }
+                        voiceState.error?.takeIf { voiceState.transcript.isNotBlank() }?.let { error ->
+                            Text(error, Modifier.padding(top = 3.dp), color = PersonaMuted, fontSize = 8.5.sp)
+                        }
+                        if (voiceState.finished && voiceState.transcript.isNotBlank()) {
+                            Row(Modifier.fillMaxWidth().padding(top = 5.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                                Text("发送语音 · 待接入", color = PersonaMuted, fontSize = 8.5.sp)
+                                Text(
+                                    "发送文字",
+                                    Modifier.padding(start = 7.dp).clip(RoundedCornerShape(10.dp)).clickable {
+                                        val transcript = voiceState.transcript
+                                        voiceController?.dismiss()
+                                        onSendTranscript(transcript)
+                                    }.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    color = PersonaInk,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                        } else if (voiceState.listening) {
+                            Text("松开结束语音输入", Modifier.padding(top = 3.dp), color = PersonaMuted, fontSize = 8.5.sp)
+                        }
+                    }
+                }
+            }
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(17.dp),
                 color = Color.White.copy(alpha = .30f),
                 border = BorderStroke(.6.dp, Color.White.copy(alpha = .46f)),
             ) {
-                BasicTextField(
-                    value = value, onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 34.dp, max = 84.dp).padding(horizontal = 10.dp, vertical = 6.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(color = PersonaInk, fontSize = 12.sp),
-                    decorationBox = { inner -> Box { if (value.isEmpty()) Text("ring the chime...", color = PersonaMuted, fontSize = 12.sp); inner() } },
+                val composerTextStyle = androidx.compose.ui.text.TextStyle(color = PersonaInk, fontSize = 12.sp, lineHeight = 17.sp)
+                ComposerContentLayout(
+                    expanded = composerExpanded,
+                    attachment = {
+                        ComposerAttachmentButton(
+                            expanded = showAttachments,
+                            visualContext = visualContext,
+                            onExpandedChange = { showAttachments = it },
+                            onToolAction = onToolAction,
+                        )
+                    },
+                    textField = {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp, max = 96.dp)
+                                .onFocusChanged { focusState ->
+                                    if (focusState.isFocused && !inputFocused) composerExpanded = true
+                                    if (!focusState.isFocused) composerExpanded = false
+                                    inputFocused = focusState.isFocused
+                                }
+                            .pointerInput(voiceController) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val longPress = awaitLongPressOrCancellation(down.id)
+                                    if (longPress != null) {
+                                        longPress.consume()
+                                        startVoiceInput()
+                                        waitForUpOrCancellation()
+                                        voiceController?.stop()
+                                    }
+                                }
+                            }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            textStyle = composerTextStyle,
+                            singleLine = false,
+                        decorationBox = { inner ->
+                                Box(Modifier.fillMaxWidth()) {
+                                    if (value.isEmpty()) Text("输入文字……", style = composerTextStyle.copy(color = PersonaMuted))
+                                inner()
+                            }
+                        },
+                        )
+                    },
+                    emoji = { ChatIconButton(LoveHouseIcon.Emoji, "表情", touchSize = 34.dp) { onToolAction("表情面板已切换") } },
+                    send = { PawSendButton(enabled = value.isNotBlank(), onClick = onSend) },
                 )
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                Box {
-                    ChatIconButton(LoveHouseIcon.Plus, "添加附件", touchSize = 36.dp) { showAttachments = true }
-                    DropdownMenu(expanded = showAttachments, onDismissRequest = { showAttachments = false }, modifier = Modifier.widthIn(min = 112.dp, max = 132.dp)) {
-                        listOf(
-                            LoveHouseIcon.Camera to "相机", LoveHouseIcon.Photo to "照片", LoveHouseIcon.File to "文件",
-                            LoveHouseIcon.Location to "定位", LoveHouseIcon.More to "其他",
-                        ).forEach { (icon, item) ->
-                            DropdownMenuItem(
-                                leadingIcon = { LoveHouseIconView(icon, null, Modifier.size(17.dp), PersonaMuted) },
-                                text = { Text(item, color = PersonaInk, fontSize = 10.sp) },
-                                onClick = { showAttachments = false; onToolAction("已选择$item（本地 Mock）") },
-                                contentPadding = PaddingValues(horizontal = 10.dp),
-                            )
-                        }
-                    }
+        }
+    }
+}
+
+@Composable
+private fun ComposerContentLayout(
+    expanded: Boolean,
+    attachment: @Composable () -> Unit,
+    textField: @Composable () -> Unit,
+    emoji: @Composable () -> Unit,
+    send: @Composable () -> Unit,
+) {
+    Layout(
+        modifier = Modifier.fillMaxWidth(),
+        content = { attachment(); textField(); emoji(); send() },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val attachmentPlaceable = measurables[0].measure(loose)
+        val emojiPlaceable = measurables[2].measure(loose)
+        val sendPlaceable = measurables[3].measure(loose)
+        val controlHeight = maxOf(attachmentPlaceable.height, emojiPlaceable.height, sendPlaceable.height)
+        val textWidth = if (expanded) constraints.maxWidth else {
+            (constraints.maxWidth - attachmentPlaceable.width - emojiPlaceable.width - sendPlaceable.width).coerceAtLeast(0)
+        }
+        val textPlaceable = measurables[1].measure(
+            loose.copy(minWidth = textWidth, maxWidth = textWidth),
+        )
+        val contentHeight = if (expanded) textPlaceable.height + controlHeight else maxOf(textPlaceable.height, controlHeight)
+        layout(constraints.maxWidth, contentHeight.coerceIn(constraints.minHeight, constraints.maxHeight)) {
+            if (expanded) {
+                textPlaceable.placeRelative(0, 0)
+                val controlsTop = textPlaceable.height
+                attachmentPlaceable.placeRelative(0, controlsTop + (controlHeight - attachmentPlaceable.height) / 2)
+                sendPlaceable.placeRelative(constraints.maxWidth - sendPlaceable.width, controlsTop + (controlHeight - sendPlaceable.height) / 2)
+                emojiPlaceable.placeRelative(constraints.maxWidth - sendPlaceable.width - emojiPlaceable.width, controlsTop + (controlHeight - emojiPlaceable.height) / 2)
+            } else {
+                val controlsTop = contentHeight - controlHeight
+                attachmentPlaceable.placeRelative(0, controlsTop + (controlHeight - attachmentPlaceable.height) / 2)
+                textPlaceable.placeRelative(attachmentPlaceable.width, (contentHeight - textPlaceable.height) / 2)
+                emojiPlaceable.placeRelative(attachmentPlaceable.width + textPlaceable.width, controlsTop + (controlHeight - emojiPlaceable.height) / 2)
+                sendPlaceable.placeRelative(attachmentPlaceable.width + textPlaceable.width + emojiPlaceable.width, controlsTop + (controlHeight - sendPlaceable.height) / 2)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComposerAttachmentButton(
+    expanded: Boolean,
+    visualContext: ChatVisualContext,
+    onExpandedChange: (Boolean) -> Unit,
+    onToolAction: (String) -> Unit,
+) {
+    Box {
+        ChatIconButton(LoveHouseIcon.Plus, "添加附件", touchSize = 34.dp) { onExpandedChange(true) }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+            modifier = Modifier.widthIn(max = 124.dp),
+            shape = RoundedCornerShape(14.dp),
+            containerColor = visualContext.popupGlass,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = BorderStroke(.5.dp, visualContext.popupBorder),
+        ) {
+            listOf(
+                LoveHouseIcon.Camera to "相机", LoveHouseIcon.Photo to "照片", LoveHouseIcon.File to "文件",
+                LoveHouseIcon.Location to "定位", LoveHouseIcon.More to "其他",
+            ).forEach { (icon, item) ->
+                Row(
+                    Modifier.fillMaxWidth().clickable { onExpandedChange(false); onToolAction("已选择$item（本地 Mock）") }
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    LoveHouseIconView(icon, null, Modifier.size(16.dp), PersonaMuted)
+                    Text(item, color = PersonaInk, fontSize = 10.sp)
                 }
-                ChatIconButton(LoveHouseIcon.Emoji, "表情", touchSize = 36.dp) { onToolAction("表情面板已切换") }
-                ChatIconButton(LoveHouseIcon.VoiceMessage, "录制语音消息", touchSize = 36.dp) { onToolAction("语音消息录制状态已切换") }
-                Box {
-                    Row(
-                        Modifier.clip(CircleShape).background(Color.White.copy(alpha = .24f)).clickable(enabled = modelSelectionEnabled) { showModels = true }.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(model, color = PersonaInk, fontSize = 8.5.sp)
-                        LoveHouseIconView(LoveHouseIcon.ModelSwitch, null, Modifier.padding(start = 4.dp).size(12.dp), PersonaMuted, LoveHouseIconOpticalSize.Compact)
-                    }
-                    DropdownMenu(expanded = showModels && modelSelectionEnabled, onDismissRequest = { showModels = false }, modifier = Modifier.widthIn(min = 140.dp, max = 180.dp)) {
-                        listOf("GPT-5.6 Sol", "Claude", "Gemini").forEach { option ->
-                            DropdownMenuItem(text = { Text(if (option == model) "✓  $option" else option, color = PersonaInk, fontSize = 10.sp) }, onClick = { onModelSelected(option); showModels = false })
-                        }
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                PawSendButton(enabled = value.isNotBlank(), onClick = onSend)
             }
         }
     }
@@ -679,26 +1126,24 @@ private fun PawSendButton(enabled: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: ChatSessionStore, model: String, bubble: BubbleStyle, backdrop: ChatBackdrop, onClose: () -> Unit, onNavigate: (PersonaPanel) -> Unit, onModel: (String) -> Unit, onBubble: (BubbleStyle) -> Unit, onBackdrop: (ChatBackdrop) -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color(0x4B26322F)).clickable(onClick = onClose), contentAlignment = Alignment.BottomCenter) {
+private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: ChatSessionStore, model: String, bubble: BubbleStyle, visualContext: ChatVisualContext, onClose: () -> Unit, onNavigate: (PersonaPanel) -> Unit, onModel: (String) -> Unit, onBubble: (BubbleStyle) -> Unit, onBackdrop: (ChatBackdrop?) -> Unit, onPickCustomWallpaper: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        ChatBackdropLayer(visualContext)
+        ChatAtmosphere(visualContext)
+        Box(Modifier.fillMaxSize().background(visualContext.outsideScrim).clickable(onClick = onClose))
         val shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
         Box(
             modifier = Modifier.fillMaxSize().padding(top = 42.dp).clip(shape)
-                .clickable(enabled = false) {}.border(1.dp, Color.White.copy(alpha = .85f), shape),
+                .clickable(enabled = false) {}.border(.8.dp, visualContext.brightEdge, shape),
         ) {
-            when (backdrop) {
-                ChatBackdrop.Green -> Image(painterResource(R.drawable.wallpaper_default_green), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                ChatBackdrop.Rose -> Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFF2D9DF), Color(0xFFD9B8C4), Color(0xFFF4E9E4)))))
-                ChatBackdrop.Lavender -> Image(painterResource(R.drawable.wallpaper_chat_lavender), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            }
-            Box(Modifier.fillMaxSize().background(Color(0xDDF5F3EB)))
+            Box(Modifier.fillMaxSize().background(visualContext.panelGlass))
             when (panel) {
                 PersonaPanel.Detail -> when (thread.kind) {
                     ChatThreadKind.LivingRoom -> LivingRoomDetailPanel(thread, store, onClose, onNavigate)
                     ChatThreadKind.TemporaryTask -> Column { SheetHeader(thread.title, "Workflow 已作为临时任务主详情。", onClose) }
                     else -> DirectDetailPanel(thread, model, onClose, onNavigate, onModel)
                 }
-                PersonaPanel.Appearance -> AppearancePanel(bubble, backdrop, onClose, onBubble, onBackdrop)
+                PersonaPanel.Appearance -> AppearancePanel(bubble, visualContext, onClose, onBubble, onBackdrop, onPickCustomWallpaper)
                 PersonaPanel.Search -> SearchPanel(onClose)
                 PersonaPanel.DateJump -> DatePanel(onClose)
                 PersonaPanel.Bookshelf -> BookshelfPanel(onClose)
@@ -713,7 +1158,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
 @Composable private fun SheetHeader(title: String, subtitle: String? = null, onClose: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = PersonaInk, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text(title, color = PersonaInk, fontWeight = FontWeight.Medium, fontSize = 15.sp)
             subtitle?.let { Text(it, Modifier.padding(top = 3.dp), color = PersonaMuted, fontSize = 9.sp) }
         }
         ChatIconButton(LoveHouseIcon.Close, "关闭", touchSize = 34.dp, onClick = onClose)
@@ -725,7 +1170,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
         item {
             Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 15.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(44.dp).background(Color(0xFFDAE8E2), RoundedCornerShape(15.dp)), contentAlignment = Alignment.Center) { Text(thread.avatarGlyph ?: thread.title.take(1), color = Color(0xFF5F7B73), fontWeight = FontWeight.Bold) }
-                Column(Modifier.weight(1f).padding(start = 11.dp)) { Text(thread.title, color = PersonaInk, fontWeight = FontWeight.Bold, fontSize = 15.sp); Text("人格窗口 · 身份与模型分离", color = PersonaMuted, fontSize = 9.sp) }
+                Column(Modifier.weight(1f).padding(start = 11.dp)) { Text(thread.title, color = PersonaInk, fontWeight = FontWeight.Medium, fontSize = 15.sp); Text("人格窗口 · 身份与模型分离", color = PersonaMuted, fontSize = 9.sp) }
                 ChatIconButton(LoveHouseIcon.Close, "关闭", touchSize = 34.dp, onClick = onClose)
             }
             DetailRow("当前运行", "OpenAI · $model")
@@ -752,7 +1197,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
         item {
             SheetHeader("小客厅", "成员是这个空间的核心；工单仅作为次级索引。", onClose)
             DetailRow("空间", thread.threadId)
-            Text("成员", Modifier.padding(horizontal = 19.dp, vertical = 8.dp), color = PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("成员", Modifier.padding(horizontal = 19.dp, vertical = 8.dp), color = PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
             store.members(thread.threadId).forEach { member ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 19.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(32.dp).background(Color(0xFFDAE8E2), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) { Text(member.avatar, color = PersonaAccent, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
@@ -780,7 +1225,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
     }
 }
 
-@Composable private fun AppearancePanel(current: BubbleStyle, backdrop: ChatBackdrop, onClose: () -> Unit, onBubble: (BubbleStyle) -> Unit, onBackdrop: (ChatBackdrop) -> Unit) {
+@Composable private fun AppearancePanel(current: BubbleStyle, visualContext: ChatVisualContext, onClose: () -> Unit, onBubble: (BubbleStyle) -> Unit, onBackdrop: (ChatBackdrop?) -> Unit, onPickCustomWallpaper: () -> Unit) {
     Column(Modifier.navigationBarsPadding().padding(bottom = 18.dp)) {
         SheetHeader("G老师 · 聊天外观", onClose = onClose)
         Text("聊天背景只作用于当前窗口；上下氛围层会跟随背景取色。", Modifier.padding(horizontal = 19.dp, vertical = 5.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
@@ -790,12 +1235,26 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
                 Text(if (choice == current) "✓" else "○", color = if (choice == current) PersonaAccent else PersonaMuted)
             }
         }
-        Text("聊天背景", Modifier.padding(start = 19.dp, top = 11.dp, bottom = 3.dp), color = PersonaInk, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        ChatBackdrop.entries.forEach { choice ->
+        Text("聊天背景", Modifier.padding(start = 19.dp, top = 11.dp, bottom = 3.dp), color = PersonaInk, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+        Row(Modifier.fillMaxWidth().clickable(onClick = onPickCustomWallpaper).padding(horizontal = 19.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            visualContext.customWallpaper?.let { image ->
+                Image(image, null, Modifier.size(28.dp).clip(RoundedCornerShape(9.dp)), contentScale = ContentScale.Crop)
+            } ?: Box(Modifier.size(28.dp).background(visualContext.topTint, RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
+                LoveHouseIconView(LoveHouseIcon.Photo, null, Modifier.size(15.dp), PersonaInk)
+            }
+            Text("从相册选择 · 本机测试", Modifier.weight(1f).padding(start = 10.dp), color = PersonaInk, fontSize = 11.sp)
+            Text(if (visualContext.customWallpaper != null) "✓" else "›", color = if (visualContext.customWallpaper != null) PersonaAccent else PersonaMuted)
+        }
+        Row(Modifier.fillMaxWidth().clickable { onBackdrop(null) }.padding(horizontal = 19.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(28.dp).background(visualContext.wallpaper.topTint, RoundedCornerShape(9.dp)))
+            Text("跟随全局", Modifier.weight(1f).padding(start = 10.dp), color = PersonaInk, fontSize = 11.sp)
+            Text(if (visualContext.chatOverrideKey == null) "✓" else "○", color = if (visualContext.chatOverrideKey == null) PersonaAccent else PersonaMuted)
+        }
+        ChatBackdrop.entries.filter { it == ChatBackdrop.Green || it == ChatBackdrop.Rose || it == ChatBackdrop.Lavender }.forEach { choice ->
             Row(Modifier.fillMaxWidth().clickable { onBackdrop(choice) }.padding(horizontal = 19.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(28.dp).background(choice.topTint, RoundedCornerShape(9.dp)))
                 Text(choice.title, Modifier.weight(1f).padding(start = 10.dp), color = PersonaInk, fontSize = 11.sp)
-                Text(if (choice == backdrop) "✓" else "○", color = if (choice == backdrop) PersonaAccent else PersonaMuted)
+                Text(if (choice.key == visualContext.chatOverrideKey) "✓" else "○", color = if (choice.key == visualContext.chatOverrideKey) PersonaAccent else PersonaMuted)
             }
         }
         Text("气泡样式按联系人单独保存。选择后立即返回聊天预览。", Modifier.padding(horizontal = 19.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp)
@@ -848,7 +1307,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             ChatIconButton(LoveHouseIcon.Back, "上一张", touchSize = 34.dp) { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) } }
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(titles[page], color = PersonaInk, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(titles[page], color = PersonaInk, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                 Text("${page + 1} / 3", color = PersonaMuted, fontSize = 8.sp)
             }
             ChatIconButton(LoveHouseIcon.Close, "关闭", touchSize = 34.dp, onClick = onClose)

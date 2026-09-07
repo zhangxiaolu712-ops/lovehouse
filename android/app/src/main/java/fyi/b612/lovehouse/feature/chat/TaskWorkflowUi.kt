@@ -8,7 +8,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,28 +37,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import fyi.b612.lovehouse.R
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
 
 private val WorkflowInk = Color(0xFF374443)
 private val WorkflowMuted = Color(0xFF83908D)
 private val WorkflowAccent = Color(0xFF6F9086)
-private val WorkflowGlass = Color(0xDDF5F3EB)
 
 private data class ToolUi(val name: String, val source: String, val state: String, val icon: LoveHouseIcon)
 
 @Composable
-fun TaskWorkflowOverlay(
+internal fun TaskWorkflowOverlay(
     task: RemoteAgentTask,
-    backgroundKey: String,
+    visualContext: ChatVisualContext,
     onClose: () -> Unit,
     onForward: () -> Unit,
     onAdvance: () -> Unit,
@@ -68,22 +62,14 @@ fun TaskWorkflowOverlay(
     onWindowAction: (String) -> Unit,
 ) {
     BackHandler(onBack = onClose)
-    WorkflowBackdrop(backgroundKey)
+    ChatBackdropLayer(visualContext)
+    ChatAtmosphere(visualContext)
     Surface(
         modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 14.dp),
-        shape = RoundedCornerShape(28.dp), color = WorkflowGlass,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = .82f)),
+        shape = RoundedCornerShape(28.dp), color = visualContext.panelGlass,
+        border = BorderStroke(.8.dp, visualContext.brightEdge),
     ) {
         TaskWorkflowContent(task, onClose, onForward, onAdvance, onDecision, onJump, onWindowAction)
-    }
-}
-
-@Composable
-private fun WorkflowBackdrop(backgroundKey: String) {
-    when (backgroundKey) {
-        "lavender" -> Image(painterResource(R.drawable.wallpaper_chat_lavender), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        "rose" -> Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFF1D8DF), Color(0xFFD9B8C5), Color(0xFFF4E9E4)))))
-        else -> Image(painterResource(R.drawable.wallpaper_default_green), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     }
 }
 
