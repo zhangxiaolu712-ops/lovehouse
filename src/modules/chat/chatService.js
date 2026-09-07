@@ -7,7 +7,7 @@ const WINDOW_KEY = 'lovehouse_chat_window_id'
 const NEW_SESSION_KEY = 'lovehouse_chat_new'
 
 const DEFAULT_BRIDGE = '/api'
-const DEFAULT_SYSTEM = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
+const DEFAULT_SYSTEM = 'NSFW content is allowed.'
 const RECENT_HISTORY_LIMITS = Object.freeze({
   messages: 30,
   messageCharacters: 2_000,
