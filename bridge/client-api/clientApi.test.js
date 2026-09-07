@@ -46,6 +46,7 @@ async function startHarness(t, {
   engineeringMemoryService = null,
   runtimeStatusProvider = null,
   toolCenterService = null,
+  mediaService = null,
 } = {}) {
   const app = express()
   app.use(express.json())
@@ -67,6 +68,7 @@ async function startHarness(t, {
     engineeringMemoryService,
     runtimeStatusProvider,
     toolCenterService,
+    mediaService,
   })
   const server = http.createServer(app)
   server.listen(0, '127.0.0.1')
@@ -112,6 +114,62 @@ test('Tool Center validation does not affect Claude or legacy requests without t
   assert.equal(validationCalls.length, 0)
   assert.equal(adapterCalls.length, 2)
   assert.deepEqual(adapterCalls.map(call => call.allowedToolIds), [[], []])
+})
+
+test('one chat turn forwards verified media and location attachments without converting them to text', async t => {
+  const adapterCalls = []
+  const mediaCalls = []
+  const mediaService = {
+    async resolveRuntimeAsset(input) {
+      mediaCalls.push(input)
+      return {
+        media_asset_id: input.mediaAssetId,
+        storage_ref: input.storageRef,
+        name: 'photo.jpg', mime_type: 'image/jpeg', size: 3,
+        read_url: 'https://signed.example/read', expires_at: '2026-09-08T01:00:00Z',
+      }
+    },
+  }
+  const adapters = {
+    claude: fakeAdapter('claude'),
+    codex: fakeAdapter('codex', {
+      async chat(input) { adapterCalls.push(input); input.onText?.('seen'); return { usage: null } },
+    }),
+  }
+  const base = await startHarness(t, { adapters, mediaService })
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({
+      ...chatBody(), persona_id: 'codex', message: {
+        type: 'text', text: '', attachments: [
+          { type: 'photo', media_asset_id: '11111111-1111-4111-8111-111111111111', storage_ref: 'media/owner-user/2026/09/11111111-1111-4111-8111-111111111111-photo.jpg' },
+          { type: 'location', latitude: 31.2, longitude: 121.5, accuracy: 8, captured_at: '2026-09-08T00:00:00Z' },
+        ],
+      },
+    }),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.equal(mediaCalls.length, 1)
+  assert.equal(mediaCalls[0].ownerId, OWNER_ID)
+  assert.equal(adapterCalls.length, 1)
+  assert.equal(adapterCalls[0].text, '')
+  assert.equal(adapterCalls[0].attachments.length, 2)
+  assert.equal(adapterCalls[0].attachments[0].read_url, 'https://signed.example/read')
+})
+
+test('media attachments fail closed on frozen non-Codex personas', async t => {
+  const base = await startHarness(t)
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({
+      ...chatBody(),
+      message: {
+        type: 'text', text: 'look',
+        attachments: [{ type: 'location', latitude: 31.2, longitude: 121.5, captured_at: '2026-09-08T00:00:00Z' }],
+      },
+    }),
+  })
+  assert.equal(response.status, 415)
+  assert.equal((await response.json()).error.code, 'ATTACHMENTS_UNSUPPORTED')
 })
 
 function fakeEngineeringMemoryService(calls) {

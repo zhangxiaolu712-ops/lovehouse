@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -104,7 +104,8 @@ export function createR2MediaService({
     const timestamp = now()
     const year = String(timestamp.getUTCFullYear()).padStart(4, '0')
     const month = String(timestamp.getUTCMonth() + 1).padStart(2, '0')
-    const objectKey = `${ownerPrefix(ownerId)}${year}/${month}/${uuid()}-${safeName}`
+    const mediaAssetId = uuid()
+    const objectKey = `${ownerPrefix(ownerId)}${year}/${month}/${mediaAssetId}-${safeName}`
     const command = new PutObjectCommand({
       Bucket: config.bucket,
       Key: objectKey,
@@ -113,13 +114,48 @@ export function createR2MediaService({
     })
     const uploadUrl = await sign(s3Client, command, { expiresIn: config.urlTtlSeconds })
     return {
+      media_asset_id: mediaAssetId,
+      storage_ref: objectKey,
       object_key: objectKey,
+      name: safeName,
+      mime_type: safeMimeType,
+      size: safeSize,
       upload_url: uploadUrl,
       expires_at: new Date(timestamp.getTime() + config.urlTtlSeconds * 1000).toISOString(),
       required_headers: {
         'Content-Type': safeMimeType,
         'Content-Length': String(safeSize),
       },
+    }
+  }
+
+  async function resolveRuntimeAsset({ ownerId, mediaAssetId, storageRef }) {
+    ensureAvailable()
+    if (typeof mediaAssetId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(mediaAssetId)) {
+      throw new MediaRequestError('media_asset_id is invalid')
+    }
+    if (typeof storageRef !== 'string' || !storageRef.startsWith(ownerPrefix(ownerId))) {
+      throw new MediaRequestError('storage_ref is outside the owner media namespace', 'MEDIA_OBJECT_FORBIDDEN', 403)
+    }
+    if (storageRef.includes('\\') || storageRef.split('/').some(part => !part || part === '.' || part === '..')) {
+      throw new MediaRequestError('storage_ref is invalid')
+    }
+    const filename = storageRef.split('/').at(-1) || ''
+    if (!filename.startsWith(`${mediaAssetId}-`)) {
+      throw new MediaRequestError('media_asset_id does not match storage_ref', 'MEDIA_ASSET_MISMATCH', 403)
+    }
+    const head = await s3Client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: storageRef }))
+    const mimeType = validateMimeType(head.ContentType)
+    const size = validateSize(head.ContentLength, config.maxBytes)
+    const signed = await createReadUrl({ ownerId, objectKey: storageRef })
+    return {
+      media_asset_id: mediaAssetId,
+      storage_ref: storageRef,
+      name: filename.slice(mediaAssetId.length + 1),
+      mime_type: mimeType,
+      size,
+      read_url: signed.read_url,
+      expires_at: signed.expires_at,
     }
   }
 
@@ -146,6 +182,7 @@ export function createR2MediaService({
     urlTtlSeconds: config.urlTtlSeconds,
     createUploadUrl,
     createReadUrl,
+    resolveRuntimeAsset,
   }
 }
 

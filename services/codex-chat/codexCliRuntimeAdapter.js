@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { estimateTokens } from './contextBreakdown.js'
 import { ChatRuntimeError } from './errors.js'
@@ -32,9 +35,17 @@ function narrowRuntimeEnv(source) {
   return result
 }
 
-function buildPrompt(history, message) {
+function buildPrompt(history, message, attachments = []) {
   const turns = history.map(item => `${item.role === 'user' ? 'User' : 'Assistant'}: ${item.content}`)
-  return [CHAT_GUARDRAIL, ...turns, `User: ${message}`, 'Assistant:'].join('\n\n')
+  const manifest = attachments.length ? [
+    'The Owner attached these verified local inputs for this turn:',
+    ...attachments.map(item => item.type === 'location'
+      ? `- Location: latitude=${item.latitude}, longitude=${item.longitude}${item.accuracy == null ? '' : `, accuracy=${item.accuracy}m`}, captured_at=${item.captured_at}${item.address ? `, address=${item.address}` : ''}`
+      : `- ${item.type}: ${item.name} (${item.mime_type}, ${item.size} bytes) at ${item.local_path}`),
+    'Read every attached item relevant to the request. Do not claim an attachment was read unless it was actually available.',
+  ].join('\n') : ''
+  return [CHAT_GUARDRAIL, ...turns, manifest, `User: ${message || '[attachment only]'}`, 'Assistant:']
+    .filter(Boolean).join('\n\n')
 }
 
 function mcpConfigArgs(toolContext) {
@@ -97,6 +108,20 @@ function resumeArgs(sessionId, toolContext = null) {
     '--skip-git-repo-check',
     '-',
   ]
+}
+
+function withImages(args, paths) {
+  if (!paths.length) return args
+  const promptIndex = args.lastIndexOf('-')
+  const imageArgs = paths.flatMap(path => ['--image', path])
+  return promptIndex < 0
+    ? [...args, ...imageArgs]
+    : [...args.slice(0, promptIndex), ...imageArgs, ...args.slice(promptIndex)]
+}
+
+function safeAttachmentExtension(value) {
+  const match = String(value || '').match(/\.[A-Za-z0-9]{1,10}$/)
+  return match ? match[0].toLowerCase() : ''
 }
 
 function redactDisplayText(value) {
@@ -207,12 +232,59 @@ export class CodexCliRuntimeAdapter {
   constructor({
     executable = '/usr/bin/codex', spawnImpl = spawn, cwd = '/tmp', env = process.env,
     toolMcpUrl = DEFAULT_INTERNAL_TOOL_MCP_URL,
+    fetchImpl = globalThis.fetch,
   } = {}) {
     this.executable = executable
     this.spawnImpl = spawnImpl
     this.cwd = cwd
     this.env = narrowRuntimeEnv(env)
     this.toolMcpUrl = normalizeInternalToolMcpUrl(toolMcpUrl)
+    this.fetchImpl = fetchImpl
+  }
+
+  async materializeAttachments(attachments = [], signal) {
+    if (!attachments.length) return { items: [], imagePaths: [], cleanup: async () => {} }
+    const directory = join(this.cwd, `.lovehouse-media-${randomUUID()}`)
+    await mkdir(directory, { recursive: false })
+    const items = []
+    try {
+      for (const [index, item] of attachments.entries()) {
+        if (item?.type === 'location') {
+          items.push(item)
+          continue
+        }
+        if (!['photo', 'file'].includes(item?.type) || typeof item.read_url !== 'string') {
+          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment is invalid', { stage: 'attachment', status: 400 })
+        }
+        const url = new URL(item.read_url)
+        if (url.protocol !== 'https:') {
+          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment URL is not secure', { stage: 'attachment', status: 400 })
+        }
+        const response = await this.fetchImpl(url, { signal, redirect: 'error' })
+        if (!response.ok) {
+          throw new ChatRuntimeError('ATTACHMENT_UNAVAILABLE', 'Runtime could not retrieve an attachment', { stage: 'attachment', status: 502, retryable: true })
+        }
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        const responseMime = String(response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase()
+        if (responseMime && responseMime !== item.mime_type) {
+          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment type verification failed', { stage: 'attachment', status: 400 })
+        }
+        if (bytes.byteLength !== item.size || bytes.byteLength > 25 * 1024 * 1024) {
+          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment size verification failed', { stage: 'attachment', status: 400 })
+        }
+        const localPath = join(directory, `attachment-${String(index).padStart(2, '0')}${safeAttachmentExtension(item.name)}`)
+        await writeFile(localPath, bytes, { flag: 'wx', mode: 0o600 })
+        items.push({ ...item, read_url: undefined, local_path: localPath })
+      }
+      return {
+        items,
+        imagePaths: items.filter(item => item.type === 'photo').map(item => item.local_path),
+        cleanup: () => rm(directory, { recursive: true, force: true }),
+      }
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true })
+      throw error
+    }
   }
 
   getCapabilities() {
@@ -380,7 +452,7 @@ export class CodexCliRuntimeAdapter {
 
   async #run({
     message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
-    allowedToolIds = [], authorization = null, threadId = null,
+    allowedToolIds = [], authorization = null, threadId = null, attachments = [],
   }) {
     const normalizedToolIds = normalizeToolPreferenceIds(allowedToolIds)
     const ownerToken = typeof authorization === 'string' && authorization.startsWith('Bearer ')
@@ -392,9 +464,11 @@ export class CodexCliRuntimeAdapter {
           url: `${this.toolMcpUrl}?persona_id=codex&thread_id=${encodeURIComponent(threadId)}&allowed_tool_ids=${encodeURIComponent(normalizedToolIds.join(','))}`,
         }
       : null
+    const materialized = await this.materializeAttachments(attachments, signal)
     const command = this.startOrResume({ sessionId, toolContext })
+    command.args = withImages(command.args, materialized.imagePaths)
     command.ownerToken = toolContext ? ownerToken : null
-    const prompt = buildPrompt(sessionId ? [] : history, message)
+    const prompt = buildPrompt(sessionId ? [] : history, message, materialized.items)
     const estimatedInputTokens = estimateTokens(prompt)
     const startedTools = new Set()
     let runtimeSessionId = ''
@@ -403,11 +477,12 @@ export class CodexCliRuntimeAdapter {
     let reasoningSeen = false
     let turnFailed = null
 
-    await this.sendMessage({
-      command,
-      prompt,
-      signal,
-      onJsonEvent: event => {
+    try {
+      await this.sendMessage({
+        command,
+        prompt,
+        signal,
+        onJsonEvent: event => {
         if (event.type === 'thread.started' && typeof event.thread_id === 'string') {
           runtimeSessionId = event.thread_id
           onRuntimeBinding(event.thread_id)
@@ -472,8 +547,11 @@ export class CodexCliRuntimeAdapter {
         if (event.type === 'turn.failed' || event.type === 'error') {
           turnFailed = runtimeError(event.error?.message || event.message, { sessionId })
         }
-      },
-    })
+        },
+      })
+    } finally {
+      await materialized.cleanup()
+    }
 
     if (turnFailed) throw turnFailed
     if (!runtimeSessionId) {
@@ -503,6 +581,7 @@ export class CodexCliRuntimeAdapter {
 
   async streamEvents({
     message,
+    attachments = [],
     history = [],
     sessionId = null,
     previousUsage = null,
@@ -518,7 +597,7 @@ export class CodexCliRuntimeAdapter {
     try {
       return await this.#run({
         message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
-        allowedToolIds, authorization, threadId,
+        allowedToolIds, authorization, threadId, attachments,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -542,6 +621,7 @@ export class CodexCliRuntimeAdapter {
         allowedToolIds,
         authorization,
         threadId,
+        attachments,
       })
     }
   }

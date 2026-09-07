@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -79,6 +82,36 @@ test('external Tool MCP URLs are rejected before a runtime session starts', () =
     () => new CodexCliRuntimeAdapter({ toolMcpUrl: 'http://127.0.0.1:3000/v1/tools/mcp?target=external' }),
     /internal trusted URL/,
   )
+})
+
+test('verified photos are materialized privately, passed with --image, and removed after the turn', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lovehouse-media-runtime-test-'))
+  t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const calls = []
+  const adapter = new CodexCliRuntimeAdapter({
+    cwd: directory,
+    fetchImpl: async () => new Response(new Uint8Array([1, 2, 3]), {
+      status: 200, headers: { 'Content-Type': 'image/jpeg' },
+    }),
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'I can see it.' } },
+      { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 4 } },
+    ], { calls }),
+  })
+  await adapter.streamEvents({
+    message: 'describe every image',
+    attachments: [{
+      type: 'photo', name: 'photo.jpg', mime_type: 'image/jpeg', size: 3,
+      read_url: 'https://signed.example/private-photo',
+    }],
+    onRuntimeBinding() {}, onText() {}, onEvent() {},
+  })
+  const imageIndex = calls[0].args.indexOf('--image')
+  assert.notEqual(imageIndex, -1)
+  assert.match(calls[0].args[imageIndex + 1], /\.lovehouse-media-/)
+  assert.deepEqual(await fs.readdir(directory), [])
+  assert.equal(calls[0].args.join(' ').includes('signed.example'), false)
 })
 
 test('real Codex 0.146 JSONL shape maps text, safe tool events, usage and unavailable reasoning', async () => {
