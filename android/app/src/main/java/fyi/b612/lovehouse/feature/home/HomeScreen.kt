@@ -1,6 +1,11 @@
 package fyi.b612.lovehouse.feature.home
 
 import android.graphics.Typeface
+import android.widget.Toast
+import java.time.LocalDateTime
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -299,7 +304,7 @@ fun HomeScreen(
                         .onGloballyPositioned { editor.updatePlaceableBounds(it.boundsInRoot()) },
                 ) {
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize(), pageSpacing = 12.dp, userScrollEnabled = editor.draggingId == null, key = { it }) { page ->
-                        DesktopPage(page, editor, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
+                        DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
                     }
                     DesktopPageIndicator(pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
                 }
@@ -325,7 +330,7 @@ fun HomeScreen(
                 pageSpacing = 12.dp,
                 key = { it },
             ) { page ->
-                DesktopPage(page, editor, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
+                DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
             }
 
             DesktopPageIndicator(pagerState.currentPage)
@@ -404,14 +409,14 @@ private fun DesktopPageIndicator(currentPage: Int, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenLab: () -> Unit, modifier: Modifier) {
+private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenChat: () -> Unit, onOpenSettings: () -> Unit, onOpenLab: () -> Unit, modifier: Modifier) {
     DynamicGridPage(page, editor, modifier) { geometry ->
         FirstDesktopItems(page, editor, geometry)
         SecondDesktopItems(page, editor, geometry)
         ThirdDesktopItems(page, editor, geometry)
         FourthDesktopItems(page, editor, geometry, onOpenLab)
         FifthDesktopItems(page, editor, geometry)
-        DockDesktopItems(page, editor, geometry)
+        DockDesktopItems(page, editor, geometry, onOpenChat, onOpenSettings)
     }
 }
 
@@ -420,13 +425,11 @@ private fun FirstDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: 
         val cellWidth = geometry.cellWidth
         val cellHeight = geometry.cellHeight
         GridGlassPanel("p1-days", renderPage, editor, GridPlacement(0, 0, 0, 1, 4), geometry, 18.dp) {
-            Text("61", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-            Text("DAYS TOGETHER", color = DesktopMuted, fontFamily = FontFamily.Serif, fontSize = 8.sp, letterSpacing = 1.2.sp)
+            Text("纪念日", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("日期来源待接入", color = DesktopMuted, fontFamily = FontFamily.Serif, fontSize = 8.sp, letterSpacing = .8.sp)
         }
         GridGlassPanel("p1-clock", renderPage, editor, GridPlacement(0, 1, 0, 2, 2), geometry, 20.dp) {
-                Text("12:51", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 26.sp)
-                Text("9月1日 · 星期二", color = DesktopMuted, fontFamily = FontFamily.Serif, fontSize = 9.sp)
-                Text("· right here", color = DesktopMuted, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 10.sp)
+                CurrentClockWidget()
         }
         GridDesktopApp("♡", "收藏", renderPage, editor, GridPlacement(0, 1, 2, 1, 1), geometry)
         GridDesktopApp("⌑", "日历", renderPage, editor, GridPlacement(0, 1, 3, 1, 1), geometry)
@@ -436,16 +439,16 @@ private fun FirstDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: 
                 Text("Our Space", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 15.sp)
                 Text("🌷  ·  🏠  ·  ☁", fontSize = 18.sp)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("memory.sync", color = DesktopMuted, fontSize = 7.sp)
-                    Text("always on", color = DesktopMuted, fontSize = 7.sp)
+                    Text("Memory", color = DesktopMuted, fontSize = 7.sp)
+                    Text("状态待接入", color = DesktopMuted, fontSize = 7.sp)
                 }
         }
         GridGlassPanel("p1-diary", renderPage, editor, GridPlacement(0, 3, 2, 1, 2), geometry, 18.dp) {
                 Text("My Diary", color = DesktopInk, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 15.sp)
                 Text("所有窗口都通向同一个小屋。", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 10.sp)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Day 61", color = DesktopMuted, fontSize = 7.sp)
-                    Text("2026.08.16", color = DesktopMuted, fontSize = 7.sp)
+                    Text("本地内容", color = DesktopMuted, fontSize = 7.sp)
+                    Text("待接入", color = DesktopMuted, fontSize = 7.sp)
                 }
         }
 }
@@ -480,6 +483,8 @@ private fun GridGlassPanel(id: String, renderPage: Int, editor: DesktopEditor, d
 
 @Composable
 private fun GridDesktopApp(glyph: String, label: String, renderPage: Int, editor: DesktopEditor, default: GridPlacement, geometry: GridGeometry, itemId: String = "page:${default.page}:app:$glyph:$label", onClick: (() -> Unit)? = null) {
+    val context = LocalContext.current
+    val resolvedClick = onClick ?: { Toast.makeText(context, "$label：功能待接入", Toast.LENGTH_SHORT).show() }
     val density = LocalDensity.current
     val contentScale = minOf(1f, 4f / editor.gridColumns, 4f / editor.gridRows)
     val iconStyle = LocalLoveHouseAppearance.current.iconStyle
@@ -487,7 +492,7 @@ private fun GridDesktopApp(glyph: String, label: String, renderPage: Int, editor
         CompositionLocalProvider(LocalDensity provides Density(density.density * contentScale, density.fontScale)) {
             Column(
                 Modifier.fillMaxSize().graphicsLayer(scaleX = editor.iconSize.scale, scaleY = editor.iconSize.scale).then(
-                    if (onClick != null && !editor.isEditing) Modifier.clickable(onClick = onClick) else Modifier,
+                    if (!editor.isEditing) Modifier.clickable(onClick = resolvedClick) else Modifier,
                 ),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -507,9 +512,10 @@ private fun GridDesktopApp(glyph: String, label: String, renderPage: Int, editor
 }
 
 @Composable
-private fun DockDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry) {
+private fun DockDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry, onOpenChat: () -> Unit, onOpenSettings: () -> Unit) {
     DockSpecs.forEachIndexed { index, spec ->
-        GridDesktopApp(spec.glyph, spec.label, renderPage, editor, GridPlacement(0, index / 4, index % 4, 1, 1), geometry, spec.id)
+        val action = when (spec.id) { "dock:chat" -> onOpenChat; "dock:settings" -> onOpenSettings; else -> null }
+        GridDesktopApp(spec.glyph, spec.label, renderPage, editor, GridPlacement(0, index / 4, index % 4, 1, 1), geometry, spec.id, action)
     }
 }
 
@@ -530,7 +536,7 @@ private fun SecondDesktopItems(renderPage: Int, editor: DesktopEditor, geometry:
         GridGlassPanel("p2-ecosystem", renderPage, editor, GridPlacement(1, 0, 0, 2, 2), geometry, 20.dp) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("瓶中生态", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 15.sp)
-                    Text("第46天 · 夏", color = DesktopMuted, fontSize = 8.sp)
+                    Text("数据待接入", color = DesktopMuted, fontSize = 8.sp)
                 }
                 Text("◯   ◌   ◯", modifier = Modifier.fillMaxWidth(), color = DesktopInk.copy(alpha = 0.48f), fontSize = 30.sp, textAlign = TextAlign.Center)
                 Text("● 绿藻      ● 苍穹", color = DesktopMuted, fontSize = 8.sp)
@@ -546,9 +552,9 @@ private fun SecondDesktopItems(renderPage: Int, editor: DesktopEditor, geometry:
                     Text("🎧", fontSize = 28.sp)
                 }
                 Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("NOW PLAYING · 14 QUEUED", color = DesktopMuted, fontSize = 7.sp, letterSpacing = 0.8.sp)
-                    Text("NO HOOK FREESTYLE Pt.4", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 13.sp)
-                    Text("Rapeter", color = DesktopMuted, fontSize = 9.sp)
+                    Text("NOW PLAYING", color = DesktopMuted, fontSize = 7.sp, letterSpacing = 0.8.sp)
+                    Text("播放器尚未接入", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 13.sp)
+                    Text("没有读取媒体状态", color = DesktopMuted, fontSize = 9.sp)
                     Text("♡       ‹      ▶      ›", color = DesktopInk, fontSize = 14.sp)
                 }
             }
@@ -562,12 +568,11 @@ private fun ThirdDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: 
         }
         GridGlassPanel("p3-health", renderPage, editor, GridPlacement(2, 1, 0, 2, 2), geometry, 20.dp) {
                 Text("♡ ─── ♡", color = DesktopMuted, fontSize = 10.sp)
-                Text("73", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 34.sp)
-                Text("bpm", color = DesktopMuted, fontSize = 9.sp)
-                Text("36.5°C · 正常", color = DesktopMuted, fontSize = 10.sp)
+                Text("—", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 34.sp)
+                Text("健康数据未接入", color = DesktopMuted, fontSize = 9.sp)
                 Text("⌁──⌁──⌁", color = DesktopInk.copy(alpha = 0.5f), fontSize = 12.sp)
         }
-        GridGlassPanel("ghost:朋友圈", renderPage, editor, GridPlacement(2, 1, 2, 1, 2), geometry, 18.dp) { Text("朋友圈", color = DesktopInk, fontSize = 13.sp); Text("MOMENTS · 最近动态", color = DesktopMuted, fontSize = 7.sp) }
+        GridGlassPanel("ghost:朋友圈", renderPage, editor, GridPlacement(2, 1, 2, 1, 2), geometry, 18.dp) { Text("朋友圈", color = DesktopInk, fontSize = 13.sp); Text("MOMENTS · 数据待接入", color = DesktopMuted, fontSize = 7.sp) }
         GridGlassPanel("ghost:观星室", renderPage, editor, GridPlacement(2, 2, 2, 1, 2), geometry, 18.dp) { Text("观星室", color = DesktopInk, fontSize = 13.sp); Text("OBSERVATORY · 找一颗星", color = DesktopMuted, fontSize = 7.sp) }
 }
 
@@ -578,10 +583,11 @@ private fun FourthDesktopItems(renderPage: Int, editor: DesktopEditor, geometry:
         GridDesktopApp("⚗", "Lab", renderPage, editor, GridPlacement(3, 1, 3, 1, 1), geometry, onClick = onOpenLab)
         GridGlassPanel("p4-calendar", renderPage, editor, GridPlacement(3, 2, 0, 2, 4), geometry, 20.dp) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("2026 · 八月", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 13.sp)
+                val month = YearMonth.now()
+                Text("${month.year} · ${month.monthValue}月", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 13.sp)
                 Text("›", color = DesktopInk, fontSize = 16.sp)
             }
-            CalendarGrid()
+            CalendarGrid(YearMonth.now())
         }
 }
 
@@ -590,19 +596,19 @@ private fun FifthDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: 
         GridGlassPanel("p5-house", renderPage, editor, GridPlacement(4, 0, 0, 2, 2), geometry, 20.dp) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("陆宅", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 15.sp)
-                    Text("会客中", color = DesktopMuted, fontSize = 8.sp)
+                    Text("状态待接入", color = DesktopMuted, fontSize = 8.sp)
                 }
-                Text("百", modifier = Modifier.fillMaxWidth(), color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 34.sp, textAlign = TextAlign.Center)
-                Text("Guest 来过：你好！欢迎来访。快请坐！\n☕ 小婷的朋友就是我的朋友。", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 9.sp, lineHeight = 14.sp)
+                Text("—", modifier = Modifier.fillMaxWidth(), color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 34.sp, textAlign = TextAlign.Center)
+                Text("访客与会客状态尚未接入", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 9.sp, lineHeight = 14.sp)
         }
         GridGlassPanel("p5-tide", renderPage, editor, GridPlacement(4, 0, 2, 2, 2), geometry, 20.dp) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("潮汐", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 15.sp)
-                    Text("指数 5.6", color = DesktopMuted, fontSize = 8.sp)
+                    Text("数据待接入", color = DesktopMuted, fontSize = 8.sp)
                 }
                 Spacer(Modifier.weight(1f))
                 Text("〰︎  〰︎  〰︎", modifier = Modifier.fillMaxWidth(), color = Color(0xFFA68A96), fontSize = 23.sp, textAlign = TextAlign.Center)
-                Text("今天中潮", modifier = Modifier.fillMaxWidth(), color = DesktopMuted, fontSize = 9.sp, textAlign = TextAlign.Center)
+                Text("潮汐来源尚未接入", modifier = Modifier.fillMaxWidth(), color = DesktopMuted, fontSize = 9.sp, textAlign = TextAlign.Center)
         }
         listOf("▯" to "小手机", "✦" to "总控台", "◔" to "通知", "☑" to "Todo").forEachIndexed { column, item -> GridDesktopApp(item.first, item.second, renderPage, editor, GridPlacement(4, 2, column, 1, 1), geometry) }
         listOf("♡" to "健康", "⌁" to "设备", "▣" to "快递", "⌂" to "生活服务").forEachIndexed { column, item -> GridDesktopApp(item.first, item.second, renderPage, editor, GridPlacement(4, 3, column, 1, 1), geometry) }
@@ -666,8 +672,25 @@ private fun GhostWidget(title: String, subtitle: String, editor: DesktopEditor, 
 }
 
 @Composable
-private fun CalendarGrid() {
-    val values = listOf("日", "一", "二", "三", "四", "五", "六") + (1..31).map(Int::toString)
+private fun CurrentClockWidget() {
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = LocalDateTime.now()
+            delay(30_000)
+        }
+    }
+    Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 26.sp)
+    Text(now.format(DateTimeFormatter.ofPattern("M月d日 · EEEE", Locale.CHINA)), color = DesktopMuted, fontFamily = FontFamily.Serif, fontSize = 9.sp)
+    Text("· device time", color = DesktopMuted, fontFamily = FontFamily.Serif, fontStyle = FontStyle.Italic, fontSize = 10.sp)
+}
+
+@Composable
+private fun CalendarGrid(month: YearMonth) {
+    val leading = month.atDay(1).dayOfWeek.value % 7
+    val populatedDays = List(leading) { "" } + (1..month.lengthOfMonth()).map(Int::toString)
+    val days = populatedDays + List((7 - populatedDays.size % 7) % 7) { "" }
+    val values = listOf("日", "一", "二", "三", "四", "五", "六") + days
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
         values.chunked(7).forEach { week ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -675,7 +698,7 @@ private fun CalendarGrid() {
                     Text(
                         value,
                         modifier = Modifier.width(28.dp),
-                        color = if (value in setOf("16", "19", "25")) Color(0xFF98677B) else DesktopMuted,
+                        color = if (value == LocalDateTime.now().dayOfMonth.toString() && month == YearMonth.now()) Color(0xFF98677B) else DesktopMuted,
                         fontSize = 7.sp,
                         textAlign = TextAlign.Center,
                     )
@@ -694,6 +717,7 @@ private fun dockSpec(id: String): DockSpec = DockSpecs.firstOrNull { it.id == id
 
 @Composable
 private fun DesktopDock(onOpenChat: () -> Unit, onOpenSettings: () -> Unit, editor: DesktopEditor) {
+    val context = LocalContext.current
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(82.dp)
             .shadow(14.dp, RoundedCornerShape(25.dp), ambientColor = GlassShadow, spotColor = GlassShadow),
@@ -704,7 +728,7 @@ private fun DesktopDock(onOpenChat: () -> Unit, onOpenSettings: () -> Unit, edit
         Row(Modifier.fillMaxSize().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             editor.dockItems.forEach { id ->
                 val spec = dockSpec(id)
-                DockEntry(spec, editor, when (id) { "dock:chat" -> onOpenChat; "dock:settings" -> onOpenSettings; else -> null })
+                DockEntry(spec, editor, when (id) { "dock:chat" -> onOpenChat; "dock:settings" -> onOpenSettings; else -> ({ Toast.makeText(context, "${spec.label}：功能待接入", Toast.LENGTH_SHORT).show() }) })
             }
             if (editor.isEditing && editor.dockItems.size < 4) Box(Modifier.width(64.dp).fillMaxHeight().background(Color.White.copy(alpha = .18f), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Text("＋", color = DesktopMuted) }
         }
@@ -763,18 +787,19 @@ private fun DockEntry(spec: DockSpec, editor: DesktopEditor, onClick: (() -> Uni
 
 @Composable
 private fun LooseDockEntry(id: String, editor: DesktopEditor, onOpenChat: () -> Unit, onOpenSettings: () -> Unit) {
+    val context = LocalContext.current
     val spec = dockSpec(id)
     val offset = editor.offsets[id] ?: Offset(80f, 360f)
     val scale by animateFloatAsState(if (editor.isEditing) DesktopEditScale else 1f, label = "loose dock edit scale")
     val onClick = when (id) {
         "dock:chat" -> onOpenChat
         "dock:settings" -> onOpenSettings
-        else -> null
+        else -> ({ Toast.makeText(context, "${spec.label}：功能待接入", Toast.LENGTH_SHORT).show() })
     }
     Box(Modifier.offset { IntOffset(offset.x.roundToInt(), offset.y.roundToInt()) }.size(74.dp).zIndex(15f)
         .onGloballyPositioned { editor.registerItemBounds(id, it.boundsInRoot()) }
         .pointerInput(id) { detectDragGesturesAfterLongPress(onDragStart = { editor.startDrag(id) }, onDragEnd = { editor.finishDrag(id) }, onDragCancel = editor::cancelDrag, onDrag = { change, amount -> change.consume(); editor.drag(id, amount) }) }
-        .then(if (!editor.isEditing && onClick != null) Modifier.clickable(onClick = onClick) else Modifier)) {
+        .then(if (!editor.isEditing) Modifier.clickable(onClick = onClick) else Modifier)) {
         Column(
             Modifier.fillMaxSize().graphicsLayer { scaleX = scale * editor.iconSize.scale; scaleY = scale * editor.iconSize.scale; transformOrigin = TransformOrigin.Center }
                 .onGloballyPositioned { editor.visualBounds[id] = it.boundsInRoot() },

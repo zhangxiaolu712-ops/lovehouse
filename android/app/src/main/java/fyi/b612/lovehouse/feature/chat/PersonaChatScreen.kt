@@ -3,6 +3,7 @@ package fyi.b612.lovehouse.feature.chat
 import android.app.Activity
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.graphics.BitmapFactory
@@ -106,6 +107,8 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseIconGallery
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconOpticalSize
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
 import fyi.b612.lovehouse.core.storage.LocalStorage
+import fyi.b612.lovehouse.feature.nativelab.LocationSmokeTest
+import fyi.b612.lovehouse.feature.nativelab.readSelectedResource
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -262,7 +265,13 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
             }
         }
     }
-    var selectedModel by remember { mutableStateOf(if (threadId == "agent-codex") "Codex · 现有 Runtime" else "GPT-5.6 Sol") }
+    val actualRuntimeLabel = messages.asReversed().firstNotNullOfOrNull { message ->
+        message.runtime?.let { runtime -> listOfNotNull(runtime, message.adapterId).joinToString(" · ") }
+    } ?: "Runtime 尚未返回"
+    var selectedModel by remember(threadId) { mutableStateOf(if (threadId == "agent-codex") actualRuntimeLabel else "Runtime 尚未接入") }
+    LaunchedEffect(actualRuntimeLabel, threadId) {
+        if (threadId == "agent-codex") selectedModel = actualRuntimeLabel
+    }
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var selectedMessages by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -274,6 +283,46 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
     var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var forwardingTaskId by remember { mutableStateOf<String?>(null) }
+    val locationReader = remember(context.applicationContext) { LocationSmokeTest(context.applicationContext) }
+    DisposableEffect(locationReader) { onDispose { locationReader.cancel() } }
+    val attachmentPhoto = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        actionNotice = uri?.let {
+            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            "照片已选择 · ${context.contentResolver.readSelectedResource(it).asDisplayText()} · 本地待发送"
+        } ?: "没有选择照片"
+    }
+    val attachmentFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        actionNotice = uri?.let {
+            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            "文件已选择 · ${context.contentResolver.readSelectedResource(it).asDisplayText()} · 本地待发送"
+        } ?: "没有选择文件"
+    }
+    val attachmentCamera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
+        actionNotice = bitmap?.let { "照片已拍摄 · ${it.width}×${it.height} · 本地待发送" } ?: "没有拍摄照片"
+    }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) attachmentCamera.launch(null) else actionNotice = "相机权限未授予"
+    }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.any { it }) locationReader.request { actionNotice = it.message }
+        else actionNotice = "定位权限未授予"
+    }
+    val attachmentAction: (String) -> Unit = { action ->
+        when (action) {
+            "照片" -> attachmentPhoto.launch(arrayOf("image/*"))
+            "文件" -> attachmentFile.launch(arrayOf("*/*"))
+            "相机" -> if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                attachmentCamera.launch(null)
+            } else cameraPermission.launch(Manifest.permission.CAMERA)
+            "定位" -> if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            ) {
+                locationReader.request { actionNotice = it.message }
+            } else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+            "表情面板已切换" -> actionNotice = "表情面板尚未接入"
+            else -> actionNotice = "其他附件类型尚未接入"
+        }
+    }
     val listState = rememberLazyListState()
     val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
     val isAtBottom by remember { derivedStateOf { !listState.canScrollForward } }
@@ -385,7 +434,7 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
                                 actionNotice = when (action) {
                                     "复制" -> { clipboard.setText(AnnotatedString(message.body)); "已复制" }
                                     "重试" -> "重试尚未接入"
-                                    "朗读" -> "朗读状态已切换"
+                                    "朗读" -> "朗读尚未接入"
                                     else -> "已打开消息操作"
                                 }
                             },
@@ -417,7 +466,7 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
                 onValueChange = { input = it },
                 onSend = { submitMessage(input) },
                 onSendTranscript = submitMessage,
-                onToolAction = { actionNotice = it },
+                onToolAction = attachmentAction,
                 onHeightChanged = {
                     if (followLatest && messages.isNotEmpty()) chatScope.launch { listState.scrollToItem(messages.lastIndex) }
                 },
@@ -1062,7 +1111,7 @@ private fun ComposerAttachmentButton(
                 LoveHouseIcon.Location to "定位", LoveHouseIcon.More to "其他",
             ).forEach { (icon, item) ->
                 Row(
-                    Modifier.fillMaxWidth().clickable { onExpandedChange(false); onToolAction("已选择$item（本地 Mock）") }
+                    Modifier.fillMaxWidth().clickable { onExpandedChange(false); onToolAction(item) }
                         .padding(horizontal = 10.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1144,7 +1193,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
                     else -> DirectDetailPanel(thread, model, onClose, onNavigate, onModel)
                 }
                 PersonaPanel.Appearance -> AppearancePanel(bubble, visualContext, onClose, onBubble, onBackdrop, onPickCustomWallpaper)
-                PersonaPanel.Search -> SearchPanel(onClose)
+                PersonaPanel.Search -> SearchPanel(thread, store.messages(thread.threadId), onClose)
                 PersonaPanel.DateJump -> DatePanel(onClose)
                 PersonaPanel.Bookshelf -> BookshelfPanel(onClose)
                 PersonaPanel.Status -> StatusPanel(onClose)
@@ -1173,9 +1222,9 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
                 Column(Modifier.weight(1f).padding(start = 11.dp)) { Text(thread.title, color = PersonaInk, fontWeight = FontWeight.Medium, fontSize = 15.sp); Text("人格窗口 · 身份与模型分离", color = PersonaMuted, fontSize = 9.sp) }
                 ChatIconButton(LoveHouseIcon.Close, "关闭", touchSize = 34.dp, onClick = onClose)
             }
-            DetailRow("当前运行", "OpenAI · $model")
+            DetailRow("当前运行", model)
             DetailRow("Persona", thread.title)
-            DetailRow("Memory", "独立专属 Memory")
+            DetailRow("Memory", "状态尚未接入")
             DetailRow("长期 Thread", thread.threadId)
             DetailRow("更换头像", "自定义  ›") { onNavigate(PersonaPanel.AvatarPicker) }
             DetailRow("查找聊天", "›") { onNavigate(PersonaPanel.Search) }
@@ -1183,11 +1232,9 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
             DetailRow("聊天书架", "›") { onNavigate(PersonaPanel.Bookshelf) }
             DetailRow("聊天外观", "气泡 · 壁纸 · 雾面  ›") { onNavigate(PersonaPanel.Appearance) }
             DetailRow("会话状态", "Usage · 状态 · 工作记忆  ›") { onNavigate(PersonaPanel.Status) }
-            DetailRow("新增 / 管理模型", "当前 $model")
+            DetailRow("新增 / 管理模型", "尚未接入")
             Text("运行模型 · 只改变底层引擎，不改变人格、Thread、Memory 和书架", Modifier.padding(horizontal = 19.dp, vertical = 14.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
-            listOf("GPT-5.6 Sol" to "OpenAI", "Claude" to "Anthropic", "Gemini" to "Google", "自定义模型" to "自定义 API").forEach { option ->
-                ModelRow(option.first, option.second, model == option.first) { onModel(option.first) }
-            }
+            Text("当前 Android/Bridge 尚无正式模型切换 contract，因此这里不提供只改变选中态的假按钮。", Modifier.padding(horizontal = 19.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
         }
     }
 }
@@ -1205,7 +1252,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
                 }
             }
             DetailRow("添加成员", "选择 Persona / 成员  ›") { onNavigate(PersonaPanel.MemberPicker) }
-            DetailRow("已签收工单", "1 个 · 正文时间线查看")
+            DetailRow("已签收工单", "本地演示 · 未接真实数据")
             DetailRow("聊天背景", "独立窗口背景  ›") { onNavigate(PersonaPanel.Appearance) }
         }
     }
@@ -1261,32 +1308,34 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
     }
 }
 
-@Composable private fun SearchPanel(onClose: () -> Unit) {
+@Composable private fun SearchPanel(thread: ChatThreadSummary, messages: List<ChatMessageUi>, onClose: () -> Unit) {
     var query by remember { mutableStateOf("") }
+    val results = remember(query, messages.size) {
+        if (query.isBlank()) emptyList() else messages.filter { it.body.contains(query, ignoreCase = true) }
+    }
     Column(Modifier.navigationBarsPadding().padding(bottom = 22.dp)) {
-        SheetHeader("查找 G老师 的聊天", "同时搜索当前 Thread 和已经封卷的聊天原文。", onClose)
+        SheetHeader("查找 ${thread.title} 的聊天", "搜索当前设备已保存的这个 Thread 正文。", onClose)
         Surface(Modifier.fillMaxWidth().padding(horizontal = 18.dp), RoundedCornerShape(14.dp), Color.White.copy(alpha = .55f)) {
             BasicTextField(query, { query = it }, Modifier.padding(13.dp), textStyle = androidx.compose.ui.text.TextStyle(color = PersonaInk, fontSize = 12.sp), decorationBox = { inner -> Box { if (query.isEmpty()) Text("输入关键词…", color = PersonaMuted, fontSize = 12.sp); inner() } })
         }
-        Text(if (query.isEmpty()) "输入关键词开始查找" else "在当前 Thread 与聊天书架中查找“$query”", Modifier.padding(19.dp), color = PersonaMuted, fontSize = 9.sp)
+        Text(if (query.isEmpty()) "输入关键词开始查找" else "找到 ${results.size} 条本机真实消息", Modifier.padding(19.dp), color = PersonaMuted, fontSize = 9.sp)
+        results.take(8).forEach { message ->
+            Text("${message.author} · ${message.time}\n${message.body}", Modifier.padding(horizontal = 19.dp, vertical = 6.dp), color = PersonaInk, fontSize = 9.sp, maxLines = 3)
+        }
     }
 }
 
 @Composable private fun DatePanel(onClose: () -> Unit) {
     Column(Modifier.navigationBarsPadding().padding(bottom = 22.dp)) {
-        SheetHeader("按日期跳转", "当前聊天始终是一条 Thread；较早日期会跳到对应封存卷册。", onClose)
-        ArchiveRow("2026.08.18 · 当前 Thread", "回到最近聊天")
-        ArchiveRow("2026.08.12", "LoveHouse 聊天视觉讨论")
-        ArchiveRow("2026.08.03", "人格窗口与 Memory")
+        SheetHeader("按日期跳转", "日期索引尚未接入本地消息仓库。", onClose)
+        EmptyStatusPage("待接入：当前不会生成虚假日期、卷册或跳转结果。")
     }
 }
 
 @Composable private fun BookshelfPanel(onClose: () -> Unit) {
     Column(Modifier.navigationBarsPadding().padding(bottom = 22.dp)) {
-        SheetHeader("G老师 · 聊天书架", "旧消息保留原文；摘要只作为卷册索引。", onClose)
-        ArchiveRow("2026.08.12 — 2026.08.17", "LoveHouse 聊天视觉 · 48 条原始消息")
-        ArchiveRow("2026.08.03 — 2026.08.11", "人格窗口与 Memory · 76 条原始消息")
-        Text("卷册中的旧消息仍可选择、引用和转发。", Modifier.padding(19.dp), color = PersonaMuted, fontSize = 9.sp)
+        SheetHeader("聊天书架", "卷册索引尚未接入。", onClose)
+        EmptyStatusPage("待接入：本页不会伪造旧消息数量、日期范围或摘要。当前 Thread 的真实本地正文仍可在聊天页查看。")
     }
 }
 
@@ -1350,18 +1399,8 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
 @Composable private fun UsagePage() {
     Column(Modifier.padding(horizontal = 19.dp)) {
         Text("当前会话上下文 · LOVEHOUSE MANAGED WINDOW", color = PersonaMuted, fontSize = 8.sp)
-        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.Bottom) { Text("72k", color = PersonaInk, fontSize = 28.sp, fontWeight = FontWeight.Bold); Text(" / 128k", color = PersonaMuted, fontSize = 11.sp) }
-        Box(Modifier.fillMaxWidth().height(7.dp).background(Color.White.copy(alpha = .55f), CircleShape)) { Box(Modifier.fillMaxWidth(.5625f).height(7.dp).background(PersonaAccent, CircleShape)) }
-        Text("距离准备整理 28k    ·    距离自动压缩 56k", Modifier.padding(vertical = 10.dp), color = PersonaMuted, fontSize = 9.sp)
-        listOf(
-            "管理阈值" to "100k 准备整理 · 128k 自动压缩", "压缩后继续携带" to "接班包 + 最近约 30 条原始聊天",
-            "模型" to "GPT-5.6 Sol", "本窗口已聊" to "62 轮", "压缩累计" to "3 次 · 最近今天 14:04",
-            "模型 / 聊天通道" to "正常", "记忆工具" to "正常", "登录 / 授权" to "有效",
-        ).forEach { DetailRow(it.first, it.second) }
-        Text("Provider / 额度", Modifier.padding(top = 14.dp, bottom = 5.dp), color = PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        DetailRow("渠道", "OpenAI · API / Subscription")
-        DetailRow("Provider 真实 Context", "可读取时并列显示")
-        DetailRow("订阅 / API 用量", "按渠道展示真实单位")
+        Text("Usage、上下文阈值、压缩次数与 Provider 用量尚无稳定读取 contract。", Modifier.padding(vertical = 12.dp), color = PersonaInk, fontSize = 10.sp, lineHeight = 16.sp)
+        Text("当前不会显示假 token 数、假轮次、假健康状态或假授权状态。Runtime / adapter 仅在真实 SSE 返回并写入本地消息后显示。", color = PersonaMuted, fontSize = 9.sp, lineHeight = 15.sp)
     }
 }
 

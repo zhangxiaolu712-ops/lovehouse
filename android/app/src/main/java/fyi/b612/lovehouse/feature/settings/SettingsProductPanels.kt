@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -90,9 +91,9 @@ private val ProductAccent = Color(0xFF728F88)
 private val ProductGlass = Color.White.copy(alpha = .48f)
 private val ProductBorder = Color.White.copy(alpha = .42f)
 
-private const val OwnerNameKey = "settings.owner.name"
-private const val OwnerBioKey = "settings.owner.bio"
-private const val OwnerAvatarKey = "settings.owner.avatar"
+internal const val OwnerNameKey = "settings.owner.name"
+internal const val OwnerBioKey = "settings.owner.bio"
+internal const val OwnerAvatarKey = "settings.owner.avatar"
 internal const val PersonasKey = "settings.ai_profiles"
 
 internal data class AiProfile(val id: String, val name: String, val summary: String, val content: String, val source: String? = null)
@@ -309,7 +310,10 @@ internal fun LocalResourceSettings(provider: PermissionStatusProvider) {
         } else result = "没有选择照片。"
     }
     val file = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        result = uri?.let { context.contentResolver.readSelectedResource(it).asDisplayText() } ?: "没有选择文件。"
+        result = uri?.let {
+            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            context.contentResolver.readSelectedResource(it).asDisplayText()
+        } ?: "没有选择文件。"
     }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         preview = bitmap; result = if (bitmap == null) "没有拍摄照片。" else "拍摄成功 · 本地待上传/待发送"
@@ -329,6 +333,44 @@ internal fun LocalResourceSettings(provider: PermissionStatusProvider) {
         }
         preview?.let { Image(it.asImageBitmap(), "本地预览", Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(13.dp)).padding(top = 8.dp)) }
         Text(result, color = ProductMuted, fontSize = 9.sp, lineHeight = 13.sp, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+
+@Composable
+internal fun AudioRecordingProductSettings(provider: PermissionStatusProvider) {
+    val context = LocalContext.current
+    val recorder = remember(context.applicationContext) { AudioSmokeRecorder(context.applicationContext) }
+    var recording by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("录音只保存在 LoveHouse 本机缓存，不会上传或伪装成已发送语音消息。") }
+    fun startRecording() {
+        result = recorder.start()
+        recording = recorder.isRecording
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        provider.refresh()
+        if (granted) startRecording() else result = "麦克风权限未授予，请在系统权限页开启。"
+    }
+    DisposableEffect(recorder) {
+        onDispose { recorder.cancel() }
+    }
+    ProductPanel {
+        Text("麦克风 / 本地录音", color = ProductInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(result, color = ProductMuted, fontSize = 9.sp, modifier = Modifier.padding(vertical = 7.dp))
+        Button(
+            onClick = {
+                if (recording) {
+                    result = recorder.stop()
+                    recording = false
+                } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    startRecording()
+                } else {
+                    permission.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = ProductAccent),
+        ) { Text(if (recording) "停止录音" else "开始本地录音", fontSize = 10.sp) }
+        Text("实时语音识别已在 Chat 长按输入区复用系统能力；语音消息发送链仍待接入。", color = ProductMuted, fontSize = 8.sp, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
@@ -353,6 +395,7 @@ internal fun NotificationProductSettings(provider: PermissionStatusProvider) {
 internal fun DeviceProductSettings(provider: PermissionStatusProvider) {
     val context = LocalContext.current
     val controller = remember(context.applicationContext) { BleCapabilityController(context.applicationContext) }
+    DisposableEffect(controller) { onDispose { controller.release() } }
     val state by controller.state.collectAsState()
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { provider.refresh(); controller.refreshBluetoothState() }
     DeviceContextPanel()

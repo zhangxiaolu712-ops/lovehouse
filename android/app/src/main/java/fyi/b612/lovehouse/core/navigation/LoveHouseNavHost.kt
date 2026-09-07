@@ -141,6 +141,7 @@ private fun LoveHouseContent(
             SettingsScreen(
                 localStorage = dependencies.localStorage,
                 permissionStatusProvider = dependencies.permissions,
+                ownerSession = dependencies.ownerSession,
             )
         }
 

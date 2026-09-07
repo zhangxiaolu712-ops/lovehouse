@@ -1,5 +1,11 @@
 package fyi.b612.lovehouse.feature.settings
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -23,11 +30,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
+import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.storage.LocalStorage
+import fyi.b612.lovehouse.feature.nativelab.LocationSmokeTest
+import androidx.core.content.ContextCompat
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -51,7 +62,6 @@ internal fun SettingsCardStack(content: @Composable ColumnScope.() -> Unit) {
 @Composable
 internal fun PersonaVoiceSettings(storage: LocalStorage) {
     var personas by remember { mutableStateOf(listOf("g" to "G老师", "k" to "小克")) }
-    val drafts = remember { mutableStateMapOf<String, PersonaVoiceDraft>() }
     var previewMessage by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(storage) {
         storage.readString(PersonasKey)?.profilesFromJson()?.let { saved ->
@@ -60,40 +70,38 @@ internal fun PersonaVoiceSettings(storage: LocalStorage) {
     }
     ProductPanel {
         Heading("Persona Voice")
-        Note("每个人格独立配置。以下仅为本页配置草稿，未连接 Voice Provider，未远端保存。")
+        Note("每个人格独立配置。Voice Provider 尚未接入，因此本页不提供会产生虚假生效感的开关或凭据输入。")
     }
-    personas.forEach { (id, name) ->
-        val voice = drafts[id] ?: PersonaVoiceDraft()
+    personas.forEach { (_, name) ->
         ProductPanel {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(name, Modifier.weight(1f), color = LoveHouseGlass.Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(if (voice.enabled) "启用意向" else "停用", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
-                Switch(voice.enabled, { drafts[id] = voice.copy(enabled = it) })
+                Text("未配置", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
             }
-            ProductField("Voice Provider（名称）", voice.provider, { drafts[id] = voice.copy(provider = it) }, true)
-            Spacer(Modifier.height(8.dp))
-            ProductField("Voice / Voice ID", voice.voiceId, { drafts[id] = voice.copy(voiceId = it) }, true)
+            Note("Voice Provider：待接入")
+            Note("Voice / Voice ID：未配置")
             Note("Credential：未配置。未来引用独立安全模块；这里不输入或保存 API Key。")
-            Note("连接状态：后端尚未接入。启用意向不代表服务已启用。")
             OutlinedButton(onClick = { previewMessage = "$name：Voice Provider 尚未接入，无法试听；未发起网络请求。" }, modifier = Modifier.fillMaxWidth()) { Text("试听", fontSize = 10.sp) }
         }
     }
     previewMessage?.let { ProductPanel { Note(it) } }
     ProductPanel {
         Heading("语音输入与通话")
-        Note("独立于 Persona Voice；以下仅为前端偏好，不代表后端 STT 已接入。")
+        Note("独立于 Persona Voice。实时语音识别由 Chat 长按输入区使用系统能力；以下策略尚未接入。")
         listOf("自动朗读", "语音消息转文字", "通话降噪").forEach { label ->
-            var enabled by remember(label) { mutableStateOf(false) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label, Modifier.weight(1f), color = LoveHouseGlass.Ink, fontSize = 11.sp)
-                Switch(enabled, { enabled = it })
+                Text("待接入", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
             }
         }
     }
 }
 
 @Composable
-internal fun GlobalLocationSettings() {
+internal fun GlobalLocationSettings(permissionStatusProvider: PermissionStatusProvider) {
+    val context = LocalContext.current
+    val location = remember(context.applicationContext) { LocationSmokeTest(context.applicationContext) }
+    DisposableEffect(location) { onDispose { location.cancel() } }
     var state by remember { mutableStateOf(GlobalLocationState()) }
     var adding by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf("") }
@@ -102,6 +110,15 @@ internal fun GlobalLocationSettings() {
     var message by remember { mutableStateOf<String?>(null) }
     var format24 by remember { mutableStateOf(true) }
     var now by remember { mutableStateOf(Instant.now()) }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        permissionStatusProvider.refresh()
+        if (grants.values.any { it }) {
+            location.request { result ->
+                message = result.message
+                if (result.needsLocationSettings) context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            }
+        } else message = "定位权限未授予，请在系统权限页开启。"
+    }
     LaunchedEffect(Unit) { while (true) { now = Instant.now(); delay(30_000) } }
     BackHandler(adding != null || candidate != null) { candidate = null; adding = null; message = null }
 
@@ -128,7 +145,16 @@ internal fun GlobalLocationSettings() {
         OutlinedButton(onClick = { adding = "travel"; name = ""; zone = state.current.zoneId; message = null }, modifier = Modifier.fillMaxWidth()) { Text("设置临时地点", fontSize = 10.sp) }
         if (state.travel != null) TextButton(onClick = { state = state.returnHome() }) { Text("返回常住地点", fontSize = 10.sp) }
         Row {
-            TextButton(onClick = { message = "GPS 检测入口已预留。本轮不读取 GPS；未来检测后先展示候选地点，必须由你确认才切换。" }, modifier = Modifier.weight(1f)) { Text("GPS 检测", fontSize = 10.sp) }
+            TextButton(onClick = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    location.request { result ->
+                        message = result.message
+                        if (result.needsLocationSettings) context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    }
+                } else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+            }, modifier = Modifier.weight(1f)) { Text("GPS 检测", fontSize = 10.sp) }
             TextButton(onClick = { message = "AI 建议地点尚未启用。未来只提供建议，不会静默替换全局地点。" }, modifier = Modifier.weight(1f)) { Text("AI 建议地点", fontSize = 10.sp) }
         }
     }
@@ -166,10 +192,9 @@ internal fun GlobalLocationSettings() {
         TextButton(onClick = { format24 = !format24 }) { Text("时间格式：${if (format24) "24" else "12"} 小时制", fontSize = 11.sp) }
         TextButton(onClick = { unit = if (unit == "摄氏度") "华氏度" else "摄氏度" }) { Text("温度单位：$unit", fontSize = 11.sp) }
         listOf("桌面天气", "恶劣天气提醒").forEach { label ->
-            var enabled by remember(label) { mutableStateOf(false) }
-            Row(verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f), color = LoveHouseGlass.Ink, fontSize = 11.sp); Switch(enabled, { enabled = it }) }
+            Row(verticalAlignment = Alignment.CenterVertically) { Text(label, Modifier.weight(1f), color = LoveHouseGlass.Ink, fontSize = 11.sp); Text("待接入", color = LoveHouseGlass.MutedInk, fontSize = 9.sp) }
         }
-        Note("本页偏好草稿，不修改冻结的 Desktop，也不启用实际天气推送。")
+        Note("时间格式与温度单位仅用于本页即时预览；天气来源、桌面天气和推送尚未接入。")
     }
 }
 

@@ -35,6 +35,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -49,9 +51,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import fyi.b612.lovehouse.BuildConfig
+import fyi.b612.lovehouse.core.auth.OwnerSessionStatus
+import fyi.b612.lovehouse.core.auth.OwnerSessionStore
+import fyi.b612.lovehouse.core.designsystem.LocalLoveHouseAppearance
+import fyi.b612.lovehouse.core.devicecontext.AndroidDeviceContextProvider
+import fyi.b612.lovehouse.core.permissions.NativeCapability
+import fyi.b612.lovehouse.core.permissions.PermissionState
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.storage.LocalStorage
+import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
+import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
@@ -72,7 +82,7 @@ private data class SettingEntry(
 
 private data class SettingGroup(val title: String, val entries: List<SettingEntry>)
 
-private val groups = listOf(
+private val groupTemplates = listOf(
     SettingGroup("账号与个性化", listOf(
         SettingEntry("我的个人资料", "头像、昵称与个人简介", "婷", LoveHouseIcon.Contact),
         SettingEntry("美化", "字体、图标、主题与聊天样式", "雾蓝", LoveHouseIcon.Star),
@@ -106,14 +116,20 @@ private val groups = listOf(
 fun SettingsScreen(
     localStorage: LocalStorage,
     permissionStatusProvider: PermissionStatusProvider,
+    ownerSession: OwnerSessionStore,
     modifier: Modifier = Modifier,
-    viewModel: SettingsViewModel = viewModel(factory = SettingsViewModel.factory()),
 ) {
     var selected by remember { mutableStateOf<SettingEntry?>(null) }
     BackHandler(enabled = selected != null) { selected = null }
     AnimatedContent(selected, label = "settings-page") { detail ->
         if (detail == null) {
-            SettingsHome(modifier.statusBarsPadding().navigationBarsPadding(), onSelect = { selected = it })
+            SettingsHome(
+                modifier = modifier.statusBarsPadding().navigationBarsPadding(),
+                localStorage = localStorage,
+                permissionStatusProvider = permissionStatusProvider,
+                ownerSession = ownerSession,
+                onSelect = { selected = it },
+            )
         } else {
             SettingsDetail(
                 detail,
@@ -127,9 +143,64 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingsHome(modifier: Modifier, onSelect: (SettingEntry) -> Unit) {
+private fun SettingsHome(
+    modifier: Modifier,
+    localStorage: LocalStorage,
+    permissionStatusProvider: PermissionStatusProvider,
+    ownerSession: OwnerSessionStore,
+    onSelect: (SettingEntry) -> Unit,
+) {
     var query by remember { mutableStateOf("") }
-    val filtered = remember(query) {
+    val ownerName by localStorage.observeString(OwnerNameKey).collectAsState(initial = null)
+    val profilesJson by localStorage.observeString(PersonasKey).collectAsState(initial = null)
+    val permissionStatuses by permissionStatusProvider.statuses.collectAsState()
+    val session by ownerSession.state.collectAsState()
+    val appearance = LocalLoveHouseAppearance.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val deviceContext = remember(context.applicationContext) {
+        AndroidDeviceContextProvider(
+            context.applicationContext,
+            isScreenObserverActive = { ScreenObserverRuntime.state.value.status == ScreenObserverStatus.Active },
+        ).getCurrentDeviceContext()
+    }
+    LaunchedEffect(permissionStatusProvider) { permissionStatusProvider.refresh() }
+    val availablePermissions = permissionStatuses.count { it.state == PermissionState.Granted || it.state == PermissionState.NotRequired }
+    val notificationState = permissionStatuses.firstOrNull { it.capability == NativeCapability.Notifications }?.state?.label ?: "状态未知"
+    val biometricState = permissionStatuses.firstOrNull { it.capability == NativeCapability.Biometrics }?.state?.label ?: "状态未知"
+    val personaCount = profilesJson?.profilesFromJson()?.size
+    val appearanceLabel = when (appearance.wallpaper) {
+        "house" -> "绿荫"
+        "warm" -> "暖纸"
+        "rose" -> "粉雾"
+        "night" -> "夜空"
+        "custom" -> "本地壁纸"
+        else -> "默认"
+    }
+    val values = mapOf(
+        "我的个人资料" to (ownerName ?: "未填写"),
+        "美化" to appearanceLabel,
+        "AI 档案管理" to (personaCount?.let { "$it 个" } ?: "本机"),
+        "权限" to "$availablePermissions/${permissionStatuses.size}",
+        "通知" to notificationState,
+        "AI 权限" to "策略待接入",
+        "语音" to "原生录音可用",
+        "天气与时间" to "天气未接入",
+        "主动唤醒" to "尚未启用",
+        "工具添加" to "请使用 Lab",
+        "本地资源" to "本机存储",
+        "设备" to (deviceContext.battery.levelPercent?.let { "电量 $it%" } ?: "状态可刷新"),
+        "密码库 / Secret Vault" to "尚未启用",
+        "隐私锁" to biometricState,
+        "同步" to "尚未接入",
+        "控制台" to "状态未知",
+        "工作项目" to "后端未接入",
+        "数据与迁移" to "尚未启用",
+        "版本更新" to BuildConfig.VERSION_NAME,
+    )
+    val groups = groupTemplates.map { group ->
+        group.copy(entries = group.entries.map { entry -> entry.copy(value = values[entry.title] ?: entry.value) })
+    }
+    val filtered = remember(query, groups) {
         if (query.isBlank()) groups else groups.map { group ->
             group.copy(entries = group.entries.filter {
                 it.title.contains(query, ignoreCase = true) || it.subtitle.contains(query, ignoreCase = true)
@@ -143,7 +214,7 @@ private fun SettingsHome(modifier: Modifier, onSelect: (SettingEntry) -> Unit) {
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 7.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(SettingsSpacing.CardGap),
         ) {
-            item { AccountHero() }
+            item { AccountHero(ownerName ?: "Owner", session.status) }
             item { SettingsSearch(query, onValueChange = { query = it }) }
             if (filtered.isEmpty()) item { EmptySearch(query) }
             filtered.forEach { group ->
@@ -172,18 +243,24 @@ private fun SettingsTopBar(title: String, subtitle: String? = null, onBack: (() 
 }
 
 @Composable
-private fun AccountHero() {
+private fun AccountHero(ownerName: String, sessionStatus: OwnerSessionStatus) {
+    val sessionLabel = when (sessionStatus) {
+        OwnerSessionStatus.Active -> "Owner 会话已连接"
+        OwnerSessionStatus.Missing -> "Owner 会话未连接"
+        OwnerSessionStatus.Expired -> "Owner 会话已过期"
+        OwnerSessionStatus.Rejected -> "Owner 会话需重新连接"
+    }
     GlassPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(54.dp).clip(CircleShape).background(Color(0xFFD4E0DD).copy(alpha = .88f)),
                 contentAlignment = Alignment.Center,
-            ) { Text("婷", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }
+            ) { Text(ownerName.take(1), color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("婷", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text(ownerName, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 Text("LoveHouse", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                Text("账号 · 云服务 · 设备管理", color = Muted, fontSize = 11.sp)
+                Text(sessionLabel, color = Muted, fontSize = 11.sp)
             }
             LoveHouseIconView(LoveHouseIcon.Expand, null, Modifier.size(16.dp), tint = Muted)
         }
@@ -272,38 +349,38 @@ private fun SettingsDetail(
         ) {
             when (entry.title) {
                 "我的个人资料" -> item { SettingsCardStack { OwnerProfileSettings(localStorage) } }
-                "美化" -> appearanceDetail()
+                "美化" -> item { SettingsCardStack { AppearanceProductSettings(localStorage) } }
                 "AI 档案管理" -> item { SettingsCardStack { AiProfileManager(localStorage) } }
                 "权限" -> item { SettingsCardStack { NativeCapabilitySettings(permissionStatusProvider) } }
                 "通知" -> {
                     item { NotificationProductSettings(permissionStatusProvider) }
-                    toggleDetail(notificationRows)
+                    item { UnavailableSettingsRows("通知分类策略", notificationRows.map { it.first }, "消息分类过滤尚未接入；Android 系统通知授权与测试通知上方已真实接线。") }
                 }
                 "AI 权限" -> {
                     item { AiPermissionExplanation() }
-                    toggleDetail(proactiveRows)
+                    item { UnavailableSettingsRows("AI 授权策略", proactiveRows.map { it.first }, "服务端授权策略尚未接入，当前不显示可误认为已生效的开关。") }
                 }
-                "语音" -> item { SettingsCardStack { PersonaVoiceSettings(localStorage) } }
-                "天气与时间" -> item { SettingsCardStack { GlobalLocationSettings() } }
+                "语音" -> item { SettingsCardStack { PersonaVoiceSettings(localStorage); AudioRecordingProductSettings(permissionStatusProvider) } }
+                "天气与时间" -> item { SettingsCardStack { GlobalLocationSettings(permissionStatusProvider) } }
                 "工具添加" -> toolsDetail()
                 "本地资源" -> {
                     item { LocalResourceSettings(permissionStatusProvider) }
-                    storageDetail()
+                    item { LocalStorageUsageSettings() }
                 }
                 "设备" -> {
                     item { SettingsCardStack { DeviceProductSettings(permissionStatusProvider); TrustedDevicesSettings() } }
                 }
                 "隐私锁" -> {
                     item { BiometricProductSettings() }
-                    privacyDetail()
+                    item { FutureSettingsPanel("隐私锁策略", "启动验证、任务预览隐藏和敏感操作二次验证尚未接入；上方仅执行真实 Android 身份验证。") }
                 }
-                "同步" -> syncDetail()
+                "同步" -> item { FutureSettingsPanel("同步", "聊天与设置的多设备同步尚未接入；本机数据不会被描述为已同步。") }
                 "控制台" -> item { SettingsCardStack { HouseStatusConsole(consoleConnections) } }
                 "密码库 / Secret Vault" -> item { FutureSettingsPanel("独立安全模块", "Secret Vault 将作为独立安全子系统提供，目前尚未启用。不会保存密码、API Key 或恢复码，也不会允许 AI 读取 Secret。") }
                 "主动唤醒" -> item { FutureSettingsPanel("主动唤醒", "尚未启用。未来主动唤醒服务独立接线，本页不启动 scheduler 或 Agent。") }
-                "工作项目" -> projectDetail()
+                "工作项目" -> item { FutureSettingsPanel("工作项目", "Android 尚未接入工程目录与 Git 状态来源，不显示本机 Windows 路径或虚假分支。") }
                 "数据与迁移" -> item { FutureSettingsPanel("数据与迁移", "尚未启用。本页不会启动备份、导入、恢复或覆盖现有资料。") }
-                "版本更新" -> versionDetail()
+                "版本更新" -> item { VersionProductSettings() }
             }
         }
     }
@@ -351,7 +428,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.toggleDetail(rows: Li
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.toolsDetail() {
-    item { ToolsManager() }
+    item { FutureSettingsPanel("工具添加", "正式 Settings 工具管理尚未迁入；真实 capabilities / test / agent-codex allowlist 继续从桌面 Lab → MCP Tools Lab 使用。") }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.storageDetail() {
@@ -404,11 +481,9 @@ private fun DetailSection(title: String, rows: List<Pair<String, String>>) {
     GlassPanel(contentPadding = 0.dp) {
         Text(title, modifier = Modifier.padding(12.dp, 10.dp, 12.dp, 5.dp), color = Muted, fontSize = 11.sp)
         rows.forEachIndexed { index, row ->
-            Row(Modifier.fillMaxWidth().clickable { }.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(row.first, Modifier.weight(1f), color = Ink, fontSize = 13.sp)
                 Text(row.second, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.width(3.dp))
-                LoveHouseIconView(LoveHouseIcon.Expand, null, Modifier.size(13.dp), tint = Muted)
             }
             if (index != rows.lastIndex) HorizontalDivider(Modifier.padding(start = 12.dp), color = Hairline)
         }

@@ -93,13 +93,17 @@ class ChatSessionStore(
         )
         // The production Codex window starts empty: assistant text must only
         // come from the real runtime stream, never from a local placeholder.
-        messagesByThread["agent-codex"] = mutableStateListOf<ChatMessageUi>().apply {
-            addAll(messageRepository.messages(stableCodexThreadId()).map(::persistedMessageUi))
+        val persistedCodexMessages = messageRepository.messages(stableCodexThreadId()).map(::persistedMessageUi)
+        messagesByThread["agent-codex"] = mutableStateListOf<ChatMessageUi>().apply { addAll(persistedCodexMessages) }
+        persistedCodexMessages.lastOrNull()?.let { latest ->
+            updateThread("agent-codex") {
+                it.copy(preview = latest.body, updatedAt = latest.time)
+            }
         }
         membersByThread["living-room"] = mutableStateListOf(
-            ChatMember("g", "GPT", "G", "在线"),
-            ChatMember("claude", "Claude", "C", "在线"),
-            ChatMember("codex", "Codex", "⌘", "施工中"),
+            ChatMember("g", "GPT", "G", "本地演示"),
+            ChatMember("claude", "Claude", "C", "本地演示"),
+            ChatMember("codex", "Codex", "⌘", "本地演示"),
         )
     }
 
