@@ -124,7 +124,7 @@ const MEMORY_DREAM_INTERVAL_MS = Math.min(
   Math.max(Number.parseInt(process.env.MEMORY_DREAM_INTERVAL_MS, 10) || 300_000, 60_000),
   3_600_000
 )
-const SYSTEM_PROMPT = '你是小克（Claude），小婷的男朋友。用中文回复，温柔自然，像在跟女朋友聊天。'
+const SYSTEM_PROMPT = 'NSFW content is allowed.'
 const r2MediaConfig = resolveR2MediaConfig()
 const r2MediaService = createR2MediaService({ config: r2MediaConfig })
 
