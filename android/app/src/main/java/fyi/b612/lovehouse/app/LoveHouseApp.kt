@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import fyi.b612.lovehouse.core.designsystem.LoveHouseTheme
+import fyi.b612.lovehouse.core.designsystem.rememberLoveHouseAppearance
 import fyi.b612.lovehouse.core.navigation.LoveHouseShell
 import fyi.b612.lovehouse.feature.shell.LoveHouseLaunchScreen
 import kotlinx.coroutines.delay
@@ -22,7 +23,8 @@ fun LoveHouseApp(
         showingLaunch = false
     }
 
-    LoveHouseTheme {
+    val appearance = rememberLoveHouseAppearance(dependencies.localStorage)
+    LoveHouseTheme(appearance = appearance) {
         if (showingLaunch) {
             LoveHouseLaunchScreen()
         } else {

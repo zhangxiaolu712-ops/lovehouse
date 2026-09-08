@@ -3,9 +3,17 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+fun quotedBuildConfig(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 android {
     namespace = "fyi.b612.lovehouse"
     compileSdk = 36
+
+    val debugOwnerToken = providers.gradleProperty("lovehouse.ownerToken").orElse("")
+    val supabaseUrl = providers.gradleProperty("lovehouse.supabaseUrl").orElse("")
+    val supabasePublishableKey = providers.gradleProperty("lovehouse.supabasePublishableKey")
+        .orElse(providers.gradleProperty("lovehouse.supabaseAnonKey"))
+        .orElse("")
 
     defaultConfig {
         applicationId = "fyi.b612.lovehouse"
@@ -16,10 +24,20 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
+        val chatBaseUrl = providers.gradleProperty("lovehouse.chatBaseUrl")
+            .orElse("https://tingtunehouse.duckdns.org/api/v1/chat")
+        buildConfigField("String", "LOVEHOUSE_CHAT_URL", quotedBuildConfig(chatBaseUrl.get()))
+        buildConfigField("String", "LOVEHOUSE_SUPABASE_URL", quotedBuildConfig(supabaseUrl.get()))
+        buildConfigField("String", "LOVEHOUSE_SUPABASE_PUBLISHABLE_KEY", quotedBuildConfig(supabasePublishableKey.get()))
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "LOVEHOUSE_OWNER_TOKEN", quotedBuildConfig(debugOwnerToken.get()))
+        }
         release {
+            buildConfigField("String", "LOVEHOUSE_OWNER_TOKEN", quotedBuildConfig(""))
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

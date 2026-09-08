@@ -13,7 +13,7 @@ function uuidFromDigest(buffer) {
  * request headers, query parameters and body authority fields are never used.
  */
 export function createTrustedRequestId({ actor, transportIdentity, protocolRequestId, toolName }) {
-  if (!['gpt', 'claude'].includes(actor)) throw new Error('A fixed MCP actor is required')
+  if (!['gpt', 'claude', 'codex'].includes(actor)) throw new Error('A fixed MCP actor is required')
   if (!transportIdentity) throw new Error('Authenticated transport identity is required')
   if (protocolRequestId === undefined || protocolRequestId === null) {
     return crypto.randomUUID()

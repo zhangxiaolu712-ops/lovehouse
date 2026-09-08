@@ -72,6 +72,16 @@ class AndroidPermissionStatusProvider(
     private fun stateFor(capability: NativeCapability, declared: Set<String>): PermissionState {
         if (!hasRequiredHardware(capability)) return PermissionState.Unsupported
 
+        if (capability == NativeCapability.Bluetooth && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val required = listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+            if (required.any { it !in declared }) return PermissionState.NotRequested
+            return if (required.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }) {
+                PermissionState.Granted
+            } else {
+                PermissionState.Denied
+            }
+        }
+
         val permission = permissionFor(capability) ?: return when (capability) {
             NativeCapability.Photos,
             NativeCapability.Files,

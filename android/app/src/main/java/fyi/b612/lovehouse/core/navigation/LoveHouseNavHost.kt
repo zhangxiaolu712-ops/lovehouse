@@ -31,9 +31,14 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseAppShell
 import fyi.b612.lovehouse.feature.chat.ChatListScreen
 import fyi.b612.lovehouse.feature.chat.ChatSessionStore
 import fyi.b612.lovehouse.feature.chat.ChatShellScreen
+import fyi.b612.lovehouse.feature.chat.HttpCodexChatClient
+import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
 import fyi.b612.lovehouse.feature.home.HomeScreen
+import fyi.b612.lovehouse.feature.lab.LabHubScreen
 import fyi.b612.lovehouse.feature.nativelab.NativeLabScreen
+import fyi.b612.lovehouse.feature.settings.ConnectionControlScreen
 import fyi.b612.lovehouse.feature.settings.SettingsScreen
+import fyi.b612.lovehouse.feature.settings.ToolCenterLabScreen
 import fyi.b612.lovehouse.feature.shell.NavGlyph
 import fyi.b612.lovehouse.feature.shell.PlaceholderScreen
 
@@ -54,7 +59,15 @@ private fun LoveHouseContent(
     dependencies: AppDependencies,
     modifier: Modifier = Modifier,
 ) {
-    val chatStore = remember { ChatSessionStore() }
+    val chatStore = remember(dependencies.chatMessages, dependencies.capabilityRegistry) {
+        ChatSessionStore(
+            codexClient = HttpCodexChatClient(
+                ownerSession = dependencies.ownerSession,
+                allowedToolIdsFor = { dependencies.capabilityRegistry.requestedToolIds() },
+            ),
+            messageRepository = dependencies.chatMessages,
+        )
+    }
     NavHost(
         navController = navController,
         startDestination = AppDestination.Home.route,
@@ -67,6 +80,7 @@ private fun LoveHouseContent(
             HomeScreen(
                 onOpenChat = { navController.navigate(AppDestination.Chat.route) },
                 onOpenSettings = { navController.navigate(AppDestination.Settings.route) },
+                onOpenLab = { navController.navigate(AppDestination.Lab.route) },
                 localStorage = dependencies.localStorage,
             )
         }
@@ -86,7 +100,14 @@ private fun LoveHouseContent(
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ChatThread.deepLink }),
         ) { entry ->
             val threadId = entry.arguments?.getString("threadId").orEmpty()
-            ChatShellScreen(threadId = threadId, store = chatStore, onBack = { navController.popBackStack() })
+            ChatShellScreen(
+                threadId = threadId,
+                store = chatStore,
+                localStorage = dependencies.localStorage,
+                capabilityRegistry = dependencies.capabilityRegistry,
+                mediaAttachments = dependencies.mediaAttachments,
+                onBack = { navController.popBackStack() },
+            )
         }
 
         composable(
@@ -117,7 +138,50 @@ private fun LoveHouseContent(
             route = AppDestination.Settings.route,
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Settings.deepLink }),
         ) {
-            SettingsScreen(onOpenNativeLab = { navController.navigate(AppDestination.NativeLab.route) })
+            SettingsScreen(
+                localStorage = dependencies.localStorage,
+                permissionStatusProvider = dependencies.permissions,
+                ownerSession = dependencies.ownerSession,
+                capabilityRegistry = dependencies.capabilityRegistry,
+                toolConnections = dependencies.toolConnections,
+                toolConnectionProbe = dependencies.toolConnectionProbe,
+            )
+        }
+
+        composable(
+            route = AppDestination.Lab.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Lab.deepLink }),
+        ) {
+            LabHubScreen(
+                onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
+                onOpenToolCenter = { navController.navigate(AppDestination.ToolCenterLab.route) },
+                onOpenNativeLab = { navController.navigate(AppDestination.NativeLab.route) },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = AppDestination.ConnectionControl.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ConnectionControl.deepLink }),
+        ) {
+            ConnectionControlScreen(
+                ownerSession = dependencies.ownerSession,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = AppDestination.ToolCenterLab.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ToolCenterLab.deepLink }),
+        ) {
+            ToolCenterLabScreen(
+                repository = dependencies.toolCenter,
+                profiles = dependencies.toolProfiles,
+                personaId = "codex",
+                threadId = stableCodexThreadId(),
+                onBack = { navController.popBackStack() },
+                onReconnect = { navController.navigate(AppDestination.ConnectionControl.route) },
+            )
         }
 
         composable(

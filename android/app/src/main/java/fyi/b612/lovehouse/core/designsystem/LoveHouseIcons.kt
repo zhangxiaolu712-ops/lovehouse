@@ -35,7 +35,7 @@ enum class LoveHouseIcon {
     Back, Close, More, Search, Settings, Plus, Expand, Collapse, Home,
     Call, Chat, Message, Mail, Send, Contact, Bell,
     Copy, Transcribe, Play, ReadAloud, Retry, Regenerate, Translate, Reply, Forward, Delete,
-    Camera, Photo, File, Location, Mic, VoiceMessage, ModelSwitch, CatPawSend,
+    Camera, Photo, File, Location, Mic, VoiceMessage, Keyboard, ModelSwitch, CatPawSend,
     Calendar, Clock, Music, Cart, Wallet, Travel, Car, Computer, Emoji, Volume, Weather,
     Wrench, Star,
 }
@@ -50,27 +50,35 @@ fun LoveHouseIconView(
     tint: Color = LoveHouseGlass.Ink,
     opticalSize: LoveHouseIconOpticalSize = LoveHouseIconOpticalSize.Regular,
 ) {
+    val iconStyle = LocalLoveHouseAppearance.current.iconStyle
     Canvas(
         modifier.then(
             if (contentDescription == null) Modifier else Modifier.semantics { this.contentDescription = contentDescription },
         ),
     ) {
-        drawLoveHouseIcon(icon, tint, opticalSize)
+        drawLoveHouseIcon(icon, tint, opticalSize, iconStyle)
     }
 }
 
-private fun DrawScope.drawLoveHouseIcon(icon: LoveHouseIcon, tint: Color, opticalSize: LoveHouseIconOpticalSize) {
+private fun DrawScope.drawLoveHouseIcon(icon: LoveHouseIcon, tint: Color, opticalSize: LoveHouseIconOpticalSize, iconStyle: LoveHouseIconStyle) {
     val u = size.minDimension / 24f
     val ox = (size.width - 24f * u) / 2f
     val oy = (size.height - 24f * u) / 2f
     fun p(x: Float, y: Float) = Offset(ox + x * u, oy + y * u)
-    val strokeWidth = if (opticalSize == LoveHouseIconOpticalSize.Compact) 1.12.dp.toPx() else 1.55.dp.toPx()
+    val baseStroke = if (opticalSize == LoveHouseIconOpticalSize.Compact) 1.12f else 1.55f
+    val strokeWidth = (baseStroke * when (iconStyle) {
+        LoveHouseIconStyle.Original -> 1f
+        LoveHouseIconStyle.Line -> 0.78f
+        LoveHouseIconStyle.SoftGlass -> 0.9f
+        LoveHouseIconStyle.Ink -> 1.24f
+    }).dp.toPx()
+    val styledTint = if (iconStyle == LoveHouseIconStyle.SoftGlass) tint.copy(alpha = tint.alpha * 0.72f) else tint
     val line = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
-    fun segment(x1: Float, y1: Float, x2: Float, y2: Float) = drawLine(tint, p(x1, y1), p(x2, y2), strokeWidth, StrokeCap.Round)
-    fun circle(x: Float, y: Float, r: Float, filled: Boolean = false) = drawCircle(tint, r * u, p(x, y), style = if (filled) androidx.compose.ui.graphics.drawscope.Fill else line)
-    fun roundRect(x: Float, y: Float, w: Float, h: Float, r: Float = 2.5f) = drawRoundRect(tint, p(x, y), Size(w * u, h * u), CornerRadius(r * u), style = line)
-    fun strokedPath(block: Path.() -> Unit) = drawPath(Path().apply(block), tint, style = line)
-    fun arc(start: Float, sweep: Float, x: Float, y: Float, w: Float, h: Float) = drawArc(tint, start, sweep, false, p(x, y), Size(w * u, h * u), style = line)
+    fun segment(x1: Float, y1: Float, x2: Float, y2: Float) = drawLine(styledTint, p(x1, y1), p(x2, y2), strokeWidth, StrokeCap.Round)
+    fun circle(x: Float, y: Float, r: Float, filled: Boolean = false) = drawCircle(styledTint, r * u, p(x, y), style = if (filled) androidx.compose.ui.graphics.drawscope.Fill else line)
+    fun roundRect(x: Float, y: Float, w: Float, h: Float, r: Float = 2.5f) = drawRoundRect(styledTint, p(x, y), Size(w * u, h * u), CornerRadius(r * u), style = line)
+    fun strokedPath(block: Path.() -> Unit) = drawPath(Path().apply(block), styledTint, style = line)
+    fun arc(start: Float, sweep: Float, x: Float, y: Float, w: Float, h: Float) = drawArc(styledTint, start, sweep, false, p(x, y), Size(w * u, h * u), style = line)
 
     when (icon) {
         LoveHouseIcon.Back -> { segment(15.5f, 5f, 8.5f, 12f); segment(8.5f, 12f, 15.5f, 19f) }
@@ -128,6 +136,12 @@ private fun DrawScope.drawLoveHouseIcon(icon: LoveHouseIcon, tint: Color, optica
         LoveHouseIcon.File -> { strokedPath { moveTo(p(6f, 3.5f).x, p(6f, 3.5f).y); lineTo(p(14f, 3.5f).x, p(14f, 3.5f).y); lineTo(p(19f, 8.5f).x, p(19f, 8.5f).y); lineTo(p(19f, 20.5f).x, p(19f, 20.5f).y); lineTo(p(6f, 20.5f).x, p(6f, 20.5f).y); close() }; segment(14f, 3.5f, 14f, 8.5f); segment(14f, 8.5f, 19f, 8.5f) }
         LoveHouseIcon.Location -> { strokedPath { moveTo(p(12f, 21f).x, p(12f, 21f).y); cubicTo(p(9f, 16f).x, p(9f, 16f).y, p(6f, 13f).x, p(6f, 13f).y, p(6f, 9.5f).x, p(6f, 9.5f).y); cubicTo(p(6f, 5.8f).x, p(6f, 5.8f).y, p(8.6f, 3.5f).x, p(8.6f, 3.5f).y, p(12f, 3.5f).x, p(12f, 3.5f).y); cubicTo(p(15.4f, 3.5f).x, p(15.4f, 3.5f).y, p(18f, 5.8f).x, p(18f, 5.8f).y, p(18f, 9.5f).x, p(18f, 9.5f).y); cubicTo(p(18f, 13f).x, p(18f, 13f).y, p(15f, 16f).x, p(15f, 16f).y, p(12f, 21f).x, p(12f, 21f).y) }; circle(12f, 9.5f, 2.2f) }
         LoveHouseIcon.Mic, LoveHouseIcon.VoiceMessage -> { roundRect(9f, 3.5f, 6f, 11f, 3f); arc(0f, 180f, 6.5f, 8f, 11f, 9f); segment(12f, 17f, 12f, 21f); segment(8.5f, 21f, 15.5f, 21f) }
+        LoveHouseIcon.Keyboard -> {
+            roundRect(3.5f, 6f, 17f, 12f, 2.2f)
+            listOf(7f, 10.3f, 13.7f, 17f).forEach { x -> segment(x, 10f, x + 0.1f, 10f) }
+            listOf(7f, 10.3f, 13.7f, 17f).forEach { x -> segment(x, 13f, x + 0.1f, 13f) }
+            segment(8f, 16f, 16f, 16f)
+        }
         LoveHouseIcon.ModelSwitch -> { circle(8f, 12f, 3.5f); circle(16f, 12f, 3.5f); segment(11.5f, 12f, 12.5f, 12f); segment(5f, 6f, 19f, 6f) }
         LoveHouseIcon.CatPawSend -> {
             circle(6.2f, 8.2f, 1.65f); circle(10.2f, 5.5f, 1.75f); circle(14.5f, 5.7f, 1.75f); circle(18f, 8.8f, 1.65f)

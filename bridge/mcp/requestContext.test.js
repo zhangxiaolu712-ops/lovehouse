@@ -15,6 +15,7 @@ test('trusted request id is stable for a transport retry and changes across secu
   assert.equal(first, replay)
   assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   assert.notEqual(first, createTrustedRequestId({ ...input, actor: 'claude' }))
+  assert.match(createTrustedRequestId({ ...input, actor: 'codex' }), /^[0-9a-f-]{36}$/)
   assert.notEqual(first, createTrustedRequestId({ ...input, transportIdentity: 'authenticated-session-2' }))
   assert.notEqual(first, createTrustedRequestId({ ...input, protocolRequestId: 43 }))
   assert.notEqual(first, createTrustedRequestId({ ...input, toolName: 'revise' }))

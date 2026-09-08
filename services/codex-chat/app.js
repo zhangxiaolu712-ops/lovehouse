@@ -5,6 +5,7 @@ import { ChatRuntimeError, publicRuntimeError } from './errors.js'
 import { assertRuntimeAdapter } from './runtimeContract.js'
 import { SessionStore } from './sessionStore.js'
 import { InMemoryThreadBindingStore } from './threadBindingStore.js'
+import { normalizeToolPreferenceIds } from '../../bridge/tool-center/catalog.js'
 
 function json(res, status, body) {
   const payload = JSON.stringify(body)
@@ -42,15 +43,19 @@ async function readJson(req, limit = 64 * 1024) {
 }
 
 function normalizeBody(body) {
-  if (typeof body?.message !== 'string' || !body.message.trim() || body.message.length > 16_000) {
-    throw new ChatRuntimeError('STREAM_INTERRUPTED', 'message must contain 1-16000 characters', {
+  const message = typeof body?.message === 'string' ? body.message.trim() : ''
+  const attachments = Array.isArray(body?.attachments) ? body.attachments : []
+  if ((!message && attachments.length === 0) || message.length > 16_000 || attachments.length > 12) {
+    throw new ChatRuntimeError('STREAM_INTERRUPTED', 'message must contain text or up to 12 attachments', {
       stage: 'validation', status: 400,
     })
   }
   return {
     threadId: body.thread_id || body.window_id,
-    message: body.message.trim(),
+    message,
+    attachments,
     recentHistory: body.recent_history,
+    allowedToolIds: normalizeToolPreferenceIds(body.allowed_tool_ids),
   }
 }
 
@@ -180,11 +185,15 @@ export function createCodexChatHandler({
     try {
       const result = await runtime.streamEvents({
         message: input.message,
+        attachments: input.attachments,
         history: session.history,
         sessionId: runtimeSessionId,
         previousUsage: persisted?.cumulative_usage || null,
         signal: controller.signal,
         getContinuationContext: async () => session.history,
+        allowedToolIds: input.allowedToolIds,
+        authorization: req.headers.authorization,
+        threadId: input.threadId,
         onRuntimeBinding: value => {
           runtimeSessionId = value
           sessions.bind(session.key, value)
