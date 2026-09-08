@@ -79,7 +79,18 @@ export class ToolCenterService {
     const allowed = new Set(normalizeToolPreferenceIds(requestedIds))
     const tools = BUILTIN_TOOL_CATALOG
       .filter(tool => allowed.has(tool.id) && this.availability(tool).status === 'available')
-      .map(tool => ({ name: tool.mcpName, description: tool.summary, inputSchema: inputSchema(tool.id) }))
+      .map(tool => ({
+        name: tool.mcpName,
+        description: tool.summary,
+        inputSchema: inputSchema(tool.id),
+        annotations: {
+          title: tool.displayName,
+          readOnlyHint: tool.capabilityKind === 'read',
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      }))
     return Object.freeze({
       actor: 'codex',
       tools,

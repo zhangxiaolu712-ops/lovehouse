@@ -44,3 +44,10 @@ object BuiltInToolIds {
     const val EngineeringOpen = "builtin.engineering.open"
     const val LivingRoomRead = "builtin.livingroom.read"
 }
+
+internal fun eligibleToolMentions(
+    capabilities: List<ToolCapability>,
+    preferredToolIds: Set<String>,
+): List<ToolCapability> = capabilities
+    .filter { it.availability == ToolAvailability.Available && it.toolId in preferredToolIds }
+    .distinctBy { it.group }

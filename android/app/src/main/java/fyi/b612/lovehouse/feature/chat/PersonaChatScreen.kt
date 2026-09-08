@@ -8,18 +8,19 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -56,6 +57,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -91,6 +93,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
@@ -108,7 +112,9 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseIconOpticalSize
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.feature.nativelab.LocationSmokeTest
-import fyi.b612.lovehouse.feature.nativelab.readSelectedResource
+import fyi.b612.lovehouse.feature.settings.ToolAvailability
+import fyi.b612.lovehouse.feature.settings.ToolCapability
+import fyi.b612.lovehouse.feature.settings.CapabilityRegistry
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -122,6 +128,52 @@ private val PersonaAccent = Color(0xFF718E87)
 private object ChatRhythm {
     val SameSenderSpacing = 8.dp
     val GroupSpacing = 24.dp
+    val SegmentSpacing = 5.dp
+}
+
+internal fun chatMessageSpacing(sameSenderGroup: Boolean): Dp =
+    if (sameSenderGroup) ChatRhythm.SameSenderSpacing else ChatRhythm.GroupSpacing
+
+internal fun resolveRequestedToolIds(
+    message: String,
+    selectedToolIds: Set<String>,
+    enabledCapabilities: List<ToolCapability>,
+): Set<String> {
+    val enabledIds = enabledCapabilities.mapTo(linkedSetOf()) { it.toolId }
+    val requested = selectedToolIds.intersect(enabledIds).toMutableSet()
+    val mentionedLabels = Regex("@([^\\s@，。！？,.!?]+)")
+        .findAll(message)
+        .map { it.groupValues[1] }
+        .toList()
+    enabledCapabilities.groupBy { it.group }.values.forEach { group ->
+        val label = group.first().groupLabel
+        if (mentionedLabels.any { it.equals(label, ignoreCase = true) }) {
+            group.mapTo(requested) { it.toolId }
+        }
+    }
+    return requested.toSortedSet()
+}
+
+private fun mediaProgressNotice(progress: MediaAttachmentProgress): String? {
+    val prefix = if (progress.stage == MediaAttachmentStage.AllAttachmentsReady) {
+        "全部 ${progress.total} 个附件"
+    } else {
+        "附件 ${progress.index}/${progress.total}"
+    }
+    return when (progress.stage) {
+        MediaAttachmentStage.Selected -> "$prefix 已选择"
+        MediaAttachmentStage.LocalMetadataReady -> "$prefix 本地信息已就绪"
+        MediaAttachmentStage.TemporaryReferenceStarted -> "$prefix 正在建立临时媒体引用…"
+        MediaAttachmentStage.PresignStarted -> "$prefix 正在申请上传许可…"
+        MediaAttachmentStage.PresignCompleted -> "$prefix 上传许可已取得"
+        MediaAttachmentStage.TemporaryReferenceCompleted -> "$prefix 临时媒体引用已建立"
+        MediaAttachmentStage.PutStarted -> "$prefix 正在上传…"
+        MediaAttachmentStage.PutCompleted -> "$prefix 上传完成"
+        MediaAttachmentStage.AttachmentReady -> "$prefix 已就绪"
+        MediaAttachmentStage.Failed -> "$prefix 失败"
+        MediaAttachmentStage.AllAttachmentsReady -> "$prefix 已就绪"
+        MediaAttachmentStage.Finished -> null
+    }
 }
 
 internal enum class ChatBackdrop(
@@ -231,7 +283,15 @@ private enum class BubbleStyle(val title: String, val subtitle: String) {
 }
 
 @Composable
-fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: LocalStorage, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun ChatShellScreen(
+    threadId: String,
+    store: ChatSessionStore,
+    localStorage: LocalStorage,
+    capabilityRegistry: CapabilityRegistry,
+    mediaAttachments: MediaAttachmentClient,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val thread = store.thread(threadId) ?: return
     val messages = store.messages(threadId)
     val context = LocalContext.current
@@ -273,6 +333,9 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
         if (threadId == "agent-codex") selectedModel = actualRuntimeLabel
     }
     var input by remember { mutableStateOf("") }
+    var pendingAttachments by remember(threadId) { mutableStateOf<List<ChatAttachment>>(emptyList()) }
+    var uploadingAttachments by remember(threadId) { mutableStateOf(false) }
+    var requestedToolIds by remember(threadId) { mutableStateOf<Set<String>>(emptySet()) }
     var sending by remember { mutableStateOf(false) }
     var selectedMessages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var forwardingIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -283,43 +346,70 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
     var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var forwardingTaskId by remember { mutableStateOf<String?>(null) }
+    val capabilityState by capabilityRegistry.state.collectAsState()
+    val eligibleTools = if (threadId == "agent-codex") capabilityState.enabledCapabilities.distinctBy { it.group } else emptyList()
     val locationReader = remember(context.applicationContext) { LocationSmokeTest(context.applicationContext) }
     DisposableEffect(locationReader) { onDispose { locationReader.cancel() } }
-    val attachmentPhoto = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        actionNotice = uri?.let {
-            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            "照片已选择 · ${context.contentResolver.readSelectedResource(it).asDisplayText()} · 本地待发送"
-        } ?: "没有选择照片"
+    val captureLocation: () -> Unit = {
+        actionNotice = "正在获取一次当前位置…"
+        locationReader.request { result ->
+            result.snapshot?.let { snapshot ->
+                pendingAttachments = pendingAttachments.filterNot { it is ChatLocationAttachment } +
+                    ChatLocationAttachment(
+                        latitude = snapshot.latitude,
+                        longitude = snapshot.longitude,
+                        accuracyMeters = snapshot.accuracyMeters,
+                        capturedAtEpochMillis = snapshot.capturedAtEpochMillis,
+                    )
+            }
+            actionNotice = result.message.takeIf { result.snapshot == null }
+        }
     }
-    val attachmentFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        actionNotice = uri?.let {
-            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            "文件已选择 · ${context.contentResolver.readSelectedResource(it).asDisplayText()} · 本地待发送"
-        } ?: "没有选择文件"
+    val attachmentScope = rememberCoroutineScope()
+    val attachmentPhoto = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) actionNotice = "没有选择照片" else attachmentScope.launch {
+            uploadingAttachments = true
+            actionNotice = "正在保存 ${uris.size} 张照片到本地草稿…"
+            uris.forEach { runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+            runCatching { mediaAttachments.importLocal(uris, "photo") }
+                .onSuccess { imported ->
+                    pendingAttachments = pendingAttachments + imported
+                    actionNotice = "${imported.size} 张照片已保存为本地草稿"
+                }
+                .onFailure { actionNotice = it.message ?: "照片导入失败" }
+            uploadingAttachments = false
+        }
     }
-    val attachmentCamera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        actionNotice = bitmap?.let { "照片已拍摄 · ${it.width}×${it.height} · 本地待发送" } ?: "没有拍摄照片"
-    }
-    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) attachmentCamera.launch(null) else actionNotice = "相机权限未授予"
+    val attachmentFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) actionNotice = "没有选择文件" else attachmentScope.launch {
+            uploadingAttachments = true
+            actionNotice = "正在保存 ${uris.size} 个文件到本地草稿…"
+            uris.forEach { runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
+            runCatching { mediaAttachments.importLocal(uris, "file") }
+                .onSuccess { imported ->
+                    pendingAttachments = pendingAttachments + imported
+                    actionNotice = "${imported.size} 个文件已保存为本地草稿"
+                }
+                .onFailure { actionNotice = it.message ?: "文件导入失败" }
+            uploadingAttachments = false
+        }
     }
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants.values.any { it }) locationReader.request { actionNotice = it.message }
+        if (grants.values.any { it }) captureLocation()
         else actionNotice = "定位权限未授予"
     }
     val attachmentAction: (String) -> Unit = { action ->
         when (action) {
             "照片" -> attachmentPhoto.launch(arrayOf("image/*"))
             "文件" -> attachmentFile.launch(arrayOf("*/*"))
-            "相机" -> if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                attachmentCamera.launch(null)
-            } else cameraPermission.launch(Manifest.permission.CAMERA)
+            "相机" -> actionNotice = "相机原图 transport 本刀尚未接通，请先使用“照片”多选上传"
             "定位" -> if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
                 ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             ) {
-                locationReader.request { actionNotice = it.message }
+                captureLocation()
             } else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
             "表情面板已切换" -> actionNotice = "表情面板尚未接入"
+            "语音原音频不可用" -> actionNotice = "当前系统 STT 不提供可复用录音文件，且 Chat 音频附件 transport 尚未接通"
             else -> actionNotice = "其他附件类型尚未接入"
         }
     }
@@ -334,20 +424,55 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
     ChatNavigationBarTint(visualContext)
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
-        if (sending || outgoing.isBlank()) return@submit
+        if (sending || uploadingAttachments || (outgoing.isBlank() && pendingAttachments.isEmpty())) return@submit
+        val toolsForTurn = resolveRequestedToolIds(
+            message = outgoing,
+            selectedToolIds = requestedToolIds,
+            enabledCapabilities = capabilityState.enabledCapabilities,
+        )
+        val localAttachmentsForTurn = pendingAttachments
+        requestedToolIds = emptySet()
+        pendingAttachments = emptyList()
         input = ""
         if (threadId != "agent-codex") {
+            if (localAttachmentsForTurn.isNotEmpty()) {
+                pendingAttachments = localAttachmentsForTurn
+                input = outgoing
+                actionNotice = "当前窗口尚未接入真实附件 transport，未发送"
+                return@submit
+            }
             store.sendMessage(threadId, outgoing)
         } else {
             sending = true
-            actionNotice = "正在连接 Codex…"
             chatScope.launch {
-                val result = store.sendCodexMessage(threadId, outgoing) { }
-                sending = false
-                result.onSuccess {
-                    actionNotice = null
-                }.onFailure { error ->
-                    actionNotice = error.message ?: "发送失败"
+                try {
+                    val attachmentsForTurn = try {
+                        mediaAttachments.makeEphemeral(localAttachmentsForTurn) { progress ->
+                            withContext(Dispatchers.Main.immediate) {
+                                mediaProgressNotice(progress)?.let { actionNotice = it }
+                            }
+                        }
+                    } catch (error: Exception) {
+                        pendingAttachments = localAttachmentsForTurn
+                        requestedToolIds = toolsForTurn
+                        actionNotice = error.message ?: "媒体 transport 尚不可用"
+                        return@launch
+                    }
+                    actionNotice = "正在连接 Codex…"
+                    Log.i(
+                        "LoveHouseMedia",
+                        "canonical_turn_send attachments=${attachmentsForTurn.size} tools=${toolsForTurn.size}",
+                    )
+                    val result = store.sendCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { }
+                    result.onSuccess { response ->
+                        actionNotice = response.evidence.toolCalls.lastOrNull()?.let { call ->
+                            "${response.evidence.requestedToolIds.sorted().joinToString()} · MCP ${call.name} · ${call.status}"
+                        }
+                    }.onFailure { error ->
+                        actionNotice = error.message ?: "发送失败"
+                    }
+                } finally {
+                    sending = false
                 }
             }
         }
@@ -407,8 +532,7 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
                         val endsGroup = next == null || next.author != message.author || next.mine != message.mine
                         val spacingAfter = when {
                             next == null -> 0.dp
-                            endsGroup -> ChatRhythm.GroupSpacing
-                            else -> ChatRhythm.SameSenderSpacing
+                            else -> chatMessageSpacing(!endsGroup)
                         }
                         MessageBubble(
                             message = message,
@@ -462,11 +586,23 @@ fun ChatShellScreen(threadId: String, store: ChatSessionStore, localStorage: Loc
                 forwardingIds = selectedMessages; panel = PersonaPanel.ForwardTarget
             } else PersonaComposer(
                 value = input,
+                attachments = pendingAttachments,
                 visualContext = visualContext,
                 onValueChange = { input = it },
+                onRemoveAttachment = { target -> pendingAttachments = pendingAttachments - target },
                 onSend = { submitMessage(input) },
-                onSendTranscript = submitMessage,
                 onToolAction = attachmentAction,
+                eligibleTools = eligibleTools,
+                onToolMention = { tool ->
+                    val mention = "@${tool.groupLabel}"
+                    if (!input.contains(mention)) input = listOf(mention, input).filter(String::isNotBlank).joinToString(" ")
+                    val selectedForGroup = capabilityState.enabledCapabilities
+                        .filter { it.group == tool.group }
+                        .mapTo(linkedSetOf()) { it.toolId }
+                    val merged = requestedToolIds + selectedForGroup
+                    requestedToolIds = merged
+                    actionNotice = "本轮请求 ${merged.sorted().joinToString()}；Bridge 仍会重新校验权限与作用域"
+                },
                 onHeightChanged = {
                     if (followLatest && messages.isNotEmpty()) chatScope.launch { listState.scrollToItem(messages.lastIndex) }
                 },
@@ -571,8 +707,8 @@ internal fun ChatAtmosphere(visualContext: ChatVisualContext) {
         Box(
             Modifier.fillMaxWidth().fillMaxHeight(.22f).align(Alignment.TopCenter).background(
                 Brush.verticalGradient(
-                    0f to visualContext.topTint.copy(alpha = .72f),
-                    .42f to visualContext.topTint.copy(alpha = .42f),
+                    0f to Color.White.copy(alpha = .34f),
+                    .42f to visualContext.topTint.copy(alpha = .18f),
                     1f to Color.Transparent,
                 ),
             ),
@@ -581,8 +717,8 @@ internal fun ChatAtmosphere(visualContext: ChatVisualContext) {
             Modifier.fillMaxWidth().fillMaxHeight(.28f).align(Alignment.BottomCenter).background(
                 Brush.verticalGradient(
                     0f to Color.Transparent,
-                    .62f to visualContext.bottomTint.copy(alpha = .42f),
-                    1f to visualContext.bottomTint.copy(alpha = .74f),
+                    .62f to visualContext.bottomTint.copy(alpha = .16f),
+                    1f to Color.White.copy(alpha = .36f),
                 ),
             ),
         )
@@ -725,21 +861,46 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
     }
 }
 
-@Composable private fun ThoughtRow(duration: String, summary: String) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.clickable { expanded = !expanded }.padding(top = 3.dp, bottom = 1.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("思考过程 $duration", color = PersonaMuted, fontSize = 9.sp, fontWeight = FontWeight.Medium)
-            LoveHouseIconView(
-                if (expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
-                null,
-                Modifier.padding(start = 4.dp).size(11.dp),
-                PersonaMuted,
-                LoveHouseIconOpticalSize.Compact,
-            )
-        }
-        if (expanded) {
-            Text(summary, Modifier.widthIn(max = 250.dp).padding(top = 3.dp), color = PersonaMuted, fontSize = 8.5.sp, lineHeight = 13.sp)
+@Composable private fun ProcessTimeline(events: List<ChatProcessEvent>) {
+    var expandedId by remember(events) { mutableStateOf<String?>(null) }
+    Column(Modifier.padding(top = 3.dp, bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        events.forEachIndexed { index, event ->
+            val expanded = expandedId == event.id
+            Row(
+                Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+                    expandedId = if (expanded) null else event.id
+                }.padding(vertical = 2.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier.padding(top = 3.dp).size(7.dp).background(
+                            when (event.status) {
+                                ChatProcessStatus.Succeeded -> PersonaAccent
+                                ChatProcessStatus.Failed -> MaterialTheme.colorScheme.error.copy(alpha = .72f)
+                                ChatProcessStatus.Running -> PersonaAccent.copy(alpha = .48f)
+                            },
+                            CircleShape,
+                        ),
+                    )
+                    if (index != events.lastIndex) Box(Modifier.width(1.dp).height(15.dp).background(PersonaAccent.copy(alpha = .22f)))
+                }
+                Column(Modifier.padding(start = 7.dp).widthIn(max = 250.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(event.title, color = PersonaInk.copy(alpha = .82f), fontSize = 8.5.sp)
+                        if (event.detail != null) LoveHouseIconView(
+                            if (expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
+                            null,
+                            Modifier.padding(start = 3.dp).size(9.dp),
+                            PersonaMuted,
+                            LoveHouseIconOpticalSize.Compact,
+                        )
+                    }
+                    if (expanded) event.detail?.let { detail ->
+                        Text(detail, Modifier.padding(top = 2.dp), color = PersonaMuted, fontSize = 8.sp, lineHeight = 11.sp)
+                    }
+                }
+            }
         }
     }
 }
@@ -778,8 +939,8 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
                 Text(message.author, color = if (message.mine) PersonaMuted else PersonaAccent, fontSize = 8.5.sp, fontWeight = FontWeight.Medium)
                 if (!message.mine) Text(message.time, color = PersonaMuted, fontSize = 7.5.sp)
             }
-            if (!message.mine && message.thoughtDuration != null && message.thoughtSummary != null) {
-                ThoughtRow(message.thoughtDuration, message.thoughtSummary)
+            if (!message.mine && message.processEvents.isNotEmpty()) {
+                ProcessTimeline(message.processEvents)
             }
             val bubbleModifier = Modifier.combinedClickable(
                 onClick = {
@@ -795,13 +956,25 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
             if (message.kind == ChatMessageKind.Text) {
                 Column(
                     Modifier.padding(top = if (startsGroup) 1.dp else 0.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(ChatRhythm.SegmentSpacing),
                     horizontalAlignment = if (message.mine) Alignment.End else Alignment.Start,
                 ) {
-                    message.body.naturalMessageSegments().forEach { segment ->
+                    if (message.attachments.isNotEmpty()) {
+                        MessageAttachmentSegments(message, color, bubbleBorder, bubbleModifier)
+                    }
+                    message.body.takeIf(String::isNotBlank)?.naturalMessageSegments()?.forEach { segment ->
                         Surface(modifier = bubbleModifier, shape = RoundedCornerShape(15.dp), color = color, border = bubbleBorder) {
                             Text(segment, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = PersonaInk, fontSize = 11.5.sp, lineHeight = 17.sp)
                         }
+                    }
+                    message.deliveryError?.let { error ->
+                        Text(
+                            error,
+                            Modifier.padding(top = 3.dp, start = 2.dp, end = 2.dp),
+                            color = MaterialTheme.colorScheme.error.copy(alpha = .82f),
+                            fontSize = 8.sp,
+                            lineHeight = 11.sp,
+                        )
                     }
                 }
             } else Surface(
@@ -882,21 +1055,27 @@ internal fun String.naturalMessageSegments(): List<String> =
 @Composable
 private fun PersonaComposer(
     value: String,
+    attachments: List<ChatAttachment>,
     visualContext: ChatVisualContext,
     onValueChange: (String) -> Unit,
+    onRemoveAttachment: (ChatAttachment) -> Unit,
     onSend: () -> Unit,
-    onSendTranscript: (String) -> Unit,
     onToolAction: (String) -> Unit,
+    eligibleTools: List<ToolCapability>,
+    onToolMention: (ToolCapability) -> Unit,
     onHeightChanged: () -> Unit,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var showAttachments by remember { mutableStateOf(false) }
     var inputFocused by remember { mutableStateOf(false) }
     var composerExpanded by remember { mutableStateOf(false) }
     var imeShownDuringCurrentFocus by remember { mutableStateOf(false) }
     var voiceState by remember { mutableStateOf(ChatVoiceInputState()) }
+    var voiceMode by remember { mutableStateOf(ChatVoiceComposerMode.Text) }
     val voiceAvailable = remember(context) { android.speech.SpeechRecognizer.isRecognitionAvailable(context) }
     val voiceController = remember(context, voiceAvailable) {
         if (voiceAvailable) ChatVoiceInputController(context) { voiceState = it } else null
@@ -905,14 +1084,40 @@ private fun PersonaComposer(
     val microphonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) voiceState = ChatVoiceInputState(error = "需要麦克风权限才能语音输入")
     }
-    val startVoiceInput = {
+    val startVoiceInput: () -> Unit = {
         when {
-            !voiceAvailable -> voiceState = ChatVoiceInputState(error = "当前设备没有可用的系统语音识别服务")
+            !voiceAvailable -> voiceState = ChatVoiceInputState(error = STT_UNAVAILABLE_MESSAGE)
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> {
-                voiceState = ChatVoiceInputState(error = "授权后请再次长按输入区")
+                voiceState = ChatVoiceInputState(error = "授权后请再次按住说话")
                 microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
             }
-            else -> voiceController?.start()
+            else -> {
+                voiceMode = transitionVoiceComposer(voiceMode, ChatVoiceComposerAction.Press)
+                voiceController?.start()
+            }
+        }
+        Unit
+    }
+    LaunchedEffect(voiceState.finished, voiceState.transcript) {
+        voiceState.composerTranscriptOrNull()?.let { transcript ->
+            onValueChange(transcript)
+            voiceMode = transitionVoiceComposer(
+                voiceMode,
+                ChatVoiceComposerAction.ReleaseWithTranscript,
+                hasTranscript = true,
+            )
+            voiceController?.dismiss()
+        }
+    }
+    LaunchedEffect(value) {
+        if (value.isBlank() && voiceMode == ChatVoiceComposerMode.Review) {
+            voiceMode = transitionVoiceComposer(voiceMode, ChatVoiceComposerAction.SendOrClear)
+        }
+    }
+    LaunchedEffect(voiceState.listening, voiceState.processing) {
+        if (voiceState.listening || voiceState.processing) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
         }
     }
     LaunchedEffect(inputFocused, imeVisible) {
@@ -932,10 +1137,26 @@ private fun PersonaComposer(
         }
     }
     Box(
-        modifier = Modifier.fillMaxWidth().onSizeChanged { onHeightChanged() }.padding(horizontal = 12.dp, vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().onSizeChanged { onHeightChanged() }.padding(
+            start = 12.dp,
+            end = 12.dp,
+            top = 2.dp,
+            bottom = if (imeVisible) 2.dp else 14.dp,
+        ),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (voiceState.listening || voiceState.processing || voiceState.transcript.isNotBlank() || voiceState.error != null) {
+            attachments.forEach { attachment ->
+                ChatAttachmentDraft(attachment, visualContext) { onRemoveAttachment(attachment) }
+            }
+            if (voiceMode == ChatVoiceComposerMode.Review) {
+                VoiceDraftReview(
+                    transcript = value,
+                    onDismiss = {
+                        voiceMode = transitionVoiceComposer(voiceMode, ChatVoiceComposerAction.Cancel)
+                        onValueChange("")
+                    },
+                )
+            } else if (voiceState.listening || voiceState.processing || voiceState.transcript.isNotBlank() || voiceState.error != null) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(15.dp),
@@ -948,6 +1169,7 @@ private fun PersonaComposer(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 when {
+                                    voiceState.finished && voiceState.transcript.isNotBlank() -> "语音转写"
                                     voiceState.transcript.isNotBlank() -> voiceState.transcript
                                     voiceState.listening -> "正在聆听…"
                                     voiceState.processing -> "正在整理转写…"
@@ -963,25 +1185,10 @@ private fun PersonaComposer(
                                 voiceState = ChatVoiceInputState()
                             }
                         }
-                        voiceState.error?.takeIf { voiceState.transcript.isNotBlank() }?.let { error ->
+                        voiceState.error?.let { error ->
                             Text(error, Modifier.padding(top = 3.dp), color = PersonaMuted, fontSize = 8.5.sp)
                         }
-                        if (voiceState.finished && voiceState.transcript.isNotBlank()) {
-                            Row(Modifier.fillMaxWidth().padding(top = 5.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                                Text("发送语音 · 待接入", color = PersonaMuted, fontSize = 8.5.sp)
-                                Text(
-                                    "发送文字",
-                                    Modifier.padding(start = 7.dp).clip(RoundedCornerShape(10.dp)).clickable {
-                                        val transcript = voiceState.transcript
-                                        voiceController?.dismiss()
-                                        onSendTranscript(transcript)
-                                    }.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    color = PersonaInk,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                            }
-                        } else if (voiceState.listening) {
+                        if (voiceState.listening) {
                             Text("松开结束语音输入", Modifier.padding(top = 3.dp), color = PersonaMuted, fontSize = 8.5.sp)
                         }
                     }
@@ -995,37 +1202,34 @@ private fun PersonaComposer(
             ) {
                 val composerTextStyle = androidx.compose.ui.text.TextStyle(color = PersonaInk, fontSize = 12.sp, lineHeight = 17.sp)
                 ComposerContentLayout(
-                    expanded = composerExpanded,
+                    modifier = Modifier.padding(horizontal = 5.dp),
+                    expanded = composerExpanded && voiceMode != ChatVoiceComposerMode.VoiceReady && voiceMode != ChatVoiceComposerMode.Listening,
                     attachment = {
                         ComposerAttachmentButton(
                             expanded = showAttachments,
                             visualContext = visualContext,
                             onExpandedChange = { showAttachments = it },
                             onToolAction = onToolAction,
+                            eligibleTools = eligibleTools,
+                            onToolMention = onToolMention,
                         )
                     },
                     textField = {
-                    BasicTextField(
-                        value = value,
-                        onValueChange = onValueChange,
+                        if (voiceMode == ChatVoiceComposerMode.VoiceReady || voiceMode == ChatVoiceComposerMode.Listening) {
+                            PushToTalkArea(
+                                active = voiceState.listening || voiceState.processing,
+                                onPressStart = startVoiceInput,
+                                onPressEnd = { voiceController?.stop(); Unit },
+                            )
+                        } else BasicTextField(
+                            value = value,
+                            onValueChange = onValueChange,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp, max = 96.dp)
                                 .onFocusChanged { focusState ->
                                     if (focusState.isFocused && !inputFocused) composerExpanded = true
                                     if (!focusState.isFocused) composerExpanded = false
                                     inputFocused = focusState.isFocused
                                 }
-                            .pointerInput(voiceController) {
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    val longPress = awaitLongPressOrCancellation(down.id)
-                                    if (longPress != null) {
-                                        longPress.consume()
-                                        startVoiceInput()
-                                        waitForUpOrCancellation()
-                                        voiceController?.stop()
-                                    }
-                                }
-                            }
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                             textStyle = composerTextStyle,
                             singleLine = false,
@@ -1038,7 +1242,23 @@ private fun PersonaComposer(
                         )
                     },
                     emoji = { ChatIconButton(LoveHouseIcon.Emoji, "表情", touchSize = 34.dp) { onToolAction("表情面板已切换") } },
-                    send = { PawSendButton(enabled = value.isNotBlank(), onClick = onSend) },
+                    send = {
+                        if (voiceMode == ChatVoiceComposerMode.VoiceReady || voiceMode == ChatVoiceComposerMode.Listening) {
+                            ChatIconButton(LoveHouseIcon.Keyboard, "返回文字输入", touchSize = 40.dp) {
+                                voiceController?.dismiss()
+                                voiceState = ChatVoiceInputState()
+                                voiceMode = transitionVoiceComposer(voiceMode, ChatVoiceComposerAction.Cancel)
+                            }
+                        } else if (value.isBlank() && attachments.isEmpty()) {
+                            ChatIconButton(LoveHouseIcon.Mic, "进入语音输入", touchSize = 40.dp) {
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
+                                voiceMode = transitionVoiceComposer(voiceMode, ChatVoiceComposerAction.EnterVoice)
+                            }
+                        } else {
+                            PawSendButton(enabled = true, onClick = onSend)
+                        }
+                    },
                 )
             }
         }
@@ -1047,6 +1267,7 @@ private fun PersonaComposer(
 
 @Composable
 private fun ComposerContentLayout(
+    modifier: Modifier = Modifier,
     expanded: Boolean,
     attachment: @Composable () -> Unit,
     textField: @Composable () -> Unit,
@@ -1054,7 +1275,7 @@ private fun ComposerContentLayout(
     send: @Composable () -> Unit,
 ) {
     Layout(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         content = { attachment(); textField(); emoji(); send() },
     ) { measurables, constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
@@ -1093,9 +1314,12 @@ private fun ComposerAttachmentButton(
     visualContext: ChatVisualContext,
     onExpandedChange: (Boolean) -> Unit,
     onToolAction: (String) -> Unit,
+    eligibleTools: List<ToolCapability>,
+    onToolMention: (ToolCapability) -> Unit,
 ) {
+    var toolMode by remember { mutableStateOf(false) }
     Box {
-        ChatIconButton(LoveHouseIcon.Plus, "添加附件", touchSize = 34.dp) { onExpandedChange(true) }
+        ChatIconButton(LoveHouseIcon.Plus, "添加附件", touchSize = 34.dp) { toolMode = false; onExpandedChange(true) }
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
@@ -1106,12 +1330,28 @@ private fun ComposerAttachmentButton(
             shadowElevation = 0.dp,
             border = BorderStroke(.5.dp, visualContext.popupBorder),
         ) {
-            listOf(
+            val rows = if (toolMode) {
+                eligibleTools.map { LoveHouseIcon.Wrench to "@${it.groupLabel}" }
+            } else listOf(
                 LoveHouseIcon.Camera to "相机", LoveHouseIcon.Photo to "照片", LoveHouseIcon.File to "文件",
-                LoveHouseIcon.Location to "定位", LoveHouseIcon.More to "其他",
-            ).forEach { (icon, item) ->
+                LoveHouseIcon.Location to "定位", LoveHouseIcon.Wrench to "工具", LoveHouseIcon.More to "其他",
+            )
+            if (toolMode && rows.isEmpty()) {
+                Text("没有已启用且可用的工具", Modifier.padding(horizontal = 10.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp)
+            }
+            rows.forEach { (icon, item) ->
                 Row(
-                    Modifier.fillMaxWidth().clickable { onExpandedChange(false); onToolAction(item) }
+                    Modifier.fillMaxWidth().clickable {
+                        if (item == "工具") toolMode = true
+                        else if (toolMode) {
+                            eligibleTools.firstOrNull { "@${it.groupLabel}" == item }?.let(onToolMention)
+                            onExpandedChange(false)
+                            toolMode = false
+                        } else {
+                            onExpandedChange(false)
+                            onToolAction(item)
+                        }
+                    }
                         .padding(horizontal = 10.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1321,6 +1561,252 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
         Text(if (query.isEmpty()) "输入关键词开始查找" else "找到 ${results.size} 条本机真实消息", Modifier.padding(19.dp), color = PersonaMuted, fontSize = 9.sp)
         results.take(8).forEach { message ->
             Text("${message.author} · ${message.time}\n${message.body}", Modifier.padding(horizontal = 19.dp, vertical = 6.dp), color = PersonaInk, fontSize = 9.sp, maxLines = 3)
+        }
+    }
+}
+
+@Composable
+private fun MessageAttachmentSegments(
+    message: ChatMessageUi,
+    color: Color,
+    border: BorderStroke?,
+    messageModifier: Modifier,
+) {
+    attachmentSegments(message.attachments).forEach { segment ->
+        when (segment.kind) {
+            ChatAttachmentSegmentKind.Photos -> PhotoAttachmentBubble(segment.attachments.filterIsInstance<ChatMediaAttachment>(), color, border, messageModifier)
+            ChatAttachmentSegmentKind.Files -> FileAttachmentBubble(message.messageId, segment.attachments.filterIsInstance<ChatMediaAttachment>(), color, border, messageModifier)
+            ChatAttachmentSegmentKind.Location -> LocationAttachmentBubble(segment.attachments.single() as ChatLocationAttachment, color, border, messageModifier)
+            ChatAttachmentSegmentKind.Audio -> AttachmentUnavailableBubble("语音附件 transport 尚未接通", color, border)
+        }
+    }
+}
+
+@Composable
+private fun PhotoAttachmentBubble(
+    photos: List<ChatMediaAttachment>,
+    color: Color,
+    border: BorderStroke?,
+    messageModifier: Modifier,
+) {
+    val pagerState = rememberPagerState(pageCount = { photos.size })
+    Box(Modifier.width(232.dp).height(164.dp)) {
+        if (photos.size > 1) {
+            Surface(
+                Modifier.fillMaxSize().padding(start = 14.dp, top = 8.dp),
+                RoundedCornerShape(15.dp), color.copy(alpha = .56f), border = border,
+            ) {}
+            Surface(
+                Modifier.fillMaxSize().padding(start = 7.dp, top = 4.dp, end = 7.dp, bottom = 4.dp),
+                RoundedCornerShape(15.dp), color.copy(alpha = .72f), border = border,
+            ) {}
+        }
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize().padding(end = if (photos.size > 1) 14.dp else 0.dp),
+        ) { page ->
+            val attachment = photos[page]
+            val availability = attachment.resolvedAvailability()
+            val image by produceState<ImageBitmap?>(null, attachment.localCachePath) {
+                value = withContext(Dispatchers.IO) {
+                    attachment.localCachePath?.takeIf { availability == ChatAttachmentAvailability.AVAILABLE }
+                        ?.let(BitmapFactory::decodeFile)?.asImageBitmap()
+                }
+            }
+            Surface(messageModifier.fillMaxSize(), RoundedCornerShape(15.dp), color, border = border) {
+                if (image != null) Image(
+                    bitmap = image!!,
+                    contentDescription = attachment.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                ) else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(attachmentAvailabilityLabel(availability, "照片 · ${attachment.name}"), color = PersonaMuted, fontSize = 9.sp, maxLines = 2)
+                }
+            }
+        }
+        if (photos.size > 1) Surface(
+            modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = .38f),
+        ) { Text("${pagerState.currentPage + 1}/${photos.size}", Modifier.padding(horizontal = 7.dp, vertical = 3.dp), color = Color.White, fontSize = 8.sp) }
+    }
+}
+
+@Composable
+private fun FileAttachmentBubble(
+    messageId: String,
+    files: List<ChatMediaAttachment>,
+    color: Color,
+    border: BorderStroke?,
+    messageModifier: Modifier,
+) {
+    var expanded by remember(messageId) { mutableStateOf(false) }
+    Surface(
+        modifier = messageModifier.animateContentSize().clickable(enabled = files.size > 1) { expanded = !expanded },
+        shape = RoundedCornerShape(15.dp), color = color, border = border,
+    ) {
+        Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            (if (expanded) files else files.take(1)).forEachIndexed { index, file ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    if (index == 0 && files.size > 1) Surface(shape = CircleShape, color = PersonaAccent.copy(alpha = .18f)) {
+                        Text(files.size.toString(), Modifier.padding(horizontal = 6.dp, vertical = 3.dp), color = PersonaAccent, fontSize = 8.dp.value.sp)
+                    }
+                    LoveHouseIconView(LoveHouseIcon.File, null, Modifier.size(16.dp), PersonaAccent)
+                    Column(Modifier.widthIn(max = 210.dp)) {
+                        Text(file.name, color = PersonaInk, fontSize = 10.sp, maxLines = 1)
+                        Text(
+                            "${formatAttachmentSize(file.sizeBytes)} · ${attachmentAvailabilityLabel(file.resolvedAvailability(), file.lifecycle.name)}",
+                            color = PersonaMuted,
+                            fontSize = 8.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentUnavailableBubble(label: String, color: Color, border: BorderStroke?) {
+    Surface(shape = RoundedCornerShape(15.dp), color = color, border = border) {
+        Text(label, Modifier.padding(horizontal = 11.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp)
+    }
+}
+
+private fun attachmentAvailabilityLabel(
+    availability: ChatAttachmentAvailability,
+    availableLabel: String,
+): String = when (availability) {
+    ChatAttachmentAvailability.AVAILABLE -> availableLabel
+    ChatAttachmentAvailability.UPLOADING -> "正在建立临时引用"
+    ChatAttachmentAvailability.FAILED -> "发送失败"
+    ChatAttachmentAvailability.EXPIRED -> "已过期"
+    ChatAttachmentAvailability.LOCAL_MISSING -> "本地文件不可用"
+    ChatAttachmentAvailability.UNAVAILABLE -> "暂不可用"
+}
+
+@Composable
+private fun LocationAttachmentBubble(
+    location: ChatLocationAttachment,
+    color: Color,
+    border: BorderStroke?,
+    messageModifier: Modifier,
+) {
+    Surface(messageModifier, RoundedCornerShape(15.dp), color, border = border) {
+        Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LoveHouseIconView(LoveHouseIcon.Location, null, Modifier.size(17.dp), PersonaAccent)
+            Column {
+                Text(location.address ?: "位置快照", color = PersonaInk, fontSize = 10.sp)
+                Text(location.displaySummary(), color = PersonaMuted, fontSize = 8.sp)
+            }
+        }
+    }
+}
+
+private fun formatAttachmentSize(bytes: Long): String = when {
+    bytes < 1_024 -> "$bytes B"
+    bytes < 1_048_576 -> String.format(java.util.Locale.CHINA, "%.1f KB", bytes / 1_024.0)
+    else -> String.format(java.util.Locale.CHINA, "%.1f MB", bytes / 1_048_576.0)
+}
+
+@Composable
+private fun ChatAttachmentDraft(
+    attachment: ChatAttachment,
+    visualContext: ChatVisualContext,
+    onRemove: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = visualContext.popupGlass,
+        border = BorderStroke(.5.dp, visualContext.popupBorder),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            Modifier.padding(start = 11.dp, end = 5.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val icon = when (attachment) {
+                is ChatLocationAttachment -> LoveHouseIcon.Location
+                is ChatMediaAttachment -> if (attachment.type == "photo") LoveHouseIcon.Photo else LoveHouseIcon.File
+            }
+            LoveHouseIconView(icon, null, Modifier.size(16.dp), PersonaAccent)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    when (attachment.type) { "photo" -> "照片"; "file" -> "文件"; else -> "当前位置" },
+                    color = PersonaInk, fontSize = 10.sp, fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    when (attachment) {
+                        is ChatMediaAttachment -> attachmentAvailabilityLabel(attachment.resolvedAvailability(), attachment.displaySummary())
+                        else -> attachment.displaySummary()
+                    },
+                    color = PersonaMuted,
+                    fontSize = 8.5.sp,
+                    maxLines = 1,
+                )
+            }
+            ChatIconButton(LoveHouseIcon.Close, "移除附件", iconSize = 13.dp, touchSize = 30.dp, onClick = onRemove)
+        }
+    }
+}
+
+@Composable
+private fun PushToTalkArea(
+    active: Boolean,
+    onPressStart: () -> Unit,
+    onPressEnd: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 36.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = if (active) .25f else .12f))
+            .pointerInput(onPressStart, onPressEnd) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    onPressStart()
+                    waitForUpOrCancellation()
+                    onPressEnd()
+                }
+            }
+            .semantics { contentDescription = "按住说话" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (active) "松开结束" else "按住说话",
+            color = if (active) PersonaAccent else PersonaInk.copy(alpha = .72f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun VoiceDraftReview(
+    transcript: String,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = Color.White.copy(alpha = .22f),
+        border = BorderStroke(.5.dp, Color.White.copy(alpha = .40f)),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("文字", color = PersonaAccent, fontSize = 9.sp, fontWeight = FontWeight.Medium)
+            Text("语音 · 当前系统 STT 不提供原音频", Modifier.weight(1f), color = PersonaMuted, fontSize = 8.5.sp)
+            ChatIconButton(LoveHouseIcon.Close, "取消语音草稿", iconSize = 13.dp, touchSize = 28.dp, onClick = onDismiss)
         }
     }
 }

@@ -25,8 +25,8 @@ object LoveHouseGlass {
     val Border = Color.White.copy(alpha = 0.70f)
     val StrongBorder = Color.White.copy(alpha = 0.82f)
     val Shadow = Color(0x21614641)
-    val Ink = Color(0xFF4B504D)
-    val MutedInk = Color(0xFF7C8580)
+    val Ink = Color(0xFF35413E)
+    val MutedInk = Color(0xFF5F6C68)
 }
 
 @Composable

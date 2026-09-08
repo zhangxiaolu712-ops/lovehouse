@@ -441,6 +441,7 @@ installClientApi(app, {
   projectChecklistStore,
   runtimeStatusProvider,
   toolCenterService,
+  mediaService: r2MediaService,
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {

@@ -16,10 +16,19 @@ import fyi.b612.lovehouse.core.storage.DataStoreLocalStorage
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.feature.chat.LocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.SQLiteLocalChatMessageRepository
+import fyi.b612.lovehouse.feature.chat.MediaAttachmentClient
+import fyi.b612.lovehouse.feature.chat.HttpMediaAttachmentClient
 import fyi.b612.lovehouse.feature.settings.AndroidToolProfilePreferenceStore
+import fyi.b612.lovehouse.feature.settings.AndroidCapabilityRegistry
+import fyi.b612.lovehouse.feature.settings.CapabilityRegistry
+import fyi.b612.lovehouse.feature.settings.AndroidToolConnectionStore
+import fyi.b612.lovehouse.feature.settings.HttpToolConnectionProbe
 import fyi.b612.lovehouse.feature.settings.HttpToolCenterRepository
+import fyi.b612.lovehouse.feature.settings.ToolConnectionProbe
+import fyi.b612.lovehouse.feature.settings.ToolConnectionStore
 import fyi.b612.lovehouse.feature.settings.ToolCenterRepository
 import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
+import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
 
 data class AppDependencies(
     val permissions: PermissionStatusProvider,
@@ -27,8 +36,12 @@ data class AppDependencies(
     val systemStatus: SystemStatusProvider,
     val chatMessages: LocalChatMessageRepository,
     val ownerSession: OwnerSessionStore,
+    val mediaAttachments: MediaAttachmentClient,
     val toolCenter: ToolCenterRepository,
     val toolProfiles: ToolProfilePreferenceStore,
+    val capabilityRegistry: CapabilityRegistry,
+    val toolConnections: ToolConnectionStore,
+    val toolConnectionProbe: ToolConnectionProbe,
 )
 
 fun createAppDependencies(context: Context): AppDependencies {
@@ -42,14 +55,20 @@ fun createAppDependencies(context: Context): AppDependencies {
         ),
         debugBootstrapToken = BuildConfig.LOVEHOUSE_OWNER_TOKEN.takeIf { BuildConfig.DEBUG },
     )
+    val toolCenter = HttpToolCenterRepository(ownerSession = ownerSession)
+    val toolProfiles = AndroidToolProfilePreferenceStore(appContext)
     return AppDependencies(
         permissions = permissions,
         localStorage = DataStoreLocalStorage(appContext),
         systemStatus = DefaultSystemStatusProvider(permissions),
         chatMessages = SQLiteLocalChatMessageRepository(appContext),
         ownerSession = ownerSession,
-        toolCenter = HttpToolCenterRepository(ownerSession = ownerSession),
-        toolProfiles = AndroidToolProfilePreferenceStore(appContext),
+        mediaAttachments = HttpMediaAttachmentClient(appContext, ownerSession),
+        toolCenter = toolCenter,
+        toolProfiles = toolProfiles,
+        capabilityRegistry = AndroidCapabilityRegistry(toolCenter, toolProfiles, "codex", stableCodexThreadId()),
+        toolConnections = AndroidToolConnectionStore(appContext),
+        toolConnectionProbe = HttpToolConnectionProbe(),
     )
 }
 

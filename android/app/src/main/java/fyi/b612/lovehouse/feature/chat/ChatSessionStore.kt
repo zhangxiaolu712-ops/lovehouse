@@ -48,7 +48,18 @@ data class ChatMessageUi(
     val receivedAtEpochMillis: Long? = null,
     val runtime: String? = null,
     val adapterId: String? = null,
+    val deliveryError: String? = null,
+    val attachments: List<ChatAttachment> = emptyList(),
+    val processEvents: List<ChatProcessEvent> = emptyList(),
 )
+
+internal fun mergeProcessEvent(
+    events: List<ChatProcessEvent>,
+    event: ChatProcessEvent,
+): List<ChatProcessEvent> {
+    val index = events.indexOfFirst { it.id == event.id }
+    return if (index < 0) events + event else events.toMutableList().also { it[index] = event }
+}
 
 class ChatSessionStore(
     private val codexClient: CodexChatClient = HttpCodexChatClient(),
@@ -122,8 +133,16 @@ class ChatSessionStore(
         updateThread(threadId) { it.copy(preview = body, updatedAt = "刚刚") }
     }
 
-    suspend fun sendCodexMessage(threadId: String, body: String, onText: (String) -> Unit): Result<CodexChatResult> {
-        if (body.isBlank()) return Result.failure(CodexChatException("消息不能为空"))
+    suspend fun sendCodexMessage(
+        threadId: String,
+        body: String,
+        requestedToolIds: Set<String> = emptySet(),
+        attachments: List<ChatAttachment> = emptyList(),
+        onText: (String) -> Unit,
+    ): Result<CodexChatResult> {
+        if (body.isBlank() && attachments.isEmpty()) return Result.failure(CodexChatException("消息不能为空"))
+        val displayBody = body.trim()
+        val previewBody = displayBody.ifEmpty { attachments.joinToString(" · ", transform = ChatAttachment::displaySummary) }
         val canonicalThreadId = stableCodexThreadId()
         val userId = "sent-${UUID.randomUUID()}"
         val createdAt = now()
@@ -132,31 +151,68 @@ class ChatSessionStore(
             threadId = canonicalThreadId,
             role = LocalChatRole.User,
             sender = "owner",
-            content = body,
+            content = displayBody,
+            attachments = attachments,
             createdAtEpochMillis = createdAt,
             status = LocalChatDeliveryStatus.Sending,
         )
         val assistantId = "codex-${UUID.randomUUID()}"
         var userVisible = false
+        var assistantText = ""
+        val processEvents = mutableListOf<ChatProcessEvent>()
+        fun updateProcess(event: ChatProcessEvent) {
+            val updated = mergeProcessEvent(processEvents, event)
+            processEvents.clear()
+            processEvents.addAll(updated)
+            val current = messages(threadId).firstOrNull { it.messageId == assistantId }
+            if (current != null) {
+                replaceMessage(threadId, assistantId, current.copy(processEvents = processEvents.toList()))
+            } else {
+                replaceMessage(
+                    threadId,
+                    assistantId,
+                    message(
+                        assistantId,
+                        "Codex",
+                        "⌘",
+                        assistantText,
+                        "刚刚",
+                        deliveryStatus = LocalChatDeliveryStatus.Sending,
+                        createdAtEpochMillis = createdAt,
+                    ).copy(processEvents = processEvents.toList()),
+                )
+            }
+        }
         return try {
             withContext(Dispatchers.IO) { messageRepository.upsert(user) }
             messages(threadId) += persistedMessageUi(user)
             userVisible = true
-            updateThread(threadId) { it.copy(preview = body, updatedAt = "刚刚") }
+            updateThread(threadId) { it.copy(preview = previewBody, updatedAt = "刚刚") }
             val result = withContext(Dispatchers.IO) {
-                codexClient.streamMessage(stableCodexThreadId(), body) { fullText ->
-                    messages(threadId).removeAll { it.messageId == assistantId }
-                    messages(threadId) += message(
-                        assistantId,
-                        "Codex",
-                        "⌘",
-                        fullText,
-                        "刚刚",
-                        deliveryStatus = LocalChatDeliveryStatus.Sending,
-                        createdAtEpochMillis = createdAt,
-                    )
-                    onText(fullText)
-                }
+                codexClient.streamMessageWithProcess(
+                    stableCodexThreadId(),
+                    body,
+                    requestedToolIds,
+                    attachments,
+                    onText = { fullText ->
+                        assistantText = fullText
+                        replaceMessage(
+                            threadId,
+                            assistantId,
+                            message(
+                                assistantId,
+                                "Codex",
+                                "⌘",
+                                fullText,
+                                "刚刚",
+                                deliveryStatus = LocalChatDeliveryStatus.Sending,
+                                createdAtEpochMillis = createdAt,
+                            ).copy(processEvents = processEvents.toList()),
+                        )
+                        onText(fullText)
+                    },
+                    onProcess = ::updateProcess,
+                )
             }
             val receivedAt = now()
             user = user.copy(status = LocalChatDeliveryStatus.Sent)
@@ -174,10 +230,44 @@ class ChatSessionStore(
             )
             withContext(Dispatchers.IO) { messageRepository.upsert(listOf(user, assistant)) }
             replaceMessage(threadId, userId, persistedMessageUi(user))
-            replaceMessage(threadId, assistantId, persistedMessageUi(assistant))
+            replaceMessage(threadId, assistantId, persistedMessageUi(assistant).copy(processEvents = processEvents.toList()))
             Result.success(result)
         } catch (error: Throwable) {
-            messages(threadId).removeAll { message -> message.messageId == assistantId }
+            if (assistantText.isNotBlank()) {
+                val failedAssistant = LocalChatMessage(
+                    localMessageId = assistantId,
+                    threadId = canonicalThreadId,
+                    role = LocalChatRole.Assistant,
+                    sender = "codex",
+                    content = assistantText,
+                    createdAtEpochMillis = createdAt,
+                    receivedAtEpochMillis = now(),
+                    status = LocalChatDeliveryStatus.Failed,
+                )
+                runCatching { withContext(Dispatchers.IO) { messageRepository.upsert(failedAssistant) } }
+                replaceMessage(
+                    threadId,
+                    assistantId,
+                    persistedMessageUi(failedAssistant).copy(
+                        deliveryError = error.message ?: "工具调用失败",
+                        processEvents = processEvents.toList(),
+                    ),
+                )
+            } else if (processEvents.isEmpty()) {
+                messages(threadId).removeAll { message -> message.messageId == assistantId }
+            } else {
+                val current = messages(threadId).firstOrNull { it.messageId == assistantId }
+                    ?: message(assistantId, "Codex", "⌘", "", "刚刚")
+                replaceMessage(
+                    threadId,
+                    assistantId,
+                    current.copy(
+                        deliveryStatus = LocalChatDeliveryStatus.Failed,
+                        deliveryError = error.message ?: "工具调用失败",
+                        processEvents = processEvents.toList(),
+                    ),
+                )
+            }
             if (userVisible) {
                 user = user.copy(status = LocalChatDeliveryStatus.Failed)
                 runCatching { withContext(Dispatchers.IO) { messageRepository.upsert(user) } }
@@ -312,6 +402,7 @@ class ChatSessionStore(
             receivedAtEpochMillis = message.receivedAtEpochMillis,
             runtime = message.runtime,
             adapterId = message.adapterId,
+            attachments = message.attachments,
         )
     }
 

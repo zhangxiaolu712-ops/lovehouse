@@ -3,7 +3,7 @@ import { once } from 'node:events'
 import http from 'node:http'
 import test from 'node:test'
 
-import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import express from 'express'
 
 import { resolveR2MediaConfig } from './config.js'
@@ -26,7 +26,14 @@ function createFakeService(overrides = {}) {
   const calls = []
   const service = createR2MediaService({
     config: CONFIG,
-    client: { fake: true },
+    client: {
+      fake: true,
+      async send(command) {
+        calls.push({ client: this, command, options: null })
+        if (command instanceof HeadObjectCommand) return { ContentType: 'image/jpeg', ContentLength: 1234 }
+        throw new Error('unexpected command')
+      },
+    },
     now: () => new Date('2026-08-28T01:02:03.000Z'),
     uuid: () => '11111111-2222-4333-8444-555555555555',
     sign: async (client, command, options) => {
@@ -92,6 +99,11 @@ test('signs valid image, audio and document uploads with exact PUT parameters', 
     const { service, calls } = createFakeService()
     const result = await service.createUploadUrl({ ownerId: OWNER_ID, filename, mimeType, size: 1234 })
     assert.match(result.object_key, /^media\/owner-123\/2026\/08\/11111111-2222-4333-8444-555555555555-/)
+    assert.equal(result.media_asset_id, '11111111-2222-4333-8444-555555555555')
+    assert.equal(result.storage_ref, result.object_key)
+    assert.equal(result.name.endsWith(filename.split(' ').at(-1)), true)
+    assert.equal(result.mime_type, mimeType)
+    assert.equal(result.size, 1234)
     assert.equal(result.upload_url, 'https://signed.example/upload')
     assert.equal(result.expires_at, '2026-08-28T01:12:03.000Z')
     assert.deepEqual(result.required_headers, {
@@ -108,6 +120,24 @@ test('signs valid image, audio and document uploads with exact PUT parameters', 
     })
     assert.deepEqual(calls[0].options, { expiresIn: 600 })
   }
+})
+
+test('runtime resolution verifies the owner asset with HEAD before issuing a read URL', async () => {
+  const { service, calls } = createFakeService()
+  const mediaAssetId = '11111111-2222-4333-8444-555555555555'
+  const storageRef = `media/owner-123/2026/08/${mediaAssetId}-photo.jpg`
+  const result = await service.resolveRuntimeAsset({ ownerId: OWNER_ID, mediaAssetId, storageRef })
+  assert.equal(result.media_asset_id, mediaAssetId)
+  assert.equal(result.storage_ref, storageRef)
+  assert.equal(result.mime_type, 'image/jpeg')
+  assert.equal(result.size, 1234)
+  assert.equal(result.read_url, 'https://signed.example/read')
+  assert.equal(calls[0].command instanceof HeadObjectCommand, true)
+  assert.equal(calls[1].command instanceof GetObjectCommand, true)
+  await assert.rejects(
+    service.resolveRuntimeAsset({ ownerId: OWNER_ID, mediaAssetId, storageRef: storageRef.replace(mediaAssetId, '22222222-2222-4222-8222-222222222222') }),
+    error => error.code === 'MEDIA_ASSET_MISMATCH',
+  )
 })
 
 test('rejects oversized, negative, non-integer and disallowed MIME uploads', async () => {

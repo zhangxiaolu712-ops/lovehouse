@@ -66,8 +66,8 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
 
-private val Ink = Color(0xFF3F4948)
-private val Muted = Color(0xFF7B8785)
+private val Ink = LoveHouseGlass.Ink
+private val Muted = LoveHouseGlass.MutedInk
 private val Accent = Color(0xFF728F88)
 private val Hairline = Color.White.copy(alpha = .42f)
 private val Glass = Color.White.copy(alpha = .48f)
@@ -117,6 +117,9 @@ fun SettingsScreen(
     localStorage: LocalStorage,
     permissionStatusProvider: PermissionStatusProvider,
     ownerSession: OwnerSessionStore,
+    capabilityRegistry: CapabilityRegistry,
+    toolConnections: ToolConnectionStore,
+    toolConnectionProbe: ToolConnectionProbe,
     modifier: Modifier = Modifier,
 ) {
     var selected by remember { mutableStateOf<SettingEntry?>(null) }
@@ -128,6 +131,7 @@ fun SettingsScreen(
                 localStorage = localStorage,
                 permissionStatusProvider = permissionStatusProvider,
                 ownerSession = ownerSession,
+                toolConnections = toolConnections,
                 onSelect = { selected = it },
             )
         } else {
@@ -135,6 +139,9 @@ fun SettingsScreen(
                 detail,
                 localStorage = localStorage,
                 permissionStatusProvider = permissionStatusProvider,
+                capabilityRegistry = capabilityRegistry,
+                toolConnections = toolConnections,
+                toolConnectionProbe = toolConnectionProbe,
                 onBack = { selected = null },
                 modifier = modifier.statusBarsPadding().navigationBarsPadding(),
             )
@@ -148,6 +155,7 @@ private fun SettingsHome(
     localStorage: LocalStorage,
     permissionStatusProvider: PermissionStatusProvider,
     ownerSession: OwnerSessionStore,
+    toolConnections: ToolConnectionStore,
     onSelect: (SettingEntry) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -155,6 +163,7 @@ private fun SettingsHome(
     val profilesJson by localStorage.observeString(PersonasKey).collectAsState(initial = null)
     val permissionStatuses by permissionStatusProvider.statuses.collectAsState()
     val session by ownerSession.state.collectAsState()
+    val savedToolConnections by toolConnections.connections.collectAsState()
     val appearance = LocalLoveHouseAppearance.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val deviceContext = remember(context.applicationContext) {
@@ -186,7 +195,7 @@ private fun SettingsHome(
         "语音" to "原生录音可用",
         "天气与时间" to "天气未接入",
         "主动唤醒" to "尚未启用",
-        "工具添加" to "请使用 Lab",
+        "工具添加" to "${savedToolConnections.size} 个连接",
         "本地资源" to "本机存储",
         "设备" to (deviceContext.battery.levelPercent?.let { "电量 $it%" } ?: "状态可刷新"),
         "密码库 / Secret Vault" to "尚未启用",
@@ -332,6 +341,9 @@ private fun SettingsDetail(
     entry: SettingEntry,
     localStorage: LocalStorage,
     permissionStatusProvider: PermissionStatusProvider,
+    capabilityRegistry: CapabilityRegistry,
+    toolConnections: ToolConnectionStore,
+    toolConnectionProbe: ToolConnectionProbe,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -362,7 +374,15 @@ private fun SettingsDetail(
                 }
                 "语音" -> item { SettingsCardStack { PersonaVoiceSettings(localStorage); AudioRecordingProductSettings(permissionStatusProvider) } }
                 "天气与时间" -> item { SettingsCardStack { GlobalLocationSettings(permissionStatusProvider) } }
-                "工具添加" -> toolsDetail()
+                "工具添加" -> item {
+                    SettingsCardStack {
+                        SettingsToolCenter(
+                            registry = capabilityRegistry,
+                            connections = toolConnections,
+                            probe = toolConnectionProbe,
+                        )
+                    }
+                }
                 "本地资源" -> {
                     item { LocalResourceSettings(permissionStatusProvider) }
                     item { LocalStorageUsageSettings() }
@@ -425,10 +445,6 @@ private fun AiPermissionExplanation() {
 
 private fun androidx.compose.foundation.lazy.LazyListScope.toggleDetail(rows: List<Pair<String, Boolean>>) {
     item { TogglePanel(rows) }
-}
-
-private fun androidx.compose.foundation.lazy.LazyListScope.toolsDetail() {
-    item { FutureSettingsPanel("工具添加", "正式 Settings 工具管理尚未迁入；真实 capabilities / test / agent-codex allowlist 继续从桌面 Lab → MCP Tools Lab 使用。") }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.storageDetail() {
@@ -549,53 +565,6 @@ private fun MockAction(title: String, summary: String, action: () -> Unit = {}) 
             }
             OutlinedButton(onClick = { action(); done = true }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) { Text(if (done) "完成" else "打开", fontSize = 10.sp) }
         }
-    }
-}
-
-@Composable
-private fun ToolsManager() {
-    var tab by remember { mutableIntStateOf(0) }
-    var tested by remember { mutableStateOf(false) }
-    var saved by remember { mutableStateOf(false) }
-    var name by remember { mutableStateOf("") }
-    GlassPanel {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("已添加", "添加 API", "添加 MCP").forEachIndexed { index, label ->
-                Surface(Modifier.weight(1f).clickable { tab = index }, RoundedCornerShape(11.dp), if (tab == index) Color(0xFFCADBD6).copy(.82f) else SoftGlass) {
-                    Text(label, Modifier.padding(vertical = 8.dp), color = if (tab == index) Ink else Muted, fontSize = 10.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        when (tab) {
-            0 -> Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                listOf("LoveHouse", "Files", "GitHub", "Web", "Shell").forEach { ToolRow(it, "可用") }
-            }
-            else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (tab == 1) "添加 API 连接" else "添加 MCP 服务", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                MiniInput(name, { name = it }, if (tab == 1) "连接名称 / 必要凭据" else "服务名称 / 地址")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { tested = true }, Modifier.weight(1f)) { Text(if (tested) "连接正常" else "测试", fontSize = 10.sp) }
-                    Button(onClick = { saved = name.isNotBlank() }, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text(if (saved) "已保存" else "保存", fontSize = 10.sp) }
-                }
-                Text("本轮仅保存本地 Mock 状态，不会发送凭据或调用后端。", color = Muted, fontSize = 9.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ToolRow(name: String, status: String) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(.27f)).padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(Color.White.copy(.44f)), contentAlignment = Alignment.Center) { LoveHouseIconView(LoveHouseIcon.Wrench, null, Modifier.size(17.dp), tint = Accent) }
-        Spacer(Modifier.width(8.dp)); Text(name, Modifier.weight(1f), color = Ink, fontSize = 12.sp); Text(status, color = Accent, fontSize = 10.sp)
-    }
-}
-
-@Composable
-private fun MiniInput(value: String, onValueChange: (String) -> Unit, hint: String) {
-    Surface(shape = RoundedCornerShape(12.dp), color = Color.White.copy(.34f), border = androidx.compose.foundation.BorderStroke(1.dp, Hairline)) {
-        BasicTextField(value, onValueChange, Modifier.fillMaxWidth().padding(11.dp), singleLine = true, textStyle = MaterialTheme.typography.bodySmall.copy(color = Ink), decorationBox = { inner -> if (value.isEmpty()) Text(hint, color = Muted, fontSize = 11.sp); inner() })
     }
 }
 

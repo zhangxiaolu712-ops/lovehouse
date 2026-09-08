@@ -59,13 +59,11 @@ private fun LoveHouseContent(
     dependencies: AppDependencies,
     modifier: Modifier = Modifier,
 ) {
-    val chatStore = remember(dependencies.chatMessages, dependencies.toolProfiles) {
+    val chatStore = remember(dependencies.chatMessages, dependencies.capabilityRegistry) {
         ChatSessionStore(
             codexClient = HttpCodexChatClient(
                 ownerSession = dependencies.ownerSession,
-                allowedToolIdsFor = { threadId ->
-                    dependencies.toolProfiles.profile("codex", threadId).preferredToolIds
-                },
+                allowedToolIdsFor = { dependencies.capabilityRegistry.requestedToolIds() },
             ),
             messageRepository = dependencies.chatMessages,
         )
@@ -106,6 +104,8 @@ private fun LoveHouseContent(
                 threadId = threadId,
                 store = chatStore,
                 localStorage = dependencies.localStorage,
+                capabilityRegistry = dependencies.capabilityRegistry,
+                mediaAttachments = dependencies.mediaAttachments,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -142,6 +142,9 @@ private fun LoveHouseContent(
                 localStorage = dependencies.localStorage,
                 permissionStatusProvider = dependencies.permissions,
                 ownerSession = dependencies.ownerSession,
+                capabilityRegistry = dependencies.capabilityRegistry,
+                toolConnections = dependencies.toolConnections,
+                toolConnectionProbe = dependencies.toolConnectionProbe,
             )
         }
 

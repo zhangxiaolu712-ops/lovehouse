@@ -76,12 +76,15 @@ internal fun PersonaVoiceSettings(storage: LocalStorage) {
         ProductPanel {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(name, Modifier.weight(1f), color = LoveHouseGlass.Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text("未配置", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
+                Text("暂未支持", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
             }
             Note("Voice Provider：待接入")
-            Note("Voice / Voice ID：未配置")
-            Note("Credential：未配置。未来引用独立安全模块；这里不输入或保存 API Key。")
-            OutlinedButton(onClick = { previewMessage = "$name：Voice Provider 尚未接入，无法试听；未发起网络请求。" }, modifier = Modifier.fillMaxWidth()) { Text("试听", fontSize = 10.sp) }
+            Note("Voice / Voice ID：暂未支持配置")
+            Note("Credential：暂未支持。未来引用独立安全模块；这里不输入或保存 API Key。")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { previewMessage = "$name：Voice Provider 配置 contract 尚未接入，当前不会保存假配置。" }, modifier = Modifier.weight(1f)) { Text("配置", fontSize = 10.sp) }
+                OutlinedButton(onClick = { previewMessage = "$name：Voice Provider 尚未接入，无法试听；未发起网络请求。" }, modifier = Modifier.weight(1f)) { Text("试听", fontSize = 10.sp) }
+            }
         }
     }
     previewMessage?.let { ProductPanel { Note(it) } }
@@ -186,9 +189,8 @@ internal fun GlobalLocationSettings(permissionStatusProvider: PermissionStatusPr
     message?.let { ProductPanel { Note(it) } }
     ProductPanel {
         Heading("天气与时间偏好")
-        var source by remember { mutableStateOf("自动") }
         var unit by remember { mutableStateOf("摄氏度") }
-        TextButton(onClick = { source = if (source == "自动") "待配置来源" else "自动" }) { Text("天气来源：$source · 未连接", fontSize = 11.sp) }
+        TextButton(onClick = { message = "天气 Provider 配置 contract 暂未支持；当前不会保存假来源。" }) { Text("天气来源：暂未支持配置", fontSize = 11.sp) }
         TextButton(onClick = { format24 = !format24 }) { Text("时间格式：${if (format24) "24" else "12"} 小时制", fontSize = 11.sp) }
         TextButton(onClick = { unit = if (unit == "摄氏度") "华氏度" else "摄氏度" }) { Text("温度单位：$unit", fontSize = 11.sp) }
         listOf("桌面天气", "恶劣天气提醒").forEach { label ->

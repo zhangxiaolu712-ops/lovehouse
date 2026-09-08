@@ -1,6 +1,7 @@
 package fyi.b612.lovehouse
 
 import fyi.b612.lovehouse.feature.chat.buildCodexChatPayload
+import fyi.b612.lovehouse.feature.chat.toolDirectedMessage
 import fyi.b612.lovehouse.feature.settings.BuiltInToolIds
 import fyi.b612.lovehouse.feature.settings.LocalToolProfile
 import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
@@ -21,6 +22,23 @@ class ToolCenterContractTest {
         assertEquals(2, profile.preferredToolIds.size)
         assertTrue(payload.contains("\"allowed_tool_ids\":[\"builtin.engineering.read_current\",\"builtin.livingroom.read\"]"))
         assertTrue(payload.contains("\"persona_id\":\"codex\""))
+    }
+
+    @Test
+    fun `selected Engineering turn requires the MCP capability rather than shell fallback`() {
+        val directed = toolDirectedMessage(
+            "读一下当前 Engineering 主线。",
+            setOf(BuiltInToolIds.EngineeringReadCurrent),
+        )
+
+        assertTrue(directed.contains("LoveHouse MCP Engineering tool"))
+        assertTrue(directed.contains("do not substitute shell"))
+        assertTrue(directed.startsWith("读一下当前 Engineering 主线。"))
+    }
+
+    @Test
+    fun `unselected turn is not decorated or granted enabled tools`() {
+        assertEquals("普通聊天", toolDirectedMessage("普通聊天", emptySet()))
     }
 
 }

@@ -8,6 +8,8 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import java.util.Locale
 
+internal const val STT_UNAVAILABLE_MESSAGE = "当前设备没有可用的系统语音识别服务"
+
 internal data class ChatVoiceInputState(
     val listening: Boolean = false,
     val processing: Boolean = false,
@@ -15,6 +17,24 @@ internal data class ChatVoiceInputState(
     val finished: Boolean = false,
     val error: String? = null,
 )
+
+internal enum class ChatVoiceComposerMode { Text, VoiceReady, Listening, Review }
+
+internal enum class ChatVoiceComposerAction { EnterVoice, Press, ReleaseWithTranscript, Cancel, SendOrClear }
+
+internal fun transitionVoiceComposer(
+    mode: ChatVoiceComposerMode,
+    action: ChatVoiceComposerAction,
+    hasTranscript: Boolean = false,
+): ChatVoiceComposerMode = when (action) {
+    ChatVoiceComposerAction.EnterVoice -> ChatVoiceComposerMode.VoiceReady
+    ChatVoiceComposerAction.Press -> if (mode == ChatVoiceComposerMode.VoiceReady) ChatVoiceComposerMode.Listening else mode
+    ChatVoiceComposerAction.ReleaseWithTranscript -> if (hasTranscript) ChatVoiceComposerMode.Review else ChatVoiceComposerMode.VoiceReady
+    ChatVoiceComposerAction.Cancel, ChatVoiceComposerAction.SendOrClear -> ChatVoiceComposerMode.Text
+}
+
+internal fun ChatVoiceInputState.composerTranscriptOrNull(): String? =
+    transcript.trim().takeIf { finished && it.isNotEmpty() }
 
 internal class ChatVoiceInputController(
     context: Context,
@@ -58,7 +78,7 @@ internal class ChatVoiceInputController(
     override fun onEndOfSpeech() = update(listening = false, processing = true)
     override fun onError(error: Int) {
         val message = when (error) {
-            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有识别到清晰语音，请重新长按输入区"
+            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有识别到清晰语音，请重新按住说话"
             SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "语音识别网络不可用"
             SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "需要麦克风权限才能语音输入"
             else -> "语音识别暂时不可用（$error）"

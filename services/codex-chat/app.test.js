@@ -31,6 +31,7 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
         sessionId: input.sessionId,
         message: input.message,
         previousUsage: input.previousUsage,
+        attachments: input.attachments,
       })
       input.onRuntimeBinding(input.sessionId || sessionId)
       input.onEvent('reasoning_status', {
@@ -116,6 +117,21 @@ test('health reports the independent runtime contract without secrets', async t 
   assert.equal(payload.service, 'lovehouse-codex-chat')
   assert.equal(payload.runtime.runtime_type, 'codex_cli')
   assert.equal(JSON.stringify(payload).includes('session_id'), false)
+})
+
+test('sidecar forwards bounded attachment inputs to the runtime in the same turn', async t => {
+  const observed = []
+  const base = await start(t, { runtimeAdapter: runtime({ observed }) })
+  const response = await chat(base, {
+    thread_id: THREAD_ID,
+    message: '',
+    attachments: [{ type: 'location', latitude: 31.2, longitude: 121.5, captured_at: '2026-09-08T00:00:00Z' }],
+  })
+  assert.equal(response.status, 200)
+  assert.equal(parseSse(await response.text()).at(-1).data.ok, true)
+  assert.deepEqual(observed[0].attachments, [
+    { type: 'location', latitude: 31.2, longitude: 121.5, captured_at: '2026-09-08T00:00:00Z' },
+  ])
 })
 
 test('owner can read a transient task thread and approve the same task', async t => {

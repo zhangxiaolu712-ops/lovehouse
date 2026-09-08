@@ -157,14 +157,70 @@ function normalizeMessage(message) {
       stage: 'validation', status: 415,
     })
   }
-  if (typeof message.text !== 'string' || !message.text.trim() || message.text.length > 16_000) {
-    throw new ClientApiError('INVALID_MESSAGE', 'text message must contain 1-16000 characters', {
+  const text = typeof message.text === 'string' ? message.text.trim() : ''
+  const attachments = normalizeAttachments(message.attachments)
+  if ((!text && attachments.length === 0) || text.length > 16_000) {
+    throw new ClientApiError('INVALID_MESSAGE', 'message must contain text or attachments', {
       stage: 'validation', status: 400,
     })
   }
 
   const source = normalizeArchiveSource(message)
-  return { type: 'text', text: message.text.trim(), source }
+  return { type: 'text', text, attachments, source }
+}
+
+function optionalNumber(value, field) {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ClientApiError('INVALID_ATTACHMENT', `${field} is invalid`, { stage: 'validation', status: 400 })
+  }
+  return value
+}
+
+function normalizeAttachments(value) {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value) || value.length > 12) {
+    throw new ClientApiError('INVALID_ATTACHMENT', 'attachments must contain at most 12 items', {
+      stage: 'validation', status: 400,
+    })
+  }
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new ClientApiError('INVALID_ATTACHMENT', `attachments[${index}] is invalid`, { stage: 'validation', status: 400 })
+    }
+    if (item.type === 'location') {
+      const latitude = optionalNumber(item.latitude, 'latitude')
+      const longitude = optionalNumber(item.longitude, 'longitude')
+      if (latitude === null || latitude < -90 || latitude > 90 || longitude === null || longitude < -180 || longitude > 180) {
+        throw new ClientApiError('INVALID_ATTACHMENT', 'location coordinates are invalid', { stage: 'validation', status: 400 })
+      }
+      const capturedAt = assertOptionalString(item.captured_at, 'captured_at', 64)
+      if (!capturedAt || Number.isNaN(Date.parse(capturedAt))) {
+        throw new ClientApiError('INVALID_ATTACHMENT', 'captured_at must be an ISO timestamp', { stage: 'validation', status: 400 })
+      }
+      return {
+        type: 'location', latitude, longitude,
+        accuracy: optionalNumber(item.accuracy, 'accuracy'),
+        captured_at: capturedAt,
+        ...(item.address ? { address: assertOptionalString(item.address, 'address', 512) } : {}),
+      }
+    }
+    if (!['photo', 'file'].includes(item.type)) {
+      throw new ClientApiError('INVALID_ATTACHMENT', 'attachment type is unsupported', { stage: 'validation', status: 415 })
+    }
+    const mediaAssetId = assertOptionalString(item.media_asset_id, 'media_asset_id', 64)
+    const storageRef = assertOptionalString(item.storage_ref, 'storage_ref', 512)
+    if (!/^[0-9a-f-]{36}$/i.test(mediaAssetId || '') || !storageRef) {
+      throw new ClientApiError('INVALID_ATTACHMENT', 'media attachment reference is invalid', { stage: 'validation', status: 400 })
+    }
+    return {
+      type: item.type,
+      media_asset_id: mediaAssetId,
+      storage_ref: storageRef,
+      ...(optionalNumber(item.width, 'width') !== null ? { width: item.width } : {}),
+      ...(optionalNumber(item.height, 'height') !== null ? { height: item.height } : {}),
+    }
+  })
 }
 
 function normalizeAllowedToolIds(value) {
@@ -266,6 +322,7 @@ export function installClientApi(app, {
   projectChecklistStore = null,
   runtimeStatusProvider = null,
   toolCenterService = null,
+  mediaService = null,
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
@@ -380,6 +437,7 @@ export function installClientApi(app, {
 
     app.post('/v1/tools/mcp', async (req, res) => {
       try {
+        const mcpMethod = typeof req.body?.method === 'string' ? req.body.method : 'unknown'
         const requestedIds = toolCenterService.validateRequest({
           personaId: req.query.persona_id,
           threadId: req.query.thread_id,
@@ -390,8 +448,29 @@ export function installClientApi(app, {
           serverName: 'lovehouse-codex-tools',
           transportIdentity: `owner:${req.userId}:${req.query.thread_id}`,
         })
+        const trace = {
+          stage: 'mcp_transport',
+          method: mcpMethod,
+          requested_tool_ids: requestedIds,
+          ok: !response?.error,
+        }
+        if (mcpMethod === 'tools/list') {
+          trace.tools = response?.result?.tools?.map(tool => ({
+            name: tool.name,
+            annotations: tool.annotations || null,
+          })) || []
+        } else if (mcpMethod === 'tools/call') {
+          trace.tool = typeof req.body?.params?.name === 'string' ? req.body.params.name : 'unknown'
+        }
+        console.log('[tool-runtime-trace]', JSON.stringify(trace))
         return response ? res.json(response) : res.status(204).end()
       } catch (error) {
+        console.log('[tool-runtime-trace]', JSON.stringify({
+          stage: 'mcp_transport',
+          method: typeof req.body?.method === 'string' ? req.body.method : 'unknown',
+          ok: false,
+          error_code: error?.code || error?.name || 'rejected',
+        }))
         return res.status(400).json({
           jsonrpc: '2.0', id: req.body?.id ?? null,
           error: { code: -32000, message: error.message || 'tool request rejected' },
@@ -482,6 +561,36 @@ export function installClientApi(app, {
       normalized = normalizeThread(req.body)
       resolved = providerRouter.resolve(normalized.personaId)
       normalized.message = normalizeMessage(req.body.message)
+      if (normalized.personaId !== 'codex' && normalized.message.attachments.length) {
+        throw new ClientApiError('ATTACHMENTS_UNSUPPORTED', 'attachments are not enabled for this persona', {
+          stage: 'attachment', status: 415,
+        })
+      }
+      if (normalized.message.attachments.some(item => item.type !== 'location') && !mediaService?.resolveRuntimeAsset) {
+        throw new ClientApiError('MEDIA_UNAVAILABLE', 'media storage is unavailable', {
+          stage: 'attachment', status: 503, retryable: true,
+        })
+      }
+      normalized.message.attachments = await Promise.all(normalized.message.attachments.map(async item => {
+        if (item.type === 'location') return item
+        const resolvedAsset = await mediaService.resolveRuntimeAsset({
+          ownerId: req.userId,
+          mediaAssetId: item.media_asset_id,
+          storageRef: item.storage_ref,
+        })
+        if (item.type === 'photo' && !resolvedAsset.mime_type.startsWith('image/')) {
+          throw new ClientApiError('INVALID_ATTACHMENT', 'photo attachment is not an image', {
+            stage: 'attachment', status: 400,
+          })
+        }
+        return { ...item, ...resolvedAsset }
+      }))
+      const totalMediaBytes = normalized.message.attachments.reduce((sum, item) => sum + (item.size || 0), 0)
+      if (totalMediaBytes > 50 * 1024 * 1024) {
+        throw new ClientApiError('ATTACHMENTS_TOO_LARGE', 'attachments exceed the per-turn size limit', {
+          stage: 'attachment', status: 413,
+        })
+      }
       normalized.allowedToolIds = resolveAllowedToolIdsForChat({
         toolCenterService,
         personaId: normalized.personaId,
@@ -531,6 +640,7 @@ export function installClientApi(app, {
         scene,
         text: normalized.message.text,
         source: normalized.message.source,
+        attachments: normalized.message.attachments,
         threadSource: normalized.source,
         authorization: req.headers.authorization,
         signal: controller.signal,

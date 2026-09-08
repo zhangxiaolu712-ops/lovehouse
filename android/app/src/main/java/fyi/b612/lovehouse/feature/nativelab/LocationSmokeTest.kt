@@ -15,11 +15,13 @@ internal data class LocationSnapshot(
     val longitude: Double,
     val accuracyMeters: Float?,
     val provider: String,
+    val capturedAtEpochMillis: Long = 0L,
 )
 
 internal data class LocationSmokeResult(
     val message: String,
     val needsLocationSettings: Boolean = false,
+    val snapshot: LocationSnapshot? = null,
 )
 
 internal class LocationSmokeTest(
@@ -64,7 +66,8 @@ internal class LocationSmokeTest(
                     if (location == null) {
                         LocationSmokeResult("暂时没有取得当前位置，请到开阔处后重试。")
                     } else {
-                        LocationSmokeResult(formatLocationSnapshot(location.toSnapshot()))
+                        val snapshot = location.toSnapshot()
+                        LocationSmokeResult(formatLocationSnapshot(snapshot), snapshot = snapshot)
                     },
                 )
             }
@@ -85,6 +88,7 @@ private fun Location.toSnapshot() = LocationSnapshot(
     longitude = longitude,
     accuracyMeters = accuracy.takeIf { hasAccuracy() },
     provider = provider.orEmpty(),
+    capturedAtEpochMillis = time.takeIf { it > 0L } ?: System.currentTimeMillis(),
 )
 
 internal fun formatLocationSnapshot(snapshot: LocationSnapshot): String {
