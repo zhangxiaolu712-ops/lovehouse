@@ -6,6 +6,10 @@ import { installMemoryTimeline } from './memoryTimeline.js'
 import { installProjectChecklistApi } from './projectChecklist.js'
 import { handleMcpMessage } from '../mcp/transports.js'
 import { normalizeToolPreferenceIds } from '../tool-center/catalog.js'
+import {
+  attachmentCapabilitiesFrom,
+  validateAttachmentRequest,
+} from './attachmentCapabilities.js'
 
 export const CLIENT_API_VERSION = 1
 export const CLIENT_STREAM_EVENTS = Object.freeze([
@@ -179,8 +183,8 @@ function optionalNumber(value, field) {
 
 function normalizeAttachments(value) {
   if (value === undefined || value === null) return []
-  if (!Array.isArray(value) || value.length > 12) {
-    throw new ClientApiError('INVALID_ATTACHMENT', 'attachments must contain at most 12 items', {
+  if (!Array.isArray(value)) {
+    throw new ClientApiError('INVALID_ATTACHMENT', 'attachments must be an array', {
       stage: 'validation', status: 400,
     })
   }
@@ -560,12 +564,15 @@ export function installClientApi(app, {
     try {
       normalized = normalizeThread(req.body)
       resolved = providerRouter.resolve(normalized.personaId)
+      validateAttachmentRequest({
+        attachments: req.body?.message?.attachments,
+        text: typeof req.body?.message?.text === 'string' ? req.body.message.text.trim() : '',
+        capabilities: attachmentCapabilitiesFrom(resolved),
+        error(code, message, status) {
+          return new ClientApiError(code, message, { stage: 'attachment', status })
+        },
+      })
       normalized.message = normalizeMessage(req.body.message)
-      if (normalized.personaId !== 'codex' && normalized.message.attachments.length) {
-        throw new ClientApiError('ATTACHMENTS_UNSUPPORTED', 'attachments are not enabled for this persona', {
-          stage: 'attachment', status: 415,
-        })
-      }
       if (normalized.message.attachments.some(item => item.type !== 'location') && !mediaService?.resolveRuntimeAsset) {
         throw new ClientApiError('MEDIA_UNAVAILABLE', 'media storage is unavailable', {
           stage: 'attachment', status: 503, retryable: true,

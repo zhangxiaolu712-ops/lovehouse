@@ -1,4 +1,8 @@
 import { ClientApiError, normalizeClientApiError } from './errors.js'
+import {
+  CODEX_ATTACHMENT_CAPABILITIES,
+  UNSUPPORTED_ATTACHMENT_CAPABILITIES,
+} from './attachmentCapabilities.js'
 
 function providerErrorCode(message = '') {
   if (/(?:quota|credit|usage limit|out of extra usage|rate limit)/i.test(message)) {
@@ -43,7 +47,10 @@ export function createClaudeAdapter({
         runtime_type: 'claude_cli',
         adapter_id: 'legacy-claude-frozen',
         enabled: true,
-        capabilities: { stable_chat_v1: false },
+        capabilities: {
+          stable_chat_v1: false,
+          attachments: UNSUPPORTED_ATTACHMENT_CAPABILITIES,
+        },
       }
     },
     async health() {
@@ -321,6 +328,7 @@ function createCliSidecarAdapter({ baseUrl, fetchImpl, healthTimeoutMs, profile 
           actual_usage: true,
           quota: false,
           context_breakdown: 'basic',
+          attachments: profile.attachmentCapabilities,
         },
       }
     },
@@ -459,6 +467,7 @@ const CODEX_SIDECAR_PROFILE = Object.freeze({
   quotaSource: 'codex_cli_unavailable',
   toolTypes: Object.freeze(['command', 'file_change', 'mcp', 'web_search']),
   usageSources: Object.freeze(['codex_cli_cumulative_delta', 'codex_cli_cumulative_baseline', 'codex_cli']),
+  attachmentCapabilities: CODEX_ATTACHMENT_CAPABILITIES,
 })
 
 const CLAUDE_SIDECAR_PROFILE = Object.freeze({
@@ -471,6 +480,7 @@ const CLAUDE_SIDECAR_PROFILE = Object.freeze({
   quotaSource: 'claude_cli_unavailable',
   toolTypes: Object.freeze(['claude_tool']),
   usageSources: Object.freeze(['claude_cli']),
+  attachmentCapabilities: UNSUPPORTED_ATTACHMENT_CAPABILITIES,
 })
 
 export function createCodexAdapter({
