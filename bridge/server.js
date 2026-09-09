@@ -34,6 +34,8 @@ import {
   EngineeringMemoryService,
   SupabaseMemoryV2Repository,
 } from './memory-v2/index.js'
+import { PostgresEngineeringRepository } from './memory-v2/postgresEngineeringRepository.js'
+import { EngineeringShadowMonitor, ShadowEngineeringRepository, ShadowProjectChecklistStore } from './memory-v2/engineeringShadow.js'
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest } from './livingroom.js'
@@ -89,6 +91,11 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || ''
 const SUPABASE_SERVER_KEY = process.env.SUPABASE_SECRET_KEY
   || process.env.SUPABASE_SERVICE_ROLE_KEY
   || ''
+const ENGINEERING_DATABASE_URL = process.env.ENGINEERING_DATABASE_URL || ''
+const ENGINEERING_SHADOW_DATABASE_URL = process.env.ENGINEERING_SHADOW_DATABASE_URL || ''
+if (ENGINEERING_DATABASE_URL && ENGINEERING_SHADOW_DATABASE_URL) {
+  throw new Error('ENGINEERING_DATABASE_URL and ENGINEERING_SHADOW_DATABASE_URL are mutually exclusive')
+}
 const OWNER_USER_ID = process.env.OWNER_USER_ID || ''
 const LIVINGROOM_KEY = process.env.LIVINGROOM_KEY || ''
 const OAUTH_BASE = process.env.OAUTH_BASE_URL || 'https://tingtunehouse.duckdns.org'
@@ -220,14 +227,45 @@ const memoryV2Repository = new SupabaseMemoryV2Repository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
 })
+const engineeringRepository = ENGINEERING_DATABASE_URL
+  ? new PostgresEngineeringRepository({
+      connectionString: ENGINEERING_DATABASE_URL,
+      ownerId: OWNER_USER_ID,
+    })
+  : memoryV2Repository
+const engineeringShadowMonitor = ENGINEERING_SHADOW_DATABASE_URL
+  ? new EngineeringShadowMonitor()
+  : null
+const engineeringShadowRepository = ENGINEERING_SHADOW_DATABASE_URL
+  ? new PostgresEngineeringRepository({
+      connectionString: ENGINEERING_SHADOW_DATABASE_URL,
+      ownerId: OWNER_USER_ID,
+    })
+  : null
+const activeEngineeringRepository = engineeringShadowRepository
+  ? new ShadowEngineeringRepository({
+      primary: engineeringRepository,
+      shadow: engineeringShadowRepository,
+      monitor: engineeringShadowMonitor,
+    })
+  : engineeringRepository
 const memoryV2Service = new MemoryV2Service({
   repository: memoryV2Repository,
   embedding: createOllamaEmbeddingFromEnv(),
 })
 const engineeringMemoryService = new EngineeringMemoryService({
-  repository: memoryV2Repository,
+  repository: activeEngineeringRepository,
 })
-const projectChecklistStore = new ProjectChecklistStore({ rest: supabaseRest })
+const primaryProjectChecklistStore = new ProjectChecklistStore(ENGINEERING_DATABASE_URL
+  ? { repository: engineeringRepository }
+  : { rest: supabaseRest })
+const projectChecklistStore = engineeringShadowRepository
+  ? new ShadowProjectChecklistStore({
+      primary: primaryProjectChecklistStore,
+      shadow: engineeringShadowRepository,
+      monitor: engineeringShadowMonitor,
+    })
+  : primaryProjectChecklistStore
 const runtimeStatusProvider = createRuntimeStatusProvider({
   listProcesses: () => new Promise((resolve, reject) => {
     pm2Client.connect(error => {
@@ -562,6 +600,7 @@ app.get('/health', (_req, res) => {
     r2_media: r2MediaService.available ? 'available' : 'unavailable',
     r2_media_max_bytes: r2MediaService.maxBytes,
     r2_media_url_ttl_seconds: r2MediaService.urlTtlSeconds,
+    engineering_shadow: engineeringShadowMonitor?.snapshot() || { enabled: false },
   })
 })
 
