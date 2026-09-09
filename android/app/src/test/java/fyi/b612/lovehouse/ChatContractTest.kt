@@ -1,8 +1,10 @@
 package fyi.b612.lovehouse
 
 import fyi.b612.lovehouse.feature.chat.ChatListState
+import fyi.b612.lovehouse.feature.chat.ChatRuntimeConfig
 import fyi.b612.lovehouse.feature.chat.ChatMessageKind
 import fyi.b612.lovehouse.feature.chat.ChatSessionStore
+import fyi.b612.lovehouse.feature.chat.ClaudeRuntime
 import fyi.b612.lovehouse.feature.chat.ChatThreadKind
 import fyi.b612.lovehouse.feature.chat.MockChatRepository
 import fyi.b612.lovehouse.feature.chat.LocalChatDeliveryStatus
@@ -16,6 +18,7 @@ import fyi.b612.lovehouse.feature.chat.composerTranscriptOrNull
 import fyi.b612.lovehouse.feature.chat.ChatLocationAttachment
 import fyi.b612.lovehouse.feature.chat.ChatMediaAttachment
 import fyi.b612.lovehouse.feature.chat.buildCodexChatPayload
+import fyi.b612.lovehouse.feature.chat.buildChatPayload
 import fyi.b612.lovehouse.feature.chat.chatAttachmentsJson
 import fyi.b612.lovehouse.feature.chat.attachmentSegments
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentSegmentKind
@@ -36,6 +39,7 @@ import fyi.b612.lovehouse.feature.settings.ToolCapability
 import fyi.b612.lovehouse.feature.settings.ToolCapabilityKind
 import fyi.b612.lovehouse.feature.settings.ToolRiskLevel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -78,6 +82,57 @@ class ChatContractTest {
     }
 
     @Test
+    fun `claude preserves web thread runtime boundary and does not persist process events`() = runBlocking {
+        val repository = DurableLocalMessages()
+        var observedConfig: ChatRuntimeConfig? = null
+        val client = object : fyi.b612.lovehouse.feature.chat.CodexChatClient {
+            override suspend fun streamMessage(
+                threadId: String,
+                message: String,
+                requestedToolIds: Set<String>,
+                attachments: List<fyi.b612.lovehouse.feature.chat.ChatAttachment>,
+                onText: (String) -> Unit,
+            ): fyi.b612.lovehouse.feature.chat.CodexChatResult = error("legacy Codex path must not handle Claude")
+
+            override suspend fun streamRuntimeMessageWithProcess(
+                config: ChatRuntimeConfig,
+                message: String,
+                requestedToolIds: Set<String>,
+                attachments: List<fyi.b612.lovehouse.feature.chat.ChatAttachment>,
+                onText: (String) -> Unit,
+                onProcess: (ChatProcessEvent) -> Unit,
+            ): fyi.b612.lovehouse.feature.chat.CodexChatResult {
+                observedConfig = config
+                onProcess(ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, "safe summary"))
+                onText("Claude reply")
+                return fyi.b612.lovehouse.feature.chat.CodexChatResult(
+                    "Claude reply",
+                    fyi.b612.lovehouse.feature.chat.CodexRuntimeEvidence("claude_cli", "claude-cli-v1", config.threadId),
+                )
+            }
+        }
+        val store = ChatSessionStore(client, repository)
+
+        assertTrue(store.sendClaudeMessage("continue") {}.isSuccess)
+
+        assertEquals(ClaudeRuntime, observedConfig)
+        assertEquals(2, repository.messages(ClaudeRuntime.threadId).size)
+        assertEquals("Claude reply", repository.messages(ClaudeRuntime.threadId).last().content)
+        assertTrue(repository.messages(ClaudeRuntime.threadId).all { it.attachments.isEmpty() })
+    }
+
+    @Test
+    fun `claude payload inherits fixed window and exposes neither tools nor attachments`() {
+        val payload = buildChatPayload(ClaudeRuntime, "hello", emptySet(), emptyList())
+
+        assertTrue(payload.contains("\"persona_id\":\"claude\""))
+        assertTrue(payload.contains("\"thread_id\":\"${ClaudeRuntime.threadId}\""))
+        assertTrue(payload.contains("\"window_id\":\"${ClaudeRuntime.windowId}\""))
+        assertFalse(payload.contains("allowed_tool_ids"))
+        assertFalse(payload.contains("attachments"))
+    }
+
+    @Test
     fun `real codex messages rehydrate as one canonical record per message`() = runBlocking {
         val repository = DurableLocalMessages()
         val observedThreads = mutableListOf<String>()
@@ -93,7 +148,7 @@ class ChatContractTest {
                 )
             }
         }
-        val firstStore = ChatSessionStore(client, repository) { clock++ }
+        val firstStore = ChatSessionStore(client, repository, now = { clock++ })
 
         assertTrue(firstStore.sendCodexMessage("agent-codex", "turn one") {}.isSuccess)
         assertTrue(firstStore.sendCodexMessage("agent-codex", "turn two") {}.isSuccess)
@@ -106,7 +161,7 @@ class ChatContractTest {
         assertTrue(persisted.filter { it.role == LocalChatRole.User }.all { it.runtime == null && it.adapterId == null })
         assertTrue(persisted.filter { it.role == LocalChatRole.Assistant }.all { it.runtime == "codex_cli" && it.adapterId == "codex-cli-v1" })
 
-        val reopenedStore = ChatSessionStore(client, repository) { clock++ }
+        val reopenedStore = ChatSessionStore(client, repository, now = { clock++ })
         assertEquals(4, reopenedStore.messages("agent-codex").size)
         assertEquals(2, reopenedStore.messages("agent-codex").count { it.body.contains("first segment") })
         assertTrue(reopenedStore.sendCodexMessage("agent-codex", "turn three") {}.isSuccess)
