@@ -31,6 +31,7 @@ import fyi.b612.lovehouse.feature.chat.ChatVoiceComposerAction
 import fyi.b612.lovehouse.feature.chat.ChatVoiceComposerMode
 import fyi.b612.lovehouse.feature.chat.chatMessageSpacing
 import fyi.b612.lovehouse.feature.chat.mergeProcessEvent
+import fyi.b612.lovehouse.feature.chat.mergeThinkingText
 import fyi.b612.lovehouse.feature.chat.resolveRequestedToolIds
 import fyi.b612.lovehouse.feature.chat.transitionVoiceComposer
 import fyi.b612.lovehouse.feature.chat.STT_UNAVAILABLE_MESSAGE
@@ -364,6 +365,42 @@ class ChatContractTest {
         assertEquals(listOf("tool:engineering", "workflow"), events.map { it.id })
         assertEquals(ChatProcessStatus.Succeeded, events.first().status)
         assertEquals("revision 12", events.first().detail)
+    }
+
+    @Test
+    fun `thinking deltas accumulate into one process node while summary replaces the snapshot`() {
+        var thinkingText = ""
+        var events = emptyList<ChatProcessEvent>()
+
+        fun accept(summary: String? = null, delta: String? = null) {
+            mergeThinkingText(thinkingText, summary, delta)?.let { updated ->
+                thinkingText = updated
+                updated.takeIf(String::isNotBlank)?.let { detail ->
+                    events = mergeProcessEvent(
+                        events,
+                        ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, detail),
+                    )
+                }
+            }
+        }
+
+        accept(delta = "让我仔细")
+        accept(delta = "想想")
+        assertEquals(1, events.size)
+        assertEquals("让我仔细想想", events.single().detail)
+
+        accept(summary = "完整摘要")
+        assertEquals(1, events.size)
+        assertEquals("完整摘要", events.single().detail)
+    }
+
+    @Test
+    fun `thinking accumulation starts empty for every new turn`() {
+        val firstTurn = mergeThinkingText("", summary = null, delta = "第一轮")
+        val secondTurn = mergeThinkingText("", summary = null, delta = "第二轮")
+
+        assertEquals("第一轮", firstTurn)
+        assertEquals("第二轮", secondTurn)
     }
 
     @Test
