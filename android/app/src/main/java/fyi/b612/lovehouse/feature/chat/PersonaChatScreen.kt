@@ -154,6 +154,17 @@ internal fun resolveRequestedToolIds(
     return requested.toSortedSet()
 }
 
+internal fun composerUnavailableActions(runtime: ChatRuntimeConfig): Map<String, String> = buildMap {
+    if (!runtime.attachmentsEnabled) {
+        listOf("相机", "照片", "文件", "定位").forEach { action ->
+            put(action, "${runtime.personaId.replaceFirstChar(Char::uppercase)} Runtime 当前未启用附件")
+        }
+    }
+    if (!runtime.toolCenterEnabled) {
+        put("工具", "${runtime.personaId.replaceFirstChar(Char::uppercase)} Runtime 当前未启用 Tool Center")
+    }
+}
+
 private fun mediaProgressNotice(progress: MediaAttachmentProgress): String? {
     val prefix = if (progress.stage == MediaAttachmentStage.AllAttachmentsReady) {
         "全部 ${progress.total} 个附件"
@@ -328,9 +339,21 @@ fun ChatShellScreen(
     val actualRuntimeLabel = messages.asReversed().firstNotNullOfOrNull { message ->
         message.runtime?.let { runtime -> listOfNotNull(runtime, message.adapterId).joinToString(" · ") }
     } ?: "Runtime 尚未返回"
-    var selectedModel by remember(threadId) { mutableStateOf(if (threadId == "agent-codex") actualRuntimeLabel else "Runtime 尚未接入") }
+    val isCodexRuntime = threadId == "agent-codex"
+    val isClaudeRuntime = threadId == ClaudeRuntime.threadId
+    val isRuntimeThread = isCodexRuntime || isClaudeRuntime
+    val unavailableComposerActions = composerUnavailableActions(if (isClaudeRuntime) ClaudeRuntime else CodexRuntime)
+    var selectedModel by remember(threadId) {
+        mutableStateOf(
+            when {
+                isCodexRuntime -> actualRuntimeLabel
+                isClaudeRuntime -> "${ClaudeRuntime.expectedRuntime} · ${ClaudeRuntime.expectedAdapterId}"
+                else -> "Runtime 尚未接入"
+            },
+        )
+    }
     LaunchedEffect(actualRuntimeLabel, threadId) {
-        if (threadId == "agent-codex") selectedModel = actualRuntimeLabel
+        if (isRuntimeThread && actualRuntimeLabel != "Runtime 尚未返回") selectedModel = actualRuntimeLabel
     }
     var input by remember { mutableStateOf("") }
     var pendingAttachments by remember(threadId) { mutableStateOf<List<ChatAttachment>>(emptyList()) }
@@ -347,7 +370,7 @@ fun ChatShellScreen(
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var forwardingTaskId by remember { mutableStateOf<String?>(null) }
     val capabilityState by capabilityRegistry.state.collectAsState()
-    val eligibleTools = if (threadId == "agent-codex") capabilityState.enabledCapabilities.distinctBy { it.group } else emptyList()
+    val eligibleTools = if (isCodexRuntime) capabilityState.enabledCapabilities.distinctBy { it.group } else emptyList()
     val locationReader = remember(context.applicationContext) { LocationSmokeTest(context.applicationContext) }
     DisposableEffect(locationReader) { onDispose { locationReader.cancel() } }
     val captureLocation: () -> Unit = {
@@ -425,16 +448,20 @@ fun ChatShellScreen(
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
         if (sending || uploadingAttachments || (outgoing.isBlank() && pendingAttachments.isEmpty())) return@submit
-        val toolsForTurn = resolveRequestedToolIds(
-            message = outgoing,
-            selectedToolIds = requestedToolIds,
-            enabledCapabilities = capabilityState.enabledCapabilities,
-        )
+        val toolsForTurn = if (isCodexRuntime) {
+            resolveRequestedToolIds(
+                message = outgoing,
+                selectedToolIds = requestedToolIds,
+                enabledCapabilities = capabilityState.enabledCapabilities,
+            )
+        } else {
+            emptySet()
+        }
         val localAttachmentsForTurn = pendingAttachments
         requestedToolIds = emptySet()
         pendingAttachments = emptyList()
         input = ""
-        if (threadId != "agent-codex") {
+        if (!isRuntimeThread) {
             if (localAttachmentsForTurn.isNotEmpty()) {
                 pendingAttachments = localAttachmentsForTurn
                 input = outgoing
@@ -443,27 +470,41 @@ fun ChatShellScreen(
             }
             store.sendMessage(threadId, outgoing)
         } else {
+            if (isClaudeRuntime && localAttachmentsForTurn.isNotEmpty()) {
+                pendingAttachments = localAttachmentsForTurn
+                input = outgoing
+                actionNotice = "Claude Runtime 当前未启用附件"
+                return@submit
+            }
             sending = true
             chatScope.launch {
                 try {
-                    val attachmentsForTurn = try {
-                        mediaAttachments.makeEphemeral(localAttachmentsForTurn) { progress ->
-                            withContext(Dispatchers.Main.immediate) {
-                                mediaProgressNotice(progress)?.let { actionNotice = it }
+                    val attachmentsForTurn = if (isCodexRuntime) {
+                        try {
+                            mediaAttachments.makeEphemeral(localAttachmentsForTurn) { progress ->
+                                withContext(Dispatchers.Main.immediate) {
+                                    mediaProgressNotice(progress)?.let { actionNotice = it }
+                                }
                             }
+                        } catch (error: Exception) {
+                            pendingAttachments = localAttachmentsForTurn
+                            requestedToolIds = toolsForTurn
+                            actionNotice = error.message ?: "媒体 transport 尚不可用"
+                            return@launch
                         }
-                    } catch (error: Exception) {
-                        pendingAttachments = localAttachmentsForTurn
-                        requestedToolIds = toolsForTurn
-                        actionNotice = error.message ?: "媒体 transport 尚不可用"
-                        return@launch
+                    } else {
+                        emptyList()
                     }
-                    actionNotice = "正在连接 Codex…"
+                    actionNotice = "正在连接 ${if (isClaudeRuntime) "Claude" else "Codex"}…"
                     Log.i(
                         "LoveHouseMedia",
                         "canonical_turn_send attachments=${attachmentsForTurn.size} tools=${toolsForTurn.size}",
                     )
-                    val result = store.sendCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { }
+                    val result = if (isClaudeRuntime) {
+                        store.sendClaudeMessage(outgoing) { }
+                    } else {
+                        store.sendCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { }
+                    }
                     result.onSuccess { response ->
                         actionNotice = response.evidence.toolCalls.lastOrNull()?.let { call ->
                             "${response.evidence.requestedToolIds.sorted().joinToString()} · MCP ${call.name} · ${call.status}"
@@ -591,8 +632,12 @@ fun ChatShellScreen(
                 onValueChange = { input = it },
                 onRemoveAttachment = { target -> pendingAttachments = pendingAttachments - target },
                 onSend = { submitMessage(input) },
-                onToolAction = attachmentAction,
+                onToolAction = { action ->
+                    val unavailableReason = unavailableComposerActions[action]
+                    if (unavailableReason != null) actionNotice = unavailableReason else attachmentAction(action)
+                },
                 eligibleTools = eligibleTools,
+                unavailableActions = unavailableComposerActions,
                 onToolMention = { tool ->
                     val mention = "@${tool.groupLabel}"
                     if (!input.contains(mention)) input = listOf(mention, input).filter(String::isNotBlank).joinToString(" ")
@@ -1062,6 +1107,7 @@ private fun PersonaComposer(
     onSend: () -> Unit,
     onToolAction: (String) -> Unit,
     eligibleTools: List<ToolCapability>,
+    unavailableActions: Map<String, String>,
     onToolMention: (ToolCapability) -> Unit,
     onHeightChanged: () -> Unit,
 ) {
@@ -1211,6 +1257,7 @@ private fun PersonaComposer(
                             onExpandedChange = { showAttachments = it },
                             onToolAction = onToolAction,
                             eligibleTools = eligibleTools,
+                            unavailableActions = unavailableActions,
                             onToolMention = onToolMention,
                         )
                     },
@@ -1315,6 +1362,7 @@ private fun ComposerAttachmentButton(
     onExpandedChange: (Boolean) -> Unit,
     onToolAction: (String) -> Unit,
     eligibleTools: List<ToolCapability>,
+    unavailableActions: Map<String, String>,
     onToolMention: (ToolCapability) -> Unit,
 ) {
     var toolMode by remember { mutableStateOf(false) }
@@ -1340,9 +1388,14 @@ private fun ComposerAttachmentButton(
                 Text("没有已启用且可用的工具", Modifier.padding(horizontal = 10.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp)
             }
             rows.forEach { (icon, item) ->
+                val unavailable = item in unavailableActions
                 Row(
                     Modifier.fillMaxWidth().clickable {
-                        if (item == "工具") toolMode = true
+                        if (unavailable) {
+                            onExpandedChange(false)
+                            toolMode = false
+                            onToolAction(item)
+                        } else if (item == "工具") toolMode = true
                         else if (toolMode) {
                             eligibleTools.firstOrNull { "@${it.groupLabel}" == item }?.let(onToolMention)
                             onExpandedChange(false)
@@ -1356,8 +1409,12 @@ private fun ComposerAttachmentButton(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
                 ) {
-                    LoveHouseIconView(icon, null, Modifier.size(16.dp), PersonaMuted)
-                    Text(item, color = PersonaInk, fontSize = 10.sp)
+                    LoveHouseIconView(icon, null, Modifier.size(16.dp), if (unavailable) PersonaMuted.copy(alpha = .58f) else PersonaMuted)
+                    Text(
+                        if (unavailable) "$item · 暂不可用" else item,
+                        color = if (unavailable) PersonaMuted else PersonaInk,
+                        fontSize = 10.sp,
+                    )
                 }
             }
         }

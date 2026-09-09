@@ -146,6 +146,7 @@ private fun LoveHouseContent(
                 capabilityRegistry = dependencies.capabilityRegistry,
                 toolConnections = dependencies.toolConnections,
                 toolConnectionProbe = dependencies.toolConnectionProbe,
+                onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
             )
         }
 

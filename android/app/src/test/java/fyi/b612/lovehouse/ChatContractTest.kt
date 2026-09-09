@@ -15,6 +15,7 @@ import fyi.b612.lovehouse.feature.chat.resolveChatWallpaperKey
 import fyi.b612.lovehouse.feature.chat.resolveChatWallpaperPath
 import fyi.b612.lovehouse.feature.chat.ChatVoiceInputState
 import fyi.b612.lovehouse.feature.chat.composerTranscriptOrNull
+import fyi.b612.lovehouse.feature.chat.composerUnavailableActions
 import fyi.b612.lovehouse.feature.chat.ChatLocationAttachment
 import fyi.b612.lovehouse.feature.chat.ChatMediaAttachment
 import fyi.b612.lovehouse.feature.chat.buildCodexChatPayload
@@ -131,6 +132,15 @@ class ChatContractTest {
         assertTrue(payload.contains("\"window_id\":\"${ClaudeRuntime.windowId}\""))
         assertFalse(payload.contains("allowed_tool_ids"))
         assertFalse(payload.contains("attachments"))
+    }
+
+    @Test
+    fun `claude keeps composer actions visible but unavailable without changing codex`() {
+        val claudeUnavailable = composerUnavailableActions(ClaudeRuntime)
+
+        assertEquals(setOf("相机", "照片", "文件", "定位", "工具"), claudeUnavailable.keys)
+        assertTrue(claudeUnavailable.values.all { it.contains("当前未启用") })
+        assertTrue(composerUnavailableActions(fyi.b612.lovehouse.feature.chat.CodexRuntime).isEmpty())
     }
 
     @Test
