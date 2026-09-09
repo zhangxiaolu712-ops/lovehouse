@@ -1,7 +1,7 @@
 const ACTORS = new Set(['gpt', 'claude'])
 const ENGINEERING_ACTORS = new Set(['gpt', 'claude', 'codex', 'owner'])
 
-function fixedActor(actor) {
+export function fixedActor(actor) {
   if (!ACTORS.has(actor)) throw new TypeError('A fixed Memory V2 actor is required')
   return actor
 }

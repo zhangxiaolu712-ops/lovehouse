@@ -35,11 +35,15 @@ import {
   SupabaseMemoryV2Repository,
 } from './memory-v2/index.js'
 import { PostgresEngineeringRepository } from './memory-v2/postgresEngineeringRepository.js'
+import {
+  PostgresMemoryV2ReadRepository,
+  ReadCutoverMemoryV2Repository,
+} from './memory-v2/postgresReadRepository.js'
 import { EngineeringShadowMonitor, ShadowEngineeringRepository, ShadowProjectChecklistStore } from './memory-v2/engineeringShadow.js'
 import { ReadCutoverEngineeringRepository, ReadCutoverProjectChecklistStore } from './memory-v2/engineeringReadCutover.js'
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
-import { createLivingroomRest } from './livingroom.js'
+import { createLivingroomRest, createPostgresLivingroomReadCutover } from './livingroom.js'
 import { SupabaseLivingroomTaskRepository } from './livingroom-tasks/repository.js'
 import { CODEX_VPS_ROUTE } from './livingroom-tasks/routing.js'
 import { FileTransientThreadReader } from './livingroom-tasks/transientStore.js'
@@ -94,6 +98,7 @@ const SUPABASE_SERVER_KEY = process.env.SUPABASE_SECRET_KEY
   || ''
 const ENGINEERING_DATABASE_URL = process.env.ENGINEERING_DATABASE_URL || ''
 const ENGINEERING_SHADOW_DATABASE_URL = process.env.ENGINEERING_SHADOW_DATABASE_URL || ''
+const LIFE_MEMORY_READ_DATABASE_URL = process.env.LIFE_MEMORY_READ_DATABASE_URL || ''
 if (ENGINEERING_DATABASE_URL && ENGINEERING_SHADOW_DATABASE_URL) {
   throw new Error('ENGINEERING_DATABASE_URL and ENGINEERING_SHADOW_DATABASE_URL are mutually exclusive')
 }
@@ -211,7 +216,7 @@ const supabaseRest = createSupabaseRest({
   url: SUPABASE_URL,
   serverKey: SUPABASE_SERVER_KEY,
 })
-const livingroomRest = createLivingroomRest({ rest: supabaseRest })
+const supabaseLivingroomRest = createLivingroomRest({ rest: supabaseRest })
 const livingroomTaskThreads = new FileTransientThreadReader({
   filePath: process.env.LIVINGROOM_TRANSIENT_FILE
     || '/root/lovehouse-codex-chat-state/livingroom-transient-threads.json',
@@ -228,6 +233,24 @@ const memoryV2Repository = new SupabaseMemoryV2Repository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
 })
+const postgresMemoryV2ReadRepository = LIFE_MEMORY_READ_DATABASE_URL
+  ? new PostgresMemoryV2ReadRepository({
+      connectionString: LIFE_MEMORY_READ_DATABASE_URL,
+      ownerId: OWNER_USER_ID,
+    })
+  : null
+const activeMemoryV2Repository = postgresMemoryV2ReadRepository
+  ? new ReadCutoverMemoryV2Repository({
+      legacy: memoryV2Repository,
+      postgres: postgresMemoryV2ReadRepository,
+    })
+  : memoryV2Repository
+const livingroomRest = postgresMemoryV2ReadRepository
+  ? createPostgresLivingroomReadCutover({
+      legacy: supabaseLivingroomRest,
+      pool: postgresMemoryV2ReadRepository.pool,
+    })
+  : supabaseLivingroomRest
 const railwayEngineeringRepository = ENGINEERING_DATABASE_URL
   ? new PostgresEngineeringRepository({
       connectionString: ENGINEERING_DATABASE_URL,
@@ -256,7 +279,7 @@ const activeEngineeringRepository = engineeringShadowRepository
       })
     : memoryV2Repository
 const memoryV2Service = new MemoryV2Service({
-  repository: memoryV2Repository,
+  repository: activeMemoryV2Repository,
   embedding: createOllamaEmbeddingFromEnv(),
 })
 const engineeringMemoryService = new EngineeringMemoryService({
@@ -483,7 +506,7 @@ installClientApi(app, {
     livingroom: true,
   },
   engineeringMemoryService,
-  memoryV2Repository,
+  memoryV2Repository: activeMemoryV2Repository,
   memoryV2Service,
   projectChecklistStore,
   runtimeStatusProvider,
@@ -611,6 +634,10 @@ app.get('/health', (_req, res) => {
     r2_media_url_ttl_seconds: r2MediaService.urlTtlSeconds,
     engineering_read_source: railwayEngineeringRepository ? 'railway_postgres' : 'supabase',
     engineering_write_source: 'supabase',
+    life_memory_read_source: postgresMemoryV2ReadRepository ? 'postgres' : 'supabase',
+    life_memory_write_source: 'supabase',
+    livingroom_read_source: postgresMemoryV2ReadRepository ? 'postgres' : 'supabase',
+    livingroom_write_source: 'supabase',
     engineering_shadow: engineeringShadowMonitor?.snapshot() || { enabled: false },
   })
 })

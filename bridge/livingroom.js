@@ -1,3 +1,5 @@
+import pg from 'pg'
+
 const LIVINGROOM_TABLE = 'livingroom'
 const LIVINGROOM_FENCE = Symbol('lovehouse.livingroom.fence')
 
@@ -61,6 +63,56 @@ export function createLivingroomRest({ rest }) {
       operation: writesLivingroom ? 'write' : 'read',
       requireSingleRow: writesLivingroom,
     })
+  }
+
+  Object.defineProperty(livingroomRest, LIVINGROOM_FENCE, { value: true })
+  return livingroomRest
+}
+
+const LIVINGROOM_READ_SQL = `
+  select coalesce(jsonb_agg(to_jsonb(room) order by room.created_at desc), '[]'::jsonb) as result
+  from (
+    select id, sender, message, created_at
+    from public.livingroom
+    where ($1::timestamptz is null or created_at > $1::timestamptz)
+    order by created_at desc
+    limit $2::integer
+  ) room
+`
+
+function parseLivingroomReadPath(path) {
+  const [table, query = ''] = String(path || '').split('?', 2)
+  if (table !== LIVINGROOM_TABLE) throw scopeViolation()
+  const params = new URLSearchParams(query)
+  for (const key of params.keys()) {
+    if (!['order', 'limit', 'created_at'].includes(key)) throw scopeViolation()
+  }
+  if (params.get('order') !== 'created_at.desc') throw scopeViolation()
+  const limit = Number.parseInt(params.get('limit'), 10)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw scopeViolation()
+  const createdAt = params.get('created_at')
+  if (createdAt !== null && !createdAt.startsWith('gt.')) throw scopeViolation()
+  return { limit, since: createdAt === null ? null : createdAt.slice(3) }
+}
+
+/** Reads livingroom from PostgreSQL and leaves the existing Supabase write path intact. */
+export function createPostgresLivingroomReadCutover({
+  legacy,
+  connectionString,
+  pool = null,
+  ssl = { rejectUnauthorized: false },
+}) {
+  if (!isLivingroomRest(legacy)) throw new TypeError('A fenced legacy livingroom REST function is required')
+  if (!pool && !connectionString) throw new TypeError('LIFE_MEMORY_READ_DATABASE_URL is required')
+  const postgresPool = pool || new pg.Pool({ connectionString, ssl, max: 5, idleTimeoutMillis: 30_000 })
+
+  const livingroomRest = async function livingroomRest(method, path, body) {
+    const normalizedMethod = String(method || '').toUpperCase()
+    if (normalizedMethod === 'POST') return legacy(normalizedMethod, path, body)
+    if (normalizedMethod !== 'GET') throw scopeViolation()
+    const { since, limit } = parseLivingroomReadPath(path)
+    const result = await postgresPool.query(LIVINGROOM_READ_SQL, [since, limit])
+    return validateLivingroomRows(result.rows[0]?.result ?? [], { operation: 'read' })
   }
 
   Object.defineProperty(livingroomRest, LIVINGROOM_FENCE, { value: true })
