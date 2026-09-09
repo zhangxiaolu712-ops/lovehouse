@@ -40,7 +40,6 @@ import {
   ReadCutoverMemoryV2Repository,
 } from './memory-v2/postgresReadRepository.js'
 import { EngineeringShadowMonitor, ShadowEngineeringRepository, ShadowProjectChecklistStore } from './memory-v2/engineeringShadow.js'
-import { ReadCutoverEngineeringRepository, ReadCutoverProjectChecklistStore } from './memory-v2/engineeringReadCutover.js'
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest, createPostgresLivingroomReadCutover } from './livingroom.js'
@@ -273,10 +272,7 @@ const activeEngineeringRepository = engineeringShadowRepository
       monitor: engineeringShadowMonitor,
     })
   : railwayEngineeringRepository
-    ? new ReadCutoverEngineeringRepository({
-        legacy: memoryV2Repository,
-        railway: railwayEngineeringRepository,
-      })
+    ? railwayEngineeringRepository
     : memoryV2Repository
 const memoryV2Service = new MemoryV2Service({
   repository: activeMemoryV2Repository,
@@ -293,10 +289,7 @@ const projectChecklistStore = engineeringShadowRepository
       monitor: engineeringShadowMonitor,
     })
   : railwayEngineeringRepository
-    ? new ReadCutoverProjectChecklistStore({
-        legacy: primaryProjectChecklistStore,
-        railway: railwayEngineeringRepository,
-      })
+    ? new ProjectChecklistStore({ repository: railwayEngineeringRepository })
     : primaryProjectChecklistStore
 const runtimeStatusProvider = createRuntimeStatusProvider({
   listProcesses: () => new Promise((resolve, reject) => {
@@ -633,7 +626,7 @@ app.get('/health', (_req, res) => {
     r2_media_max_bytes: r2MediaService.maxBytes,
     r2_media_url_ttl_seconds: r2MediaService.urlTtlSeconds,
     engineering_read_source: railwayEngineeringRepository ? 'railway_postgres' : 'supabase',
-    engineering_write_source: 'supabase',
+    engineering_write_source: railwayEngineeringRepository ? 'railway_postgres' : 'supabase',
     life_memory_read_source: postgresMemoryV2ReadRepository ? 'postgres' : 'supabase',
     life_memory_write_source: 'supabase',
     livingroom_read_source: postgresMemoryV2ReadRepository ? 'postgres' : 'supabase',
