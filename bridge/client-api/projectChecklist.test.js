@@ -3,7 +3,23 @@ import { once } from 'node:events'
 import http from 'node:http'
 import test from 'node:test'
 import express from 'express'
-import { installProjectChecklistApi } from './projectChecklist.js'
+import { installProjectChecklistApi, ProjectChecklistStore } from './projectChecklist.js'
+
+test('checklist store delegates unchanged contract to Postgres repository', async () => {
+  const calls = []
+  const repository = {
+    loadChecklist: async owner => (calls.push(['load', owner]), { items: [] }),
+    saveChecklist: async (owner, item) => (calls.push(['save', owner, item]), item),
+    deleteChecklist: async (owner, key) => (calls.push(['delete', owner, key]), true),
+    migrateChecklistLocalV1: async (owner, items) => (calls.push(['migrate', owner, items]), { migrated: true }),
+  }
+  const store = new ProjectChecklistStore({ repository })
+  await store.load('owner-1')
+  await store.save('owner-1', { id: 'item' })
+  await store.delete('owner-1', 'item')
+  await store.migrateLocalV1('owner-1', [])
+  assert.deepEqual(calls.map(call => call[0]), ['load', 'save', 'delete', 'migrate'])
+})
 
 test('checklist API scopes every operation to authenticated owner and migration is server mediated', async t => {
   const calls = []

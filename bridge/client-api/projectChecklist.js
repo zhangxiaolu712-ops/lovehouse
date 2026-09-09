@@ -9,20 +9,25 @@ function unwrap(payload) {
 }
 
 export class ProjectChecklistStore {
-  constructor({ rest }) {
-    if (typeof rest !== 'function') throw new TypeError('Project checklist requires Supabase REST')
+  constructor({ rest = null, repository = null }) {
+    if (typeof rest !== 'function' && !repository) throw new TypeError('Project checklist requires a repository')
     this.rest = rest
+    this.repository = repository
   }
   load(ownerId) {
+    if (this.repository) return this.repository.loadChecklist(ownerId)
     return this.rest('POST', 'rpc/engineering_project_checklist_load', { p_owner_id: ownerId }).then(unwrap)
   }
   save(ownerId, item) {
+    if (this.repository) return this.repository.saveChecklist(ownerId, item)
     return this.rest('POST', 'rpc/engineering_project_checklist_save', { p_owner_id: ownerId, p_item: item }).then(unwrap)
   }
   delete(ownerId, itemKey) {
+    if (this.repository) return this.repository.deleteChecklist(ownerId, itemKey)
     return this.rest('POST', 'rpc/engineering_project_checklist_delete', { p_owner_id: ownerId, p_item_key: itemKey }).then(unwrap)
   }
   migrateLocalV1(ownerId, items) {
+    if (this.repository) return this.repository.migrateChecklistLocalV1(ownerId, items)
     return this.rest('POST', 'rpc/engineering_project_checklist_migrate_local_v1', { p_owner_id: ownerId, p_items: items }).then(unwrap)
   }
 }
