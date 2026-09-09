@@ -7,7 +7,7 @@ import android.net.Uri
 import android.util.Log
 import fyi.b612.lovehouse.BuildConfig
 import fyi.b612.lovehouse.core.auth.OwnerSessionStore
-import fyi.b612.lovehouse.feature.nativelab.readSelectedResource
+import fyi.b612.lovehouse.core.capability.readSelectedResource
 import java.io.BufferedReader
 import java.io.File
 import java.net.HttpURLConnection

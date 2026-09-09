@@ -110,8 +110,13 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconGallery
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconOpticalSize
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
+import fyi.b612.lovehouse.core.capability.CapabilityAvailability
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityId
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityRegistry
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityState
+import fyi.b612.lovehouse.core.capability.ProviderConsumption
 import fyi.b612.lovehouse.core.storage.LocalStorage
-import fyi.b612.lovehouse.feature.nativelab.LocationSmokeTest
+import fyi.b612.lovehouse.core.capability.OneShotLocationProvider
 import fyi.b612.lovehouse.feature.settings.ToolAvailability
 import fyi.b612.lovehouse.feature.settings.ToolCapability
 import fyi.b612.lovehouse.feature.settings.CapabilityRegistry
@@ -154,9 +159,20 @@ internal fun resolveRequestedToolIds(
     return requested.toSortedSet()
 }
 
-internal fun composerUnavailableActions(runtime: ChatRuntimeConfig): Map<String, String> = buildMap {
-    if (!runtime.attachmentsEnabled) {
-        listOf("相机", "照片", "文件", "定位").forEach { action ->
+internal fun composerUnavailableActions(
+    runtime: ChatRuntimeConfig,
+    baseCapabilities: LoveHouseCapabilityState? = null,
+): Map<String, String> = buildMap {
+    val attachmentActions = mapOf(
+        "相机" to LoveHouseCapabilityId.AttachmentCamera,
+        "照片" to LoveHouseCapabilityId.AttachmentPhoto,
+        "文件" to LoveHouseCapabilityId.AttachmentFile,
+        "定位" to LoveHouseCapabilityId.AttachmentLocation,
+    )
+    attachmentActions.forEach { (action, capabilityId) ->
+        val capability = baseCapabilities?.capability(capabilityId)
+        val providerSupport = capability?.providerConsumption?.get(runtime.personaId)
+        if (!runtime.attachmentsEnabled || providerSupport == ProviderConsumption.Unsupported) {
             put(action, "${runtime.personaId.replaceFirstChar(Char::uppercase)} Runtime 当前未启用附件")
         }
     }
@@ -299,6 +315,7 @@ fun ChatShellScreen(
     store: ChatSessionStore,
     localStorage: LocalStorage,
     capabilityRegistry: CapabilityRegistry,
+    baseCapabilities: LoveHouseCapabilityRegistry,
     mediaAttachments: MediaAttachmentClient,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -342,7 +359,11 @@ fun ChatShellScreen(
     val isCodexRuntime = threadId == "agent-codex"
     val isClaudeRuntime = threadId == ClaudeRuntime.threadId
     val isRuntimeThread = isCodexRuntime || isClaudeRuntime
-    val unavailableComposerActions = composerUnavailableActions(if (isClaudeRuntime) ClaudeRuntime else CodexRuntime)
+    val baseCapabilityState by baseCapabilities.state.collectAsState()
+    val unavailableComposerActions = composerUnavailableActions(
+        if (isClaudeRuntime) ClaudeRuntime else CodexRuntime,
+        baseCapabilityState,
+    )
     var selectedModel by remember(threadId) {
         mutableStateOf(
             when {
@@ -371,7 +392,7 @@ fun ChatShellScreen(
     var forwardingTaskId by remember { mutableStateOf<String?>(null) }
     val capabilityState by capabilityRegistry.state.collectAsState()
     val eligibleTools = if (isCodexRuntime) capabilityState.enabledCapabilities.distinctBy { it.group } else emptyList()
-    val locationReader = remember(context.applicationContext) { LocationSmokeTest(context.applicationContext) }
+    val locationReader = remember(context.applicationContext) { OneShotLocationProvider(context.applicationContext) }
     DisposableEffect(locationReader) { onDispose { locationReader.cancel() } }
     val captureLocation: () -> Unit = {
         actionNotice = "正在获取一次当前位置…"
@@ -418,6 +439,7 @@ fun ChatShellScreen(
         }
     }
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        baseCapabilities.refresh()
         if (grants.values.any { it }) captureLocation()
         else actionNotice = "定位权限未授予"
     }
@@ -636,7 +658,11 @@ fun ChatShellScreen(
                     val unavailableReason = unavailableComposerActions[action]
                     if (unavailableReason != null) actionNotice = unavailableReason else attachmentAction(action)
                 },
-                eligibleTools = eligibleTools,
+                    eligibleTools = eligibleTools,
+                    sttAvailability = baseCapabilityState.capability(LoveHouseCapabilityId.VoiceStt)?.availability
+                        ?: CapabilityAvailability.Unavailable,
+                    sttUnavailableReason = baseCapabilityState.capability(LoveHouseCapabilityId.VoiceStt)?.unavailableReason,
+                    onCapabilityRefresh = baseCapabilities::refresh,
                 unavailableActions = unavailableComposerActions,
                 onToolMention = { tool ->
                     val mention = "@${tool.groupLabel}"
@@ -1107,6 +1133,9 @@ private fun PersonaComposer(
     onSend: () -> Unit,
     onToolAction: (String) -> Unit,
     eligibleTools: List<ToolCapability>,
+    sttAvailability: CapabilityAvailability,
+    sttUnavailableReason: String?,
+    onCapabilityRefresh: () -> Unit,
     unavailableActions: Map<String, String>,
     onToolMention: (ToolCapability) -> Unit,
     onHeightChanged: () -> Unit,
@@ -1122,21 +1151,22 @@ private fun PersonaComposer(
     var imeShownDuringCurrentFocus by remember { mutableStateOf(false) }
     var voiceState by remember { mutableStateOf(ChatVoiceInputState()) }
     var voiceMode by remember { mutableStateOf(ChatVoiceComposerMode.Text) }
-    val voiceAvailable = remember(context) { android.speech.SpeechRecognizer.isRecognitionAvailable(context) }
+    val voiceAvailable = sttAvailability == CapabilityAvailability.Available
     val voiceController = remember(context, voiceAvailable) {
         if (voiceAvailable) ChatVoiceInputController(context) { voiceState = it } else null
     }
     DisposableEffect(voiceController) { onDispose { voiceController?.destroy() } }
     val microphonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        onCapabilityRefresh()
         if (!granted) voiceState = ChatVoiceInputState(error = "需要麦克风权限才能语音输入")
     }
     val startVoiceInput: () -> Unit = {
         when {
-            !voiceAvailable -> voiceState = ChatVoiceInputState(error = STT_UNAVAILABLE_MESSAGE)
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> {
                 voiceState = ChatVoiceInputState(error = "授权后请再次按住说话")
                 microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
             }
+            !voiceAvailable -> voiceState = ChatVoiceInputState(error = sttUnavailableReason ?: STT_UNAVAILABLE_MESSAGE)
             else -> {
                 voiceMode = transitionVoiceComposer(voiceMode, ChatVoiceComposerAction.Press)
                 voiceController?.start()

@@ -1,4 +1,4 @@
-package fyi.b612.lovehouse.feature.nativelab
+package fyi.b612.lovehouse.core.capability
 
 import android.Manifest
 import android.app.NotificationChannel
@@ -19,12 +19,12 @@ import fyi.b612.lovehouse.core.navigation.AppDestination
 private const val TestChannelId = "lovehouse_native_test"
 private const val TestNotificationId = 6120
 
-internal data class NotificationSmokeResult(
+data class NotificationSmokeResult(
     val message: String,
     val needsNotificationSettings: Boolean = false,
 )
 
-internal fun sendTestNotification(context: Context): NotificationSmokeResult {
+fun sendTestNotification(context: Context): NotificationSmokeResult {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
         PackageManager.PERMISSION_GRANTED

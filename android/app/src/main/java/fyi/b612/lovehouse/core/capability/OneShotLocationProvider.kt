@@ -1,4 +1,4 @@
-package fyi.b612.lovehouse.feature.nativelab
+package fyi.b612.lovehouse.core.capability
 
 import android.Manifest
 import android.content.Context
@@ -10,7 +10,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import java.util.Locale
 
-internal data class LocationSnapshot(
+data class LocationSnapshot(
     val latitude: Double,
     val longitude: Double,
     val accuracyMeters: Float?,
@@ -18,13 +18,13 @@ internal data class LocationSnapshot(
     val capturedAtEpochMillis: Long = 0L,
 )
 
-internal data class LocationSmokeResult(
+data class LocationSmokeResult(
     val message: String,
     val needsLocationSettings: Boolean = false,
     val snapshot: LocationSnapshot? = null,
 )
 
-internal class LocationSmokeTest(
+class OneShotLocationProvider(
     context: Context,
 ) {
     private val appContext = context.applicationContext
@@ -91,7 +91,7 @@ private fun Location.toSnapshot() = LocationSnapshot(
     capturedAtEpochMillis = time.takeIf { it > 0L } ?: System.currentTimeMillis(),
 )
 
-internal fun formatLocationSnapshot(snapshot: LocationSnapshot): String {
+fun formatLocationSnapshot(snapshot: LocationSnapshot): String {
     val provider = when (snapshot.provider) {
         LocationManager.GPS_PROVIDER -> "卫星定位"
         LocationManager.NETWORK_PROVIDER -> "网络定位"
