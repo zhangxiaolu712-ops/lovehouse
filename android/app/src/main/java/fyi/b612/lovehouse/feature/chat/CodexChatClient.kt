@@ -16,6 +16,19 @@ data class CodexRuntimeEvidence(
     val toolCalls: List<CodexToolCallEvidence> = emptyList(),
 )
 
+data class ChatRuntimeConfig(
+    val personaId: String,
+    val threadId: String,
+    val windowId: String,
+    val expectedRuntime: String,
+    val expectedAdapterId: String,
+    val attachmentCapabilities: AttachmentCapabilities,
+    val toolCenterEnabled: Boolean,
+) {
+    val attachmentsEnabled: Boolean
+        get() = attachmentCapabilities.supported
+}
+
 data class CodexToolCallEvidence(
     val name: String,
     val status: String,
@@ -56,6 +69,22 @@ interface CodexChatClient {
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
     ): CodexChatResult = streamMessage(threadId, message, requestedToolIds, attachments, onText)
+
+    suspend fun streamRuntimeMessageWithProcess(
+        config: ChatRuntimeConfig,
+        message: String,
+        requestedToolIds: Set<String> = emptySet(),
+        attachments: List<ChatAttachment> = emptyList(),
+        onText: (String) -> Unit,
+        onProcess: (ChatProcessEvent) -> Unit,
+    ): CodexChatResult = streamMessageWithProcess(
+        config.threadId,
+        message,
+        requestedToolIds,
+        attachments,
+        onText,
+        onProcess,
+    )
 }
 
 class HttpCodexChatClient(
@@ -69,7 +98,7 @@ class HttpCodexChatClient(
         requestedToolIds: Set<String>,
         attachments: List<ChatAttachment>,
         onText: (String) -> Unit,
-    ): CodexChatResult = streamInternal(threadId, message, requestedToolIds, attachments, onText) {}
+    ): CodexChatResult = streamInternal(CodexRuntime.copy(threadId = threadId), message, requestedToolIds, attachments, onText) {}
 
     override suspend fun streamMessageWithProcess(
         threadId: String,
@@ -78,16 +107,26 @@ class HttpCodexChatClient(
         attachments: List<ChatAttachment>,
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
-    ): CodexChatResult = streamInternal(threadId, message, requestedToolIds, attachments, onText, onProcess)
+    ): CodexChatResult = streamInternal(CodexRuntime.copy(threadId = threadId), message, requestedToolIds, attachments, onText, onProcess)
+
+    override suspend fun streamRuntimeMessageWithProcess(
+        config: ChatRuntimeConfig,
+        message: String,
+        requestedToolIds: Set<String>,
+        attachments: List<ChatAttachment>,
+        onText: (String) -> Unit,
+        onProcess: (ChatProcessEvent) -> Unit,
+    ): CodexChatResult = streamInternal(config, message, requestedToolIds, attachments, onText, onProcess)
 
     private suspend fun streamInternal(
-        threadId: String,
+        config: ChatRuntimeConfig,
         message: String,
         requestedToolIds: Set<String>,
         attachments: List<ChatAttachment>,
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
     ): CodexChatResult {
+        require(config.attachmentsEnabled || attachments.isEmpty()) { "${config.personaId} Runtime 尚未启用附件" }
         val bearer = try {
             ownerSession.currentBearer()
         } catch (error: OwnerSessionException) {
@@ -102,9 +141,13 @@ class HttpCodexChatClient(
             setRequestProperty("Accept", "text/event-stream")
             setRequestProperty("Authorization", "Bearer ${bearer.value}")
         }
-        val allowedToolIds = allowedToolIdsFor(threadId).intersect(requestedToolIds)
-        val payload = buildCodexChatPayload(
-            threadId,
+        val allowedToolIds = if (config.toolCenterEnabled) {
+            allowedToolIdsFor(config.threadId).intersect(requestedToolIds)
+        } else {
+            emptySet()
+        }
+        val payload = buildChatPayload(
+            config,
             toolDirectedMessage(message, allowedToolIds),
             allowedToolIds,
             attachments,
@@ -134,7 +177,7 @@ class HttpCodexChatClient(
                     "message_start" -> evidence = CodexRuntimeEvidence(
                         runtime = jsonString(json, "runtime") ?: "",
                         adapterId = jsonString(json, "adapter_id"),
-                        threadId = jsonString(json, "thread_id") ?: threadId,
+                        threadId = jsonString(json, "thread_id") ?: config.threadId,
                     )
                     "text_delta" -> jsonString(json, "delta")?.let { delta ->
                         text += delta
@@ -189,8 +232,8 @@ class HttpCodexChatClient(
             if (text.isBlank()) throw CodexChatException("发送失败：Codex Runtime 没有返回文字")
             val runtimeEvidence = evidence
                 ?: throw CodexChatException("连接失败：响应缺少 Runtime metadata")
-            if (runtimeEvidence.runtime != "codex_cli" || runtimeEvidence.adapterId != "codex-cli-v1") {
-                throw CodexChatException("连接失败：后端不是已批准的 Codex Runtime")
+            if (runtimeEvidence.runtime != config.expectedRuntime || runtimeEvidence.adapterId != config.expectedAdapterId) {
+                throw CodexChatException("连接失败：后端不是已批准的 ${config.personaId} Runtime")
             }
             if (allowedToolIds.isNotEmpty() && toolCalls.values.none { it.status == "success" }) {
                 throw CodexChatException("工具调用未完成：Runtime 没有返回真实 MCP tools/call 成功事件")
@@ -234,9 +277,23 @@ internal fun buildCodexChatPayload(
     message: String,
     allowedToolIds: Set<String>,
     attachments: List<ChatAttachment> = emptyList(),
+): String = buildChatPayload(
+    config = CodexRuntime.copy(threadId = threadId),
+    message = message,
+    allowedToolIds = allowedToolIds,
+    attachments = attachments,
+)
+
+internal fun buildChatPayload(
+    config: ChatRuntimeConfig,
+    message: String,
+    allowedToolIds: Set<String>,
+    attachments: List<ChatAttachment> = emptyList(),
 ): String {
     val tools = allowedToolIds.sorted().joinToString(",") { "\"${jsonEscape(it)}\"" }
-    return """{"persona_id":"codex","thread_id":"$threadId","window_id":"android-codex-main","scene":"work","allowed_tool_ids":[$tools],"message":{"type":"text","text":"${jsonEscape(message)}","attachments":${chatAttachmentsJson(attachments)}}}"""
+    val toolField = if (config.toolCenterEnabled) "\"allowed_tool_ids\":[$tools]," else ""
+    val attachmentField = if (config.attachmentsEnabled) ",\"attachments\":${chatAttachmentsJson(attachments)}" else ""
+    return """{"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
 }
 
 internal fun jsonEscape(value: String): String = buildString {
@@ -263,3 +320,23 @@ private fun jsonBoolean(json: String, key: String): Boolean? =
     Regex("\\\"${Regex.escape(key)}\\\"\\s*:\\s*(true|false)").find(json)?.groupValues?.get(1)?.toBooleanStrictOrNull()
 
 internal fun stableCodexThreadId(): String = "7c814f9a-7588-4e35-b4b6-a216f172c012"
+
+internal val CodexRuntime = ChatRuntimeConfig(
+    personaId = "codex",
+    threadId = stableCodexThreadId(),
+    windowId = "android-codex-main",
+    expectedRuntime = "codex_cli",
+    expectedAdapterId = "codex-cli-v1",
+    attachmentCapabilities = CodexAttachmentCapabilities,
+    toolCenterEnabled = true,
+)
+
+internal val ClaudeRuntime = ChatRuntimeConfig(
+    personaId = "claude",
+    threadId = "1f75f3d4-3840-46fe-83b9-fbbbafeb8bba",
+    windowId = "cf9e3810-2ae7-4e58-b773-f559db4a0001",
+    expectedRuntime = "claude_cli",
+    expectedAdapterId = "claude-cli-v1",
+    attachmentCapabilities = ClaudeAttachmentCapabilities,
+    toolCenterEnabled = false,
+)
