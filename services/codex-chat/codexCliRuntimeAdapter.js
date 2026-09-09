@@ -1,12 +1,10 @@
 import { spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 
 import { estimateTokens } from './contextBreakdown.js'
 import { ChatRuntimeError } from './errors.js'
 import { unknownQuota } from './runtimeContract.js'
 import { normalizeToolPreferenceIds, toolById } from '../../bridge/tool-center/catalog.js'
+import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -132,11 +130,6 @@ function withImages(args, paths) {
     : [...args.slice(0, promptIndex), ...imageArgs, ...args.slice(promptIndex)]
 }
 
-function safeAttachmentExtension(value) {
-  const match = String(value || '').match(/\.[A-Za-z0-9]{1,10}$/)
-  return match ? match[0].toLowerCase() : ''
-}
-
 function redactDisplayText(value) {
   return String(value || '')
     .replace(/\bBearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [redacted]')
@@ -253,51 +246,11 @@ export class CodexCliRuntimeAdapter {
     this.env = narrowRuntimeEnv(env)
     this.toolMcpUrl = normalizeInternalToolMcpUrl(toolMcpUrl)
     this.fetchImpl = fetchImpl
-  }
-
-  async materializeAttachments(attachments = [], signal) {
-    if (!attachments.length) return { items: [], imagePaths: [], cleanup: async () => {} }
-    const directory = join(this.cwd, `.lovehouse-media-${randomUUID()}`)
-    await mkdir(directory, { recursive: false })
-    const items = []
-    try {
-      for (const [index, item] of attachments.entries()) {
-        if (item?.type === 'location') {
-          items.push(item)
-          continue
-        }
-        if (!['photo', 'file'].includes(item?.type) || typeof item.read_url !== 'string') {
-          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment is invalid', { stage: 'attachment', status: 400 })
-        }
-        const url = new URL(item.read_url)
-        if (url.protocol !== 'https:') {
-          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment URL is not secure', { stage: 'attachment', status: 400 })
-        }
-        const response = await this.fetchImpl(url, { signal, redirect: 'error' })
-        if (!response.ok) {
-          throw new ChatRuntimeError('ATTACHMENT_UNAVAILABLE', 'Runtime could not retrieve an attachment', { stage: 'attachment', status: 502, retryable: true })
-        }
-        const bytes = new Uint8Array(await response.arrayBuffer())
-        const responseMime = String(response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase()
-        if (responseMime && responseMime !== item.mime_type) {
-          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment type verification failed', { stage: 'attachment', status: 400 })
-        }
-        if (bytes.byteLength !== item.size || bytes.byteLength > 25 * 1024 * 1024) {
-          throw new ChatRuntimeError('ATTACHMENT_INVALID', 'Runtime attachment size verification failed', { stage: 'attachment', status: 400 })
-        }
-        const localPath = join(directory, `attachment-${String(index).padStart(2, '0')}${safeAttachmentExtension(item.name)}`)
-        await writeFile(localPath, bytes, { flag: 'wx', mode: 0o600 })
-        items.push({ ...item, read_url: undefined, local_path: localPath })
-      }
-      return {
-        items,
-        imagePaths: items.filter(item => item.type === 'photo').map(item => item.local_path),
-        cleanup: () => rm(directory, { recursive: true, force: true }),
-      }
-    } catch (error) {
-      await rm(directory, { recursive: true, force: true })
-      throw error
-    }
+    this.attachmentMaterializer = new SecureAttachmentMaterializer({
+      cwd: this.cwd,
+      fetchImpl: this.fetchImpl,
+      createError: (code, message, options) => new ChatRuntimeError(code, message, options),
+    })
   }
 
   getCapabilities() {
@@ -486,12 +439,23 @@ export class CodexCliRuntimeAdapter {
           url: `${this.toolMcpUrl}?persona_id=codex&thread_id=${encodeURIComponent(threadId)}&allowed_tool_ids=${encodeURIComponent(normalizedToolIds.join(','))}`,
         }
       : null
-    const materialized = await this.materializeAttachments(attachments, signal)
-    const command = this.startOrResume({ sessionId, toolContext })
-    command.args = withImages(command.args, materialized.imagePaths)
-    command.ownerToken = toolContext ? ownerToken : null
-    const prompt = buildPrompt(sessionId ? [] : history, message, materialized.items)
-    const estimatedInputTokens = estimateTokens(prompt)
+    const materialized = await this.attachmentMaterializer.materialize(attachments, signal)
+    let command
+    let prompt
+    let estimatedInputTokens
+    try {
+      const imagePaths = materialized.items
+        .filter(item => item.type === 'photo')
+        .map(item => item.local_path)
+      command = this.startOrResume({ sessionId, toolContext })
+      command.args = withImages(command.args, imagePaths)
+      command.ownerToken = toolContext ? ownerToken : null
+      prompt = buildPrompt(sessionId ? [] : history, message, materialized.items)
+      estimatedInputTokens = estimateTokens(prompt)
+    } catch (error) {
+      await materialized.cleanup()
+      throw error
+    }
     const startedTools = new Set()
     let runtimeSessionId = ''
     let fullText = ''
