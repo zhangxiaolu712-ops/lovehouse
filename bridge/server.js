@@ -36,6 +36,7 @@ import {
 } from './memory-v2/index.js'
 import { PostgresEngineeringRepository } from './memory-v2/postgresEngineeringRepository.js'
 import { EngineeringShadowMonitor, ShadowEngineeringRepository, ShadowProjectChecklistStore } from './memory-v2/engineeringShadow.js'
+import { ReadCutoverEngineeringRepository, ReadCutoverProjectChecklistStore } from './memory-v2/engineeringReadCutover.js'
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createLivingroomRest } from './livingroom.js'
@@ -227,12 +228,12 @@ const memoryV2Repository = new SupabaseMemoryV2Repository({
   rest: supabaseRest,
   ownerId: OWNER_USER_ID,
 })
-const engineeringRepository = ENGINEERING_DATABASE_URL
+const railwayEngineeringRepository = ENGINEERING_DATABASE_URL
   ? new PostgresEngineeringRepository({
       connectionString: ENGINEERING_DATABASE_URL,
       ownerId: OWNER_USER_ID,
     })
-  : memoryV2Repository
+  : null
 const engineeringShadowMonitor = ENGINEERING_SHADOW_DATABASE_URL
   ? new EngineeringShadowMonitor()
   : null
@@ -244,11 +245,16 @@ const engineeringShadowRepository = ENGINEERING_SHADOW_DATABASE_URL
   : null
 const activeEngineeringRepository = engineeringShadowRepository
   ? new ShadowEngineeringRepository({
-      primary: engineeringRepository,
+      primary: memoryV2Repository,
       shadow: engineeringShadowRepository,
       monitor: engineeringShadowMonitor,
     })
-  : engineeringRepository
+  : railwayEngineeringRepository
+    ? new ReadCutoverEngineeringRepository({
+        legacy: memoryV2Repository,
+        railway: railwayEngineeringRepository,
+      })
+    : memoryV2Repository
 const memoryV2Service = new MemoryV2Service({
   repository: memoryV2Repository,
   embedding: createOllamaEmbeddingFromEnv(),
@@ -256,16 +262,19 @@ const memoryV2Service = new MemoryV2Service({
 const engineeringMemoryService = new EngineeringMemoryService({
   repository: activeEngineeringRepository,
 })
-const primaryProjectChecklistStore = new ProjectChecklistStore(ENGINEERING_DATABASE_URL
-  ? { repository: engineeringRepository }
-  : { rest: supabaseRest })
+const primaryProjectChecklistStore = new ProjectChecklistStore({ rest: supabaseRest })
 const projectChecklistStore = engineeringShadowRepository
   ? new ShadowProjectChecklistStore({
       primary: primaryProjectChecklistStore,
       shadow: engineeringShadowRepository,
       monitor: engineeringShadowMonitor,
     })
-  : primaryProjectChecklistStore
+  : railwayEngineeringRepository
+    ? new ReadCutoverProjectChecklistStore({
+        legacy: primaryProjectChecklistStore,
+        railway: railwayEngineeringRepository,
+      })
+    : primaryProjectChecklistStore
 const runtimeStatusProvider = createRuntimeStatusProvider({
   listProcesses: () => new Promise((resolve, reject) => {
     pm2Client.connect(error => {
@@ -600,6 +609,8 @@ app.get('/health', (_req, res) => {
     r2_media: r2MediaService.available ? 'available' : 'unavailable',
     r2_media_max_bytes: r2MediaService.maxBytes,
     r2_media_url_ttl_seconds: r2MediaService.urlTtlSeconds,
+    engineering_read_source: railwayEngineeringRepository ? 'railway_postgres' : 'supabase',
+    engineering_write_source: 'supabase',
     engineering_shadow: engineeringShadowMonitor?.snapshot() || { enabled: false },
   })
 })
