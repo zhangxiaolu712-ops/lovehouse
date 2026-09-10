@@ -11,10 +11,10 @@ import fyi.b612.lovehouse.core.devicecontext.ScreenObserverContext
 import fyi.b612.lovehouse.core.devicecontext.formatDeviceContextSnapshot
 import fyi.b612.lovehouse.core.navigation.AppDestination
 import fyi.b612.lovehouse.core.permissions.NativeCapability
-import fyi.b612.lovehouse.feature.nativelab.LocationSnapshot
+import fyi.b612.lovehouse.core.capability.LocationSnapshot
 import fyi.b612.lovehouse.feature.nativelab.biometricAvailabilityMessage
-import fyi.b612.lovehouse.feature.nativelab.formatFileSize
-import fyi.b612.lovehouse.feature.nativelab.formatLocationSnapshot
+import fyi.b612.lovehouse.core.capability.formatFileSize
+import fyi.b612.lovehouse.core.capability.formatLocationSnapshot
 import fyi.b612.lovehouse.feature.nativelab.formatGattProperties
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
 import androidx.biometric.BiometricManager

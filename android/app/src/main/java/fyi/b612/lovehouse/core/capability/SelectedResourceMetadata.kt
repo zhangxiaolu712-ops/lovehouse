@@ -1,11 +1,11 @@
-package fyi.b612.lovehouse.feature.nativelab
+package fyi.b612.lovehouse.core.capability
 
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import java.util.Locale
 
-internal data class SelectedResourceMetadata(
+data class SelectedResourceMetadata(
     val displayName: String,
     val mimeType: String,
     val sizeBytes: Long?,
@@ -17,7 +17,7 @@ internal data class SelectedResourceMetadata(
     }
 }
 
-internal fun ContentResolver.readSelectedResource(uri: Uri): SelectedResourceMetadata {
+fun ContentResolver.readSelectedResource(uri: Uri): SelectedResourceMetadata {
     var displayName: String? = null
     var sizeBytes: Long? = null
 
@@ -43,7 +43,7 @@ internal fun ContentResolver.readSelectedResource(uri: Uri): SelectedResourceMet
     )
 }
 
-internal fun formatFileSize(sizeBytes: Long?): String = when {
+fun formatFileSize(sizeBytes: Long?): String = when {
     sizeBytes == null || sizeBytes < 0 -> "未知"
     sizeBytes < 1_024 -> "$sizeBytes B"
     sizeBytes < 1_048_576 -> String.format(Locale.CHINA, "%.1f KB", sizeBytes / 1_024.0)

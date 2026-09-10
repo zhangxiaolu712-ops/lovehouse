@@ -106,6 +106,7 @@ private fun LoveHouseContent(
                 store = chatStore,
                 localStorage = dependencies.localStorage,
                 capabilityRegistry = dependencies.capabilityRegistry,
+                baseCapabilities = dependencies.baseCapabilities,
                 mediaAttachments = dependencies.mediaAttachments,
                 onBack = { navController.popBackStack() },
             )
@@ -144,6 +145,7 @@ private fun LoveHouseContent(
                 permissionStatusProvider = dependencies.permissions,
                 ownerSession = dependencies.ownerSession,
                 capabilityRegistry = dependencies.capabilityRegistry,
+                baseCapabilities = dependencies.baseCapabilities,
                 toolConnections = dependencies.toolConnections,
                 toolConnectionProbe = dependencies.toolConnectionProbe,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
@@ -192,6 +194,7 @@ private fun LoveHouseContent(
         ) {
             NativeLabScreen(
                 systemStatusProvider = dependencies.systemStatus,
+                baseCapabilities = dependencies.baseCapabilities,
                 onBack = { navController.popBackStack() },
             )
         }

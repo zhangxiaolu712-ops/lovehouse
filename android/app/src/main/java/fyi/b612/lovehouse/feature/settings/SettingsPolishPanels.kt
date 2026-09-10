@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.storage.LocalStorage
-import fyi.b612.lovehouse.feature.nativelab.LocationSmokeTest
+import fyi.b612.lovehouse.core.capability.OneShotLocationProvider
 import androidx.core.content.ContextCompat
 import java.time.Instant
 import java.time.ZoneId
@@ -103,7 +103,7 @@ internal fun PersonaVoiceSettings(storage: LocalStorage) {
 @Composable
 internal fun GlobalLocationSettings(permissionStatusProvider: PermissionStatusProvider) {
     val context = LocalContext.current
-    val location = remember(context.applicationContext) { LocationSmokeTest(context.applicationContext) }
+    val location = remember(context.applicationContext) { OneShotLocationProvider(context.applicationContext) }
     DisposableEffect(location) { onDispose { location.cancel() } }
     var state by remember { mutableStateOf(GlobalLocationState()) }
     var adding by remember { mutableStateOf<String?>(null) }

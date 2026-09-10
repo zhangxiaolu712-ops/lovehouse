@@ -54,10 +54,12 @@ import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.BuildConfig
 import fyi.b612.lovehouse.core.auth.OwnerSessionStatus
 import fyi.b612.lovehouse.core.auth.OwnerSessionStore
+import fyi.b612.lovehouse.core.capability.CapabilityAvailability
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityId
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityRegistry
+import fyi.b612.lovehouse.core.capability.LoveHouseCapability
 import fyi.b612.lovehouse.core.designsystem.LocalLoveHouseAppearance
 import fyi.b612.lovehouse.core.devicecontext.AndroidDeviceContextProvider
-import fyi.b612.lovehouse.core.permissions.NativeCapability
-import fyi.b612.lovehouse.core.permissions.PermissionState
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
@@ -118,6 +120,7 @@ fun SettingsScreen(
     permissionStatusProvider: PermissionStatusProvider,
     ownerSession: OwnerSessionStore,
     capabilityRegistry: CapabilityRegistry,
+    baseCapabilities: LoveHouseCapabilityRegistry,
     toolConnections: ToolConnectionStore,
     toolConnectionProbe: ToolConnectionProbe,
     onOpenConnectionControl: () -> Unit,
@@ -132,6 +135,7 @@ fun SettingsScreen(
                 localStorage = localStorage,
                 permissionStatusProvider = permissionStatusProvider,
                 ownerSession = ownerSession,
+                baseCapabilities = baseCapabilities,
                 toolConnections = toolConnections,
                 onOpenConnectionControl = onOpenConnectionControl,
                 onSelect = { selected = it },
@@ -142,6 +146,7 @@ fun SettingsScreen(
                 localStorage = localStorage,
                 permissionStatusProvider = permissionStatusProvider,
                 capabilityRegistry = capabilityRegistry,
+                baseCapabilities = baseCapabilities,
                 toolConnections = toolConnections,
                 toolConnectionProbe = toolConnectionProbe,
                 onBack = { selected = null },
@@ -157,6 +162,7 @@ private fun SettingsHome(
     localStorage: LocalStorage,
     permissionStatusProvider: PermissionStatusProvider,
     ownerSession: OwnerSessionStore,
+    baseCapabilities: LoveHouseCapabilityRegistry,
     toolConnections: ToolConnectionStore,
     onOpenConnectionControl: () -> Unit,
     onSelect: (SettingEntry) -> Unit,
@@ -164,7 +170,7 @@ private fun SettingsHome(
     var query by remember { mutableStateOf("") }
     val ownerName by localStorage.observeString(OwnerNameKey).collectAsState(initial = null)
     val profilesJson by localStorage.observeString(PersonasKey).collectAsState(initial = null)
-    val permissionStatuses by permissionStatusProvider.statuses.collectAsState()
+    val baseCapabilityState by baseCapabilities.state.collectAsState()
     val session by ownerSession.state.collectAsState()
     val savedToolConnections by toolConnections.connections.collectAsState()
     val appearance = LocalLoveHouseAppearance.current
@@ -175,10 +181,11 @@ private fun SettingsHome(
             isScreenObserverActive = { ScreenObserverRuntime.state.value.status == ScreenObserverStatus.Active },
         ).getCurrentDeviceContext()
     }
-    LaunchedEffect(permissionStatusProvider) { permissionStatusProvider.refresh() }
-    val availablePermissions = permissionStatuses.count { it.state == PermissionState.Granted || it.state == PermissionState.NotRequired }
-    val notificationState = permissionStatuses.firstOrNull { it.capability == NativeCapability.Notifications }?.state?.label ?: "状态未知"
-    val biometricState = permissionStatuses.firstOrNull { it.capability == NativeCapability.Biometrics }?.state?.label ?: "状态未知"
+    LaunchedEffect(baseCapabilities) { baseCapabilities.refresh() }
+    val deviceCapabilities = baseCapabilityState.capabilities.filter { it.kind == fyi.b612.lovehouse.core.capability.LoveHouseCapabilityKind.Device }
+    val availablePermissions = deviceCapabilities.count { it.availability == CapabilityAvailability.Available }
+    val notificationState = baseCapabilityState.capability(LoveHouseCapabilityId.DeviceNotifications).settingsLabel()
+    val biometricState = baseCapabilityState.capability(LoveHouseCapabilityId.DeviceBiometrics).settingsLabel()
     val personaCount = profilesJson?.profilesFromJson()?.size
     val appearanceLabel = when (appearance.wallpaper) {
         "house" -> "绿荫"
@@ -192,7 +199,7 @@ private fun SettingsHome(
         "我的个人资料" to (ownerName ?: "未填写"),
         "美化" to appearanceLabel,
         "AI 档案管理" to (personaCount?.let { "$it 个" } ?: "本机"),
-        "权限" to "$availablePermissions/${permissionStatuses.size}",
+        "权限" to "$availablePermissions/${deviceCapabilities.size}",
         "通知" to notificationState,
         "AI 权限" to "策略待接入",
         "语音" to "原生录音可用",
@@ -285,6 +292,13 @@ private fun AccountHero(
     }
 }
 
+private fun LoveHouseCapability?.settingsLabel(): String = when (this?.availability) {
+    CapabilityAvailability.Available -> "可使用"
+    CapabilityAvailability.Partial -> "部分接入"
+    CapabilityAvailability.Unavailable -> unavailableReason ?: "不可用"
+    null -> "状态未知"
+}
+
 @Composable
 private fun SettingsSearch(value: String, onValueChange: (String) -> Unit) {
     Surface(shape = RoundedCornerShape(14.dp), color = Glass, border = androidx.compose.foundation.BorderStroke(1.dp, Hairline)) {
@@ -351,6 +365,7 @@ private fun SettingsDetail(
     localStorage: LocalStorage,
     permissionStatusProvider: PermissionStatusProvider,
     capabilityRegistry: CapabilityRegistry,
+    baseCapabilities: LoveHouseCapabilityRegistry,
     toolConnections: ToolConnectionStore,
     toolConnectionProbe: ToolConnectionProbe,
     onBack: () -> Unit,
@@ -372,16 +387,16 @@ private fun SettingsDetail(
                 "我的个人资料" -> item { SettingsCardStack { OwnerProfileSettings(localStorage) } }
                 "美化" -> item { SettingsCardStack { AppearanceProductSettings(localStorage) } }
                 "AI 档案管理" -> item { SettingsCardStack { AiProfileManager(localStorage) } }
-                "权限" -> item { SettingsCardStack { NativeCapabilitySettings(permissionStatusProvider) } }
+                "权限" -> item { SettingsCardStack { NativeCapabilitySettings(permissionStatusProvider, baseCapabilities) } }
                 "通知" -> {
-                    item { NotificationProductSettings(permissionStatusProvider) }
+                    item { NotificationProductSettings(permissionStatusProvider, baseCapabilities) }
                     item { UnavailableSettingsRows("通知分类策略", notificationRows.map { it.first }, "消息分类过滤尚未接入；Android 系统通知授权与测试通知上方已真实接线。") }
                 }
                 "AI 权限" -> {
                     item { AiPermissionExplanation() }
                     item { UnavailableSettingsRows("AI 授权策略", proactiveRows.map { it.first }, "服务端授权策略尚未接入，当前不显示可误认为已生效的开关。") }
                 }
-                "语音" -> item { SettingsCardStack { PersonaVoiceSettings(localStorage); AudioRecordingProductSettings(permissionStatusProvider) } }
+                "语音" -> item { SettingsCardStack { PersonaVoiceSettings(localStorage); AudioRecordingProductSettings(permissionStatusProvider, baseCapabilities) } }
                 "天气与时间" -> item { SettingsCardStack { GlobalLocationSettings(permissionStatusProvider) } }
                 "工具添加" -> item {
                     SettingsCardStack {
@@ -393,11 +408,11 @@ private fun SettingsDetail(
                     }
                 }
                 "本地资源" -> {
-                    item { LocalResourceSettings(permissionStatusProvider) }
+                    item { LocalResourceSettings(permissionStatusProvider, baseCapabilities) }
                     item { LocalStorageUsageSettings() }
                 }
                 "设备" -> {
-                    item { SettingsCardStack { DeviceProductSettings(permissionStatusProvider); TrustedDevicesSettings() } }
+                    item { SettingsCardStack { DeviceProductSettings(permissionStatusProvider, baseCapabilities); TrustedDevicesSettings() } }
                 }
                 "隐私锁" -> {
                     item { BiometricProductSettings() }

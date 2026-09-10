@@ -8,6 +8,11 @@ import fyi.b612.lovehouse.BuildConfig
 import fyi.b612.lovehouse.core.auth.AndroidOwnerSessionStore
 import fyi.b612.lovehouse.core.auth.OwnerSessionStore
 import fyi.b612.lovehouse.core.auth.SupabaseOwnerSessionRefresher
+import fyi.b612.lovehouse.core.capability.AndroidLoveHouseCapabilityRegistry
+import fyi.b612.lovehouse.core.capability.CapabilityAttachmentType
+import fyi.b612.lovehouse.core.capability.CapabilityLifecycle
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityRegistry
+import fyi.b612.lovehouse.core.capability.ProviderCapabilityProfile
 import fyi.b612.lovehouse.core.permissions.AndroidPermissionStatusProvider
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.status.DefaultSystemStatusProvider
@@ -19,6 +24,11 @@ import fyi.b612.lovehouse.feature.chat.SQLiteLocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.ClaudeWebHistoryImporter
 import fyi.b612.lovehouse.feature.chat.MediaAttachmentClient
 import fyi.b612.lovehouse.feature.chat.HttpMediaAttachmentClient
+import fyi.b612.lovehouse.feature.chat.ClaudeRuntime
+import fyi.b612.lovehouse.feature.chat.CodexRuntime
+import fyi.b612.lovehouse.feature.chat.ChatAttachmentLifecycle
+import fyi.b612.lovehouse.feature.chat.ChatAttachmentType
+import fyi.b612.lovehouse.feature.chat.ChatRuntimeConfig
 import fyi.b612.lovehouse.feature.settings.AndroidToolProfilePreferenceStore
 import fyi.b612.lovehouse.feature.settings.AndroidCapabilityRegistry
 import fyi.b612.lovehouse.feature.settings.CapabilityRegistry
@@ -42,6 +52,7 @@ data class AppDependencies(
     val toolCenter: ToolCenterRepository,
     val toolProfiles: ToolProfilePreferenceStore,
     val capabilityRegistry: CapabilityRegistry,
+    val baseCapabilities: LoveHouseCapabilityRegistry,
     val toolConnections: ToolConnectionStore,
     val toolConnectionProbe: ToolConnectionProbe,
 )
@@ -60,6 +71,14 @@ fun createAppDependencies(context: Context): AppDependencies {
     val toolCenter = HttpToolCenterRepository(ownerSession = ownerSession)
     val toolProfiles = AndroidToolProfilePreferenceStore(appContext)
     val chatMessages = SQLiteLocalChatMessageRepository(appContext)
+    val baseCapabilities = AndroidLoveHouseCapabilityRegistry(
+        context = appContext,
+        permissions = permissions,
+        providerProfiles = listOf(
+            CodexRuntime.toProviderCapabilityProfile(),
+            ClaudeRuntime.toProviderCapabilityProfile(),
+        ),
+    )
     return AppDependencies(
         permissions = permissions,
         localStorage = DataStoreLocalStorage(appContext),
@@ -71,10 +90,33 @@ fun createAppDependencies(context: Context): AppDependencies {
         toolCenter = toolCenter,
         toolProfiles = toolProfiles,
         capabilityRegistry = AndroidCapabilityRegistry(toolCenter, toolProfiles, "codex", stableCodexThreadId()),
+        baseCapabilities = baseCapabilities,
         toolConnections = AndroidToolConnectionStore(appContext),
         toolConnectionProbe = HttpToolConnectionProbe(),
     )
 }
+
+private fun ChatRuntimeConfig.toProviderCapabilityProfile() = ProviderCapabilityProfile(
+    providerId = personaId,
+    acceptedAttachmentTypes = attachmentCapabilities.acceptedTypes.mapTo(linkedSetOf()) {
+        when (it) {
+            ChatAttachmentType.Photo -> CapabilityAttachmentType.Photo
+            ChatAttachmentType.File -> CapabilityAttachmentType.File
+            ChatAttachmentType.Location -> CapabilityAttachmentType.Location
+            ChatAttachmentType.Audio -> CapabilityAttachmentType.Audio
+        }
+    },
+    maxAttachmentItems = attachmentCapabilities.maxItems,
+    supportsTextWithAttachments = attachmentCapabilities.supportsTextWithAttachments,
+    supportedAttachmentLifecycles = attachmentCapabilities.supportedLifecycles.mapTo(linkedSetOf()) {
+        when (it) {
+            ChatAttachmentLifecycle.LOCAL -> CapabilityLifecycle.Local
+            ChatAttachmentLifecycle.EPHEMERAL -> CapabilityLifecycle.Ephemeral
+            ChatAttachmentLifecycle.DURABLE -> CapabilityLifecycle.Durable
+        }
+    },
+    consumesVoiceTranscriptAsText = true,
+)
 
 @Composable
 fun rememberAppDependencies(): AppDependencies {

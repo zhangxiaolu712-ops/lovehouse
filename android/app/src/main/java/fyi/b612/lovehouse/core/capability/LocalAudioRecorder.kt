@@ -1,4 +1,4 @@
-package fyi.b612.lovehouse.feature.nativelab
+package fyi.b612.lovehouse.core.capability
 
 import android.content.Context
 import android.media.MediaRecorder
@@ -7,7 +7,7 @@ import android.os.SystemClock
 import java.io.File
 import java.util.Locale
 
-internal class AudioSmokeRecorder(
+class LocalAudioRecorder(
     private val context: Context,
 ) {
     private var recorder: MediaRecorder? = null

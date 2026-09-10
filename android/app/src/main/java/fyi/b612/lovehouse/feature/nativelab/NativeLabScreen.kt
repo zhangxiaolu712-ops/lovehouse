@@ -55,6 +55,12 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseSpacing
 import fyi.b612.lovehouse.core.designsystem.SectionLabel
 import fyi.b612.lovehouse.core.designsystem.StatusPill
 import fyi.b612.lovehouse.core.devicecontext.AndroidDeviceContextProvider
+import fyi.b612.lovehouse.core.capability.CapabilityAvailability
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityRegistry
+import fyi.b612.lovehouse.core.capability.LocalAudioRecorder
+import fyi.b612.lovehouse.core.capability.OneShotLocationProvider
+import fyi.b612.lovehouse.core.capability.readSelectedResource
+import fyi.b612.lovehouse.core.capability.sendTestNotification
 import fyi.b612.lovehouse.core.devicecontext.DeviceContextSnapshot
 import fyi.b612.lovehouse.core.devicecontext.formatDeviceContextSnapshot
 import fyi.b612.lovehouse.core.navigation.AppDestination
@@ -72,11 +78,14 @@ private const val ShareSample = "来自 LoveHouse 原生小屋的一句测试分
 @Composable
 fun NativeLabScreen(
     systemStatusProvider: SystemStatusProvider,
+    baseCapabilities: LoveHouseCapabilityRegistry,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val status by systemStatusProvider.status.collectAsState()
+    val baseCapabilityState by baseCapabilities.state.collectAsState()
+    LaunchedEffect(baseCapabilities) { baseCapabilities.refresh() }
     val bleController = remember(context.applicationContext) { BleCapabilityController(context.applicationContext) }
     val bleState by bleController.state.collectAsState()
     val screenObserverState by ScreenObserverRuntime.state.collectAsState()
@@ -100,12 +109,12 @@ fun NativeLabScreen(
     var cameraPreview by remember { mutableStateOf<Bitmap?>(null) }
     var showCameraSettings by rememberSaveable { mutableStateOf(false) }
 
-    val audioRecorder = remember(context.applicationContext) { AudioSmokeRecorder(context.applicationContext) }
+    val audioRecorder = remember(context.applicationContext) { LocalAudioRecorder(context.applicationContext) }
     var audioResult by rememberSaveable { mutableStateOf<String?>(null) }
     var isRecording by remember { mutableStateOf(false) }
     var showMicrophoneSettings by rememberSaveable { mutableStateOf(false) }
 
-    val locationSmokeTest = remember(context.applicationContext) { LocationSmokeTest(context.applicationContext) }
+    val locationSmokeTest = remember(context.applicationContext) { OneShotLocationProvider(context.applicationContext) }
     var locationResult by rememberSaveable { mutableStateOf<String?>(null) }
     var showLocationPermissionSettings by rememberSaveable { mutableStateOf(false) }
     var showLocationSystemSettings by rememberSaveable { mutableStateOf(false) }
@@ -302,6 +311,9 @@ fun NativeLabScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(LoveHouseSpacing.Small)) {
                     StatusPill("版本 ${status.appVersion}")
                     StatusPill(status.backend.label)
+                    StatusPill(
+                        "基础能力 ${baseCapabilityState.capabilities.count { it.availability == CapabilityAvailability.Available }}/${baseCapabilityState.capabilities.size}",
+                    )
                 }
             }
         }

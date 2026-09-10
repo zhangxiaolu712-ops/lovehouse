@@ -68,17 +68,20 @@ import fyi.b612.lovehouse.core.devicecontext.formatDeviceContextSnapshot
 import fyi.b612.lovehouse.core.permissions.NativeCapability
 import fyi.b612.lovehouse.core.permissions.PermissionState
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
+import fyi.b612.lovehouse.core.capability.CapabilityAvailability
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityId
+import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityRegistry
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.feature.nativelab.BiometricAuthenticators
 import fyi.b612.lovehouse.feature.nativelab.BleCapabilityController
-import fyi.b612.lovehouse.feature.nativelab.LocationSmokeTest
-import fyi.b612.lovehouse.feature.nativelab.AudioSmokeRecorder
+import fyi.b612.lovehouse.core.capability.OneShotLocationProvider
+import fyi.b612.lovehouse.core.capability.LocalAudioRecorder
 import fyi.b612.lovehouse.feature.nativelab.biometricErrorMessage
 import fyi.b612.lovehouse.feature.nativelab.findFragmentActivity
 import fyi.b612.lovehouse.feature.nativelab.openBiometricSettings
-import fyi.b612.lovehouse.feature.nativelab.readSelectedResource
+import fyi.b612.lovehouse.core.capability.readSelectedResource
 import fyi.b612.lovehouse.feature.nativelab.requiredBleRuntimePermissions
-import fyi.b612.lovehouse.feature.nativelab.sendTestNotification
+import fyi.b612.lovehouse.core.capability.sendTestNotification
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
 import kotlinx.coroutines.launch
@@ -261,13 +264,14 @@ private fun AiProfileCard(profile: AiProfile, onClick: () -> Unit) {
 }
 
 @Composable
-internal fun NativeCapabilitySettings(provider: PermissionStatusProvider) {
+internal fun NativeCapabilitySettings(provider: PermissionStatusProvider, baseCapabilities: LoveHouseCapabilityRegistry) {
     val context = LocalContext.current
     val statuses by provider.statuses.collectAsState()
     var result by remember { mutableStateOf<String?>(null) }
-    val singlePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { provider.refresh() }
-    val multiPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { provider.refresh() }
-    LaunchedEffect(provider) { provider.refresh() }
+    val baseState by baseCapabilities.state.collectAsState()
+    val singlePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { baseCapabilities.refresh() }
+    val multiPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { baseCapabilities.refresh() }
+    LaunchedEffect(baseCapabilities) { baseCapabilities.refresh() }
     fun request(capability: NativeCapability) {
         when (capability) {
             NativeCapability.Camera -> singlePermission.launch(Manifest.permission.CAMERA)
@@ -287,7 +291,17 @@ internal fun NativeCapabilitySettings(provider: PermissionStatusProvider) {
             Row(Modifier.fillMaxWidth().clickable { request(status.capability) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 LoveHouseIconView(status.capability.productIcon(), null, Modifier.size(18.dp), tint = ProductAccent)
                 Column(Modifier.weight(1f).padding(start = 9.dp)) { Text(status.capability.label, color = ProductInk, fontSize = 12.sp); Text(status.capability.description, color = ProductMuted, fontSize = 8.sp, maxLines = 2) }
-                Text(status.state.label, color = if (status.state == PermissionState.Granted || status.state == PermissionState.NotRequired) ProductAccent else ProductMuted, fontSize = 9.sp)
+                val shared = baseState.capability(status.capability.baseCapabilityId())
+                Text(
+                    when (shared?.availability) {
+                        CapabilityAvailability.Available -> "可使用"
+                        CapabilityAvailability.Partial -> "部分接入"
+                        CapabilityAvailability.Unavailable -> shared.unavailableReason ?: "不可用"
+                        null -> "状态未知"
+                    },
+                    color = if (shared?.availability == CapabilityAvailability.Available) ProductAccent else ProductMuted,
+                    fontSize = 9.sp,
+                )
             }
             if (index != statuses.lastIndex) HorizontalDivider(color = ProductBorder)
         }
@@ -298,7 +312,7 @@ internal fun NativeCapabilitySettings(provider: PermissionStatusProvider) {
 }
 
 @Composable
-internal fun LocalResourceSettings(provider: PermissionStatusProvider) {
+internal fun LocalResourceSettings(provider: PermissionStatusProvider, baseCapabilities: LoveHouseCapabilityRegistry) {
     val context = LocalContext.current
     var result by remember { mutableStateOf("选择或拍摄后仅保留本地预览，不会上传。") }
     var preview by remember { mutableStateOf<Bitmap?>(null) }
@@ -319,7 +333,7 @@ internal fun LocalResourceSettings(provider: PermissionStatusProvider) {
         preview = bitmap; result = if (bitmap == null) "没有拍摄照片。" else "拍摄成功 · 本地待上传/待发送"
     }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        provider.refresh(); if (granted) camera.launch(null) else result = "相机权限未授予，请在系统权限页开启。"
+        baseCapabilities.refresh(); if (granted) camera.launch(null) else result = "相机权限未授予，请在系统权限页开启。"
     }
     ProductPanel {
         Text("本地媒体与文件", color = ProductInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -337,9 +351,9 @@ internal fun LocalResourceSettings(provider: PermissionStatusProvider) {
 }
 
 @Composable
-internal fun AudioRecordingProductSettings(provider: PermissionStatusProvider) {
+internal fun AudioRecordingProductSettings(provider: PermissionStatusProvider, baseCapabilities: LoveHouseCapabilityRegistry) {
     val context = LocalContext.current
-    val recorder = remember(context.applicationContext) { AudioSmokeRecorder(context.applicationContext) }
+    val recorder = remember(context.applicationContext) { LocalAudioRecorder(context.applicationContext) }
     var recording by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("录音只保存在 LoveHouse 本机缓存，不会上传或伪装成已发送语音消息。") }
     fun startRecording() {
@@ -347,7 +361,7 @@ internal fun AudioRecordingProductSettings(provider: PermissionStatusProvider) {
         recording = recorder.isRecording
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        provider.refresh()
+        baseCapabilities.refresh()
         if (granted) startRecording() else result = "麦克风权限未授予，请在系统权限页开启。"
     }
     DisposableEffect(recorder) {
@@ -375,11 +389,11 @@ internal fun AudioRecordingProductSettings(provider: PermissionStatusProvider) {
 }
 
 @Composable
-internal fun NotificationProductSettings(provider: PermissionStatusProvider) {
+internal fun NotificationProductSettings(provider: PermissionStatusProvider, baseCapabilities: LoveHouseCapabilityRegistry) {
     val context = LocalContext.current
     var result by remember { mutableStateOf("发送一条真实 Android 通知，验证产品提醒入口。") }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        provider.refresh(); result = if (granted) sendTestNotification(context).message else "通知权限未授予。"
+        baseCapabilities.refresh(); result = if (granted) sendTestNotification(context).message else "通知权限未授予。"
     }
     ProductPanel {
         Text("Android 通知能力", color = ProductInk, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -392,12 +406,12 @@ internal fun NotificationProductSettings(provider: PermissionStatusProvider) {
 }
 
 @Composable
-internal fun DeviceProductSettings(provider: PermissionStatusProvider) {
+internal fun DeviceProductSettings(provider: PermissionStatusProvider, baseCapabilities: LoveHouseCapabilityRegistry) {
     val context = LocalContext.current
     val controller = remember(context.applicationContext) { BleCapabilityController(context.applicationContext) }
     DisposableEffect(controller) { onDispose { controller.release() } }
     val state by controller.state.collectAsState()
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { provider.refresh(); controller.refreshBluetoothState() }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { baseCapabilities.refresh(); controller.refreshBluetoothState() }
     DeviceContextPanel()
     ProductPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -508,6 +522,19 @@ internal fun ConnectionFormsSettings() {
 @Composable internal fun ProductPanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) { Surface(modifier.fillMaxWidth(), RoundedCornerShape(17.dp), ProductGlass, border = BorderStroke(1.dp, ProductBorder)) { Column(Modifier.fillMaxWidth().padding(12.dp), content = content) } }
 
 private fun NativeCapability.productIcon() = when (this) { NativeCapability.Photos -> LoveHouseIcon.Photo; NativeCapability.Camera -> LoveHouseIcon.Camera; NativeCapability.Files -> LoveHouseIcon.File; NativeCapability.Microphone -> LoveHouseIcon.Mic; NativeCapability.Location -> LoveHouseIcon.Location; NativeCapability.Notifications -> LoveHouseIcon.Bell; NativeCapability.Bluetooth -> LoveHouseIcon.ModelSwitch; NativeCapability.Share -> LoveHouseIcon.Forward; NativeCapability.Biometrics -> LoveHouseIcon.Settings; NativeCapability.DeepLink -> LoveHouseIcon.Expand }
+
+private fun NativeCapability.baseCapabilityId(): LoveHouseCapabilityId = when (this) {
+    NativeCapability.Photos -> LoveHouseCapabilityId.DevicePhotoPicker
+    NativeCapability.Camera -> LoveHouseCapabilityId.DeviceCamera
+    NativeCapability.Files -> LoveHouseCapabilityId.DeviceFilePicker
+    NativeCapability.Microphone -> LoveHouseCapabilityId.VoiceMicrophone
+    NativeCapability.Location -> LoveHouseCapabilityId.DeviceLocation
+    NativeCapability.Notifications -> LoveHouseCapabilityId.DeviceNotifications
+    NativeCapability.Bluetooth -> LoveHouseCapabilityId.DeviceBluetooth
+    NativeCapability.Share -> LoveHouseCapabilityId.DeviceShare
+    NativeCapability.Biometrics -> LoveHouseCapabilityId.DeviceBiometrics
+    NativeCapability.DeepLink -> LoveHouseCapabilityId.DeviceDeepLink
+}
 private fun Context.openAppSettings() { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 private fun List<AiProfile>.toJson() = JSONArray().apply { forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("summary", it.summary).put("content", it.content).put("source", it.source)) } }.toString()
 internal fun String.profilesFromJson(): List<AiProfile> = runCatching { val array = JSONArray(this); List(array.length()) { i -> array.getJSONObject(i).let { AiProfile(it.getString("id"), it.getString("name"), it.optString("summary"), it.optString("content"), it.optString("source").ifBlank { null }) } } }.getOrDefault(emptyList())
