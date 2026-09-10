@@ -13,6 +13,10 @@ dist
 dist-ssr
 *.local
 
+# Owner-private, one-time Android migration payload. It may exist for a local
+# migration build, but must never enter Git or a normal distributable APK.
+android/app/src/main/res/raw/claude_v1_web_migration.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

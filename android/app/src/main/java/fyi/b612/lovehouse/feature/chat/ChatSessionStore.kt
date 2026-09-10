@@ -65,6 +65,7 @@ class ChatSessionStore(
     private val codexClient: CodexChatClient = HttpCodexChatClient(),
     private val messageRepository: LocalChatMessageRepository = NoOpLocalChatMessageRepository,
     private val now: () -> Long = System::currentTimeMillis,
+    private val claudeWebHistoryImporter: ClaudeWebHistoryImporter? = null,
 ) {
     val threads = mutableStateListOf<ChatThreadSummary>().apply { addAll(MockChatRepository.mockThreads.filter { it.kind != ChatThreadKind.Archive }) }
     val personas = mutableStateListOf(
@@ -99,15 +100,20 @@ class ChatSessionStore(
             }
             add(ChatMessageUi("task-card", "Codex", "⌘", activeTask.title, "刚刚", false, ChatMessageKind.Task, taskId = activeTask.taskId))
         }
-        messagesByThread["task-claude-copy"] = mutableStateListOf(
-            message("c1", "Claude", "C", "文案整理已完成，等待最终回执。", "昨天"),
-        )
         // The production Codex window starts empty: assistant text must only
         // come from the real runtime stream, never from a local placeholder.
         val persistedCodexMessages = messageRepository.messages(stableCodexThreadId()).map(::persistedMessageUi)
         messagesByThread["agent-codex"] = mutableStateListOf<ChatMessageUi>().apply { addAll(persistedCodexMessages) }
         persistedCodexMessages.lastOrNull()?.let { latest ->
             updateThread("agent-codex") {
+                it.copy(preview = latest.body, updatedAt = latest.time)
+            }
+        }
+        claudeWebHistoryImporter?.importIfPresent()
+        val persistedClaudeMessages = messageRepository.messages(ClaudeRuntime.threadId).map(::persistedMessageUi)
+        messagesByThread[ClaudeRuntime.threadId] = mutableStateListOf<ChatMessageUi>().apply { addAll(persistedClaudeMessages) }
+        persistedClaudeMessages.lastOrNull()?.let { latest ->
+            updateThread(ClaudeRuntime.threadId) {
                 it.copy(preview = latest.body, updatedAt = latest.time)
             }
         }
@@ -139,11 +145,45 @@ class ChatSessionStore(
         requestedToolIds: Set<String> = emptySet(),
         attachments: List<ChatAttachment> = emptyList(),
         onText: (String) -> Unit,
+    ): Result<CodexChatResult> = sendRuntimeMessage(
+        localThreadId = threadId,
+        runtime = CodexRuntime,
+        assistantName = "Codex",
+        assistantAvatar = "⌘",
+        body = body,
+        requestedToolIds = requestedToolIds,
+        attachments = attachments,
+        onText = onText,
+    )
+
+    suspend fun sendClaudeMessage(
+        body: String,
+        onText: (String) -> Unit,
+    ): Result<CodexChatResult> = sendRuntimeMessage(
+        localThreadId = ClaudeRuntime.threadId,
+        runtime = ClaudeRuntime,
+        assistantName = "Claude",
+        assistantAvatar = "C",
+        body = body,
+        requestedToolIds = emptySet(),
+        attachments = emptyList(),
+        onText = onText,
+    )
+
+    private suspend fun sendRuntimeMessage(
+        localThreadId: String,
+        runtime: ChatRuntimeConfig,
+        assistantName: String,
+        assistantAvatar: String,
+        body: String,
+        requestedToolIds: Set<String>,
+        attachments: List<ChatAttachment>,
+        onText: (String) -> Unit,
     ): Result<CodexChatResult> {
         if (body.isBlank() && attachments.isEmpty()) return Result.failure(CodexChatException("消息不能为空"))
         val displayBody = body.trim()
         val previewBody = displayBody.ifEmpty { attachments.joinToString(" · ", transform = ChatAttachment::displaySummary) }
-        val canonicalThreadId = stableCodexThreadId()
+        val canonicalThreadId = runtime.threadId
         val userId = "sent-${UUID.randomUUID()}"
         val createdAt = now()
         var user = LocalChatMessage(
@@ -156,7 +196,7 @@ class ChatSessionStore(
             createdAtEpochMillis = createdAt,
             status = LocalChatDeliveryStatus.Sending,
         )
-        val assistantId = "codex-${UUID.randomUUID()}"
+        val assistantId = "${runtime.personaId}-${UUID.randomUUID()}"
         var userVisible = false
         var assistantText = ""
         val processEvents = mutableListOf<ChatProcessEvent>()
@@ -164,17 +204,17 @@ class ChatSessionStore(
             val updated = mergeProcessEvent(processEvents, event)
             processEvents.clear()
             processEvents.addAll(updated)
-            val current = messages(threadId).firstOrNull { it.messageId == assistantId }
+            val current = messages(localThreadId).firstOrNull { it.messageId == assistantId }
             if (current != null) {
-                replaceMessage(threadId, assistantId, current.copy(processEvents = processEvents.toList()))
+                replaceMessage(localThreadId, assistantId, current.copy(processEvents = processEvents.toList()))
             } else {
                 replaceMessage(
-                    threadId,
+                    localThreadId,
                     assistantId,
                     message(
                         assistantId,
-                        "Codex",
-                        "⌘",
+                        assistantName,
+                        assistantAvatar,
                         assistantText,
                         "刚刚",
                         deliveryStatus = LocalChatDeliveryStatus.Sending,
@@ -185,24 +225,24 @@ class ChatSessionStore(
         }
         return try {
             withContext(Dispatchers.IO) { messageRepository.upsert(user) }
-            messages(threadId) += persistedMessageUi(user)
+            messages(localThreadId) += persistedMessageUi(user)
             userVisible = true
-            updateThread(threadId) { it.copy(preview = previewBody, updatedAt = "刚刚") }
+            updateThread(localThreadId) { it.copy(preview = previewBody, updatedAt = "刚刚") }
             val result = withContext(Dispatchers.IO) {
-                codexClient.streamMessageWithProcess(
-                    stableCodexThreadId(),
+                codexClient.streamRuntimeMessageWithProcess(
+                    runtime,
                     body,
                     requestedToolIds,
                     attachments,
                     onText = { fullText ->
                         assistantText = fullText
                         replaceMessage(
-                            threadId,
+                            localThreadId,
                             assistantId,
                             message(
                                 assistantId,
-                                "Codex",
-                                "⌘",
+                                assistantName,
+                                assistantAvatar,
                                 fullText,
                                 "刚刚",
                                 deliveryStatus = LocalChatDeliveryStatus.Sending,
@@ -220,7 +260,7 @@ class ChatSessionStore(
                 localMessageId = assistantId,
                 threadId = canonicalThreadId,
                 role = LocalChatRole.Assistant,
-                sender = "codex",
+                sender = runtime.personaId,
                 content = result.text,
                 createdAtEpochMillis = createdAt,
                 receivedAtEpochMillis = receivedAt,
@@ -229,8 +269,8 @@ class ChatSessionStore(
                 adapterId = result.evidence.adapterId?.takeIf(String::isNotBlank),
             )
             withContext(Dispatchers.IO) { messageRepository.upsert(listOf(user, assistant)) }
-            replaceMessage(threadId, userId, persistedMessageUi(user))
-            replaceMessage(threadId, assistantId, persistedMessageUi(assistant).copy(processEvents = processEvents.toList()))
+            replaceMessage(localThreadId, userId, persistedMessageUi(user))
+            replaceMessage(localThreadId, assistantId, persistedMessageUi(assistant).copy(processEvents = processEvents.toList()))
             Result.success(result)
         } catch (error: Throwable) {
             if (assistantText.isNotBlank()) {
@@ -238,7 +278,7 @@ class ChatSessionStore(
                     localMessageId = assistantId,
                     threadId = canonicalThreadId,
                     role = LocalChatRole.Assistant,
-                    sender = "codex",
+                    sender = runtime.personaId,
                     content = assistantText,
                     createdAtEpochMillis = createdAt,
                     receivedAtEpochMillis = now(),
@@ -246,7 +286,7 @@ class ChatSessionStore(
                 )
                 runCatching { withContext(Dispatchers.IO) { messageRepository.upsert(failedAssistant) } }
                 replaceMessage(
-                    threadId,
+                    localThreadId,
                     assistantId,
                     persistedMessageUi(failedAssistant).copy(
                         deliveryError = error.message ?: "工具调用失败",
@@ -254,12 +294,12 @@ class ChatSessionStore(
                     ),
                 )
             } else if (processEvents.isEmpty()) {
-                messages(threadId).removeAll { message -> message.messageId == assistantId }
+                messages(localThreadId).removeAll { message -> message.messageId == assistantId }
             } else {
-                val current = messages(threadId).firstOrNull { it.messageId == assistantId }
-                    ?: message(assistantId, "Codex", "⌘", "", "刚刚")
+                val current = messages(localThreadId).firstOrNull { it.messageId == assistantId }
+                    ?: message(assistantId, assistantName, assistantAvatar, "", "刚刚")
                 replaceMessage(
-                    threadId,
+                    localThreadId,
                     assistantId,
                     current.copy(
                         deliveryStatus = LocalChatDeliveryStatus.Failed,
@@ -271,7 +311,7 @@ class ChatSessionStore(
             if (userVisible) {
                 user = user.copy(status = LocalChatDeliveryStatus.Failed)
                 runCatching { withContext(Dispatchers.IO) { messageRepository.upsert(user) } }
-                replaceMessage(threadId, userId, persistedMessageUi(user))
+                replaceMessage(localThreadId, userId, persistedMessageUi(user))
             }
             Result.failure(error)
         }
@@ -390,12 +430,18 @@ class ChatSessionStore(
 
     private fun persistedMessageUi(message: LocalChatMessage): ChatMessageUi {
         val mine = message.role == LocalChatRole.User
+        val assistantName = if (message.sender == ClaudeRuntime.personaId) "Claude" else "Codex"
+        val assistantAvatar = if (message.sender == ClaudeRuntime.personaId) "C" else "⌘"
         return ChatMessageUi(
             messageId = message.localMessageId,
-            author = if (mine) "我" else if (message.sender == "codex") "Codex" else message.sender,
-            avatar = if (mine) "我" else "⌘",
+            author = if (mine) "我" else assistantName,
+            avatar = if (mine) "我" else assistantAvatar,
             body = message.content,
-            time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.receivedAtEpochMillis ?: message.createdAtEpochMillis)),
+            time = if (message.localMessageId.startsWith("migration-")) {
+                "Web 迁移"
+            } else {
+                DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(message.receivedAtEpochMillis ?: message.createdAtEpochMillis))
+            },
             mine = mine,
             deliveryStatus = message.status,
             createdAtEpochMillis = message.createdAtEpochMillis,

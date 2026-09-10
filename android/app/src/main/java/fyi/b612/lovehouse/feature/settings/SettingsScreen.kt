@@ -120,6 +120,7 @@ fun SettingsScreen(
     capabilityRegistry: CapabilityRegistry,
     toolConnections: ToolConnectionStore,
     toolConnectionProbe: ToolConnectionProbe,
+    onOpenConnectionControl: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selected by remember { mutableStateOf<SettingEntry?>(null) }
@@ -132,6 +133,7 @@ fun SettingsScreen(
                 permissionStatusProvider = permissionStatusProvider,
                 ownerSession = ownerSession,
                 toolConnections = toolConnections,
+                onOpenConnectionControl = onOpenConnectionControl,
                 onSelect = { selected = it },
             )
         } else {
@@ -156,6 +158,7 @@ private fun SettingsHome(
     permissionStatusProvider: PermissionStatusProvider,
     ownerSession: OwnerSessionStore,
     toolConnections: ToolConnectionStore,
+    onOpenConnectionControl: () -> Unit,
     onSelect: (SettingEntry) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -223,7 +226,7 @@ private fun SettingsHome(
             contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 7.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(SettingsSpacing.CardGap),
         ) {
-            item { AccountHero(ownerName ?: "Owner", session.status) }
+            item { AccountHero(ownerName ?: "Owner", session.status, onOpenConnectionControl) }
             item { SettingsSearch(query, onValueChange = { query = it }) }
             if (filtered.isEmpty()) item { EmptySearch(query) }
             filtered.forEach { group ->
@@ -252,26 +255,32 @@ private fun SettingsTopBar(title: String, subtitle: String? = null, onBack: (() 
 }
 
 @Composable
-private fun AccountHero(ownerName: String, sessionStatus: OwnerSessionStatus) {
+private fun AccountHero(
+    ownerName: String,
+    sessionStatus: OwnerSessionStatus,
+    onOpenConnectionControl: () -> Unit,
+) {
     val sessionLabel = when (sessionStatus) {
         OwnerSessionStatus.Active -> "Owner 会话已连接"
         OwnerSessionStatus.Missing -> "Owner 会话未连接"
         OwnerSessionStatus.Expired -> "Owner 会话已过期"
         OwnerSessionStatus.Rejected -> "Owner 会话需重新连接"
     }
-    GlassPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(54.dp).clip(CircleShape).background(Color(0xFFD4E0DD).copy(alpha = .88f)),
-                contentAlignment = Alignment.Center,
-            ) { Text(ownerName.take(1), color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(ownerName, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                Text("LoveHouse", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                Text(sessionLabel, color = Muted, fontSize = 11.sp)
+    Box(Modifier.fillMaxWidth().clickable(onClick = onOpenConnectionControl)) {
+        GlassPanel {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(54.dp).clip(CircleShape).background(Color(0xFFD4E0DD).copy(alpha = .88f)),
+                    contentAlignment = Alignment.Center,
+                ) { Text(ownerName.take(1), color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold) }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(ownerName, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text("LoveHouse", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Text(sessionLabel, color = Muted, fontSize = 11.sp)
+                }
+                LoveHouseIconView(LoveHouseIcon.Expand, null, Modifier.size(16.dp), tint = Muted)
             }
-            LoveHouseIconView(LoveHouseIcon.Expand, null, Modifier.size(16.dp), tint = Muted)
         }
     }
 }

@@ -45,6 +45,16 @@ data class ChatProcessEvent(
     val detail: String? = null,
 )
 
+internal fun mergeThinkingText(
+    current: String,
+    summary: String?,
+    delta: String?,
+): String? = when {
+    summary != null -> summary
+    delta != null -> current + delta
+    else -> null
+}
+
 data class CodexChatResult(
     val text: String,
     val evidence: CodexRuntimeEvidence,
@@ -164,6 +174,7 @@ class HttpCodexChatClient(
             var event = "message"
             val data = StringBuilder()
             var text = ""
+            var thinkingText = ""
             var evidence: CodexRuntimeEvidence? = null
             var ended = false
             var succeeded = false
@@ -198,8 +209,15 @@ class HttpCodexChatClient(
                     "reasoning_status" -> jsonString(json, "summary")?.takeIf(String::isNotBlank)?.let { summary ->
                         onProcess(ChatProcessEvent("reasoning", ChatProcessKind.ReasoningStatus, "思考状态", ChatProcessStatus.Running, summary))
                     }
-                    "thinking" -> jsonString(json, "summary")?.takeIf(String::isNotBlank)?.let { summary ->
-                        onProcess(ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, summary))
+                    "thinking" -> mergeThinkingText(
+                        current = thinkingText,
+                        summary = jsonString(json, "summary"),
+                        delta = jsonString(json, "thinking"),
+                    )?.let { updated ->
+                        thinkingText = updated
+                        updated.takeIf(String::isNotBlank)?.let { detail ->
+                            onProcess(ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, detail))
+                        }
                     }
                     "workflow_status" -> jsonString(json, "summary")?.takeIf(String::isNotBlank)?.let { summary ->
                         onProcess(ChatProcessEvent("workflow", ChatProcessKind.WorkflowStatus, "执行状态", ChatProcessStatus.Running, summary))

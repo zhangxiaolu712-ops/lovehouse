@@ -16,6 +16,7 @@ import fyi.b612.lovehouse.core.storage.DataStoreLocalStorage
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.feature.chat.LocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.SQLiteLocalChatMessageRepository
+import fyi.b612.lovehouse.feature.chat.ClaudeWebHistoryImporter
 import fyi.b612.lovehouse.feature.chat.MediaAttachmentClient
 import fyi.b612.lovehouse.feature.chat.HttpMediaAttachmentClient
 import fyi.b612.lovehouse.feature.settings.AndroidToolProfilePreferenceStore
@@ -35,6 +36,7 @@ data class AppDependencies(
     val localStorage: LocalStorage,
     val systemStatus: SystemStatusProvider,
     val chatMessages: LocalChatMessageRepository,
+    val claudeWebHistoryImporter: ClaudeWebHistoryImporter,
     val ownerSession: OwnerSessionStore,
     val mediaAttachments: MediaAttachmentClient,
     val toolCenter: ToolCenterRepository,
@@ -57,11 +59,13 @@ fun createAppDependencies(context: Context): AppDependencies {
     )
     val toolCenter = HttpToolCenterRepository(ownerSession = ownerSession)
     val toolProfiles = AndroidToolProfilePreferenceStore(appContext)
+    val chatMessages = SQLiteLocalChatMessageRepository(appContext)
     return AppDependencies(
         permissions = permissions,
         localStorage = DataStoreLocalStorage(appContext),
         systemStatus = DefaultSystemStatusProvider(permissions),
-        chatMessages = SQLiteLocalChatMessageRepository(appContext),
+        chatMessages = chatMessages,
+        claudeWebHistoryImporter = ClaudeWebHistoryImporter(appContext, chatMessages),
         ownerSession = ownerSession,
         mediaAttachments = HttpMediaAttachmentClient(appContext, ownerSession),
         toolCenter = toolCenter,
