@@ -13,9 +13,11 @@ const SESSION_ID = '0199a213-81c0-7800-8aa1-bbab2a035a53'
 
 function fakeSpawn(events, { code = 0, stderr = '', calls = [] } = {}) {
   return (_executable, args, options) => {
-    calls.push({ args, options })
+    const call = { args, options, prompt: '' }
+    calls.push(call)
     const child = new EventEmitter()
     child.stdin = new PassThrough()
+    child.stdin.on('data', chunk => { call.prompt += chunk.toString() })
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
     child.kill = () => {}
@@ -114,6 +116,70 @@ test('verified photos are materialized privately, passed with --image, and remov
   assert.match(calls[0].args[imageIndex + 1], /\.lovehouse-media-/)
   assert.deepEqual(await fs.readdir(directory), [])
   assert.equal(calls[0].args.join(' ').includes('signed.example'), false)
+})
+
+test('multiple images, file, location and text keep the pre-extraction Codex CLI mapping', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lovehouse-media-runtime-test-'))
+  t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const calls = []
+  const responses = new Map([
+    ['https://signed.example/one', { mime: 'image/jpeg', bytes: [1, 2, 3] }],
+    ['https://signed.example/two', { mime: 'image/png', bytes: [4, 5] }],
+    ['https://signed.example/file', { mime: 'application/pdf', bytes: [6, 7, 8, 9] }],
+  ])
+  const adapter = new CodexCliRuntimeAdapter({
+    cwd: directory,
+    fetchImpl: async url => {
+      const value = responses.get(url.toString())
+      return new Response(new Uint8Array(value.bytes), {
+        status: 200, headers: { 'Content-Type': value.mime },
+      })
+    },
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Read all.' } },
+      { type: 'turn.completed', usage: { input_tokens: 8, output_tokens: 3 } },
+    ], { calls }),
+  })
+  await adapter.streamEvents({
+    message: 'compare everything',
+    attachments: [
+      { type: 'photo', name: 'one.jpg', mime_type: 'image/jpeg', size: 3, read_url: 'https://signed.example/one' },
+      { type: 'photo', name: 'two.png', mime_type: 'image/png', size: 2, read_url: 'https://signed.example/two' },
+      { type: 'file', name: 'report.pdf', mime_type: 'application/pdf', size: 4, read_url: 'https://signed.example/file' },
+      { type: 'location', latitude: 31.2, longitude: 121.5, accuracy: 8, captured_at: '2026-09-08T00:00:00Z' },
+    ],
+    onRuntimeBinding() {}, onText() {}, onEvent() {},
+  })
+
+  assert.equal(calls[0].args.filter(value => value === '--image').length, 2)
+  assert.match(calls[0].prompt, /User: compare everything/)
+  assert.match(calls[0].prompt, /file: report\.pdf \(application\/pdf, 4 bytes\) at .*attachment-02\.pdf/)
+  assert.match(calls[0].prompt, /Location: latitude=31\.2, longitude=121\.5, accuracy=8m/)
+  assert.equal(calls[0].prompt.includes('signed.example'), false)
+  assert.deepEqual(await fs.readdir(directory), [])
+})
+
+test('Codex runtime failure still removes every materialized attachment', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lovehouse-media-runtime-test-'))
+  t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const adapter = new CodexCliRuntimeAdapter({
+    cwd: directory,
+    fetchImpl: async () => new Response(new Uint8Array([1, 2, 3]), {
+      status: 200, headers: { 'Content-Type': 'image/jpeg' },
+    }),
+    spawnImpl: fakeSpawn([], { code: 1, stderr: 'connection reset' }),
+  })
+
+  await assert.rejects(adapter.streamEvents({
+    message: 'describe image',
+    attachments: [{
+      type: 'photo', name: 'photo.jpg', mime_type: 'image/jpeg', size: 3,
+      read_url: 'https://signed.example/private-photo',
+    }],
+    onRuntimeBinding() {}, onText() {}, onEvent() {},
+  }))
+  assert.deepEqual(await fs.readdir(directory), [])
 })
 
 test('real Codex 0.146 JSONL shape maps text, safe tool events, usage and unavailable reasoning', async () => {

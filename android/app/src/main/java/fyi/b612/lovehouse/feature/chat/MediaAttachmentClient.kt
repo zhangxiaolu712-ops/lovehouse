@@ -15,6 +15,7 @@ import java.net.URL
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -45,6 +46,67 @@ data class MediaAttachmentProgress(
     val stage: MediaAttachmentStage,
     val failure: String? = null,
 )
+
+internal suspend fun <T> observeMediaUploadAttempt(
+    attachmentId: String,
+    index: Int,
+    total: Int,
+    initialStage: MediaAttachmentStage = MediaAttachmentStage.Selected,
+    onProgress: suspend (MediaAttachmentProgress) -> Unit,
+    operation: suspend (stage: suspend (MediaAttachmentStage) -> Unit) -> T,
+): T {
+    var currentStage = initialStage
+    suspend fun stage(value: MediaAttachmentStage) {
+        currentStage = value
+        onProgress(MediaAttachmentProgress(attachmentId, index, total, value))
+    }
+    try {
+        return operation(::stage)
+    } catch (error: TimeoutCancellationException) {
+        onProgress(
+            MediaAttachmentProgress(
+                attachmentId,
+                index,
+                total,
+                MediaAttachmentStage.Failed,
+                "timeout_after_${currentStage.name}",
+            ),
+        )
+        throw MediaAttachmentException("第 $index/$total 个附件在 ${mediaAttachmentStageLabel(currentStage)} 阶段超时，附件草稿已保留")
+    } catch (error: CancellationException) {
+        onProgress(
+            MediaAttachmentProgress(
+                attachmentId,
+                index,
+                total,
+                MediaAttachmentStage.Failed,
+                error::class.simpleName,
+            ),
+        )
+        throw error
+    } catch (error: Exception) {
+        onProgress(
+            MediaAttachmentProgress(
+                attachmentId,
+                index,
+                total,
+                MediaAttachmentStage.Failed,
+                error::class.simpleName,
+            ),
+        )
+        throw error
+    } finally {
+        onProgress(MediaAttachmentProgress(attachmentId, index, total, MediaAttachmentStage.Finished))
+    }
+}
+
+internal fun mediaAttachmentStageLabel(stage: MediaAttachmentStage): String = when (stage) {
+    MediaAttachmentStage.PresignStarted,
+    MediaAttachmentStage.TemporaryReferenceStarted,
+    -> "申请临时媒体引用"
+    MediaAttachmentStage.PutStarted -> "上传"
+    else -> stage.name
+}
 
 interface MediaAttachmentClient {
     suspend fun importLocal(uris: List<Uri>, type: String): List<ChatMediaAttachment>
@@ -136,15 +198,14 @@ class HttpMediaAttachmentClient(
         fingerprint: String,
         onProgress: suspend (MediaAttachmentProgress) -> Unit,
     ): ChatMediaAttachment {
-        var currentStage = MediaAttachmentStage.Selected
-        suspend fun stage(value: MediaAttachmentStage) {
-            currentStage = value
-            emitProgress(MediaAttachmentProgress(attachment.attachmentId, index, total, value), onProgress)
-        }
-
         val source = attachment.localCachePath?.let(::File)?.takeIf(File::isFile)
             ?: throw MediaAttachmentException("本地文件不可用，请重新选择附件")
-        try {
+        return observeMediaUploadAttempt(
+            attachmentId = attachment.attachmentId,
+            index = index,
+            total = total,
+            onProgress = { emitProgress(it, onProgress) },
+        ) { stage ->
             stage(MediaAttachmentStage.Selected)
             stage(MediaAttachmentStage.LocalMetadataReady)
             stage(MediaAttachmentStage.TemporaryReferenceStarted)
@@ -169,7 +230,7 @@ class HttpMediaAttachmentClient(
             }
             stage(MediaAttachmentStage.PutCompleted)
             stage(MediaAttachmentStage.AttachmentReady)
-            return attachment.copy(
+            attachment.copy(
                 mediaAssetId = signing.getString("media_asset_id"),
                 storageRef = signing.getString("storage_ref"),
                 mimeType = signing.getString("mime_type"),
@@ -180,35 +241,6 @@ class HttpMediaAttachmentClient(
                 remoteExpiresAtEpochMillis = signing.optString("asset_expires_at").takeIf(String::isNotBlank)?.let {
                     runCatching { Instant.parse(it).toEpochMilli() }.getOrNull()
                 },
-            )
-        } catch (error: TimeoutCancellationException) {
-            emitProgress(
-                MediaAttachmentProgress(
-                    attachment.attachmentId,
-                    index,
-                    total,
-                    MediaAttachmentStage.Failed,
-                    "timeout_after_${currentStage.name}",
-                ),
-                onProgress,
-            )
-            throw MediaAttachmentException("第 $index/$total 个附件在 ${stageLabel(currentStage)} 阶段超时，附件草稿已保留")
-        } catch (error: Exception) {
-            emitProgress(
-                MediaAttachmentProgress(
-                    attachment.attachmentId,
-                    index,
-                    total,
-                    MediaAttachmentStage.Failed,
-                    error::class.simpleName,
-                ),
-                onProgress,
-            )
-            throw error
-        } finally {
-            emitProgress(
-                MediaAttachmentProgress(attachment.attachmentId, index, total, MediaAttachmentStage.Finished),
-                onProgress,
             )
         }
     }
@@ -284,14 +316,6 @@ class HttpMediaAttachmentClient(
         file.inputStream().use { BitmapFactory.decodeStream(it, null, options) }
         if (options.outWidth > 0 && options.outHeight > 0) options.outWidth to options.outHeight else null
     }.getOrNull()
-
-    private fun stageLabel(stage: MediaAttachmentStage): String = when (stage) {
-        MediaAttachmentStage.PresignStarted,
-        MediaAttachmentStage.TemporaryReferenceStarted,
-        -> "申请临时媒体引用"
-        MediaAttachmentStage.PutStarted -> "上传"
-        else -> stage.name
-    }
 
     private companion object {
         const val MEDIA_LOG_TAG = "LoveHouseMedia"

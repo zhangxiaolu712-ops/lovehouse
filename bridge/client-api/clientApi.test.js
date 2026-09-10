@@ -19,6 +19,10 @@ import {
   createProviderRouter,
 } from './providerAdapters.js'
 import { InMemoryRuntimeBindingStore } from './runtimeBindingStore.js'
+import {
+  CODEX_ATTACHMENT_CAPABILITIES,
+  UNSUPPORTED_ATTACHMENT_CAPABILITIES,
+} from './attachmentCapabilities.js'
 
 const OWNER_ID = 'owner-user'
 const THREAD_ID = '11111111-1111-4111-8111-111111111111'
@@ -27,6 +31,18 @@ const PROVIDER_SESSION_ID = '22222222-2222-4222-8222-222222222222'
 function fakeAdapter(runtime, overrides = {}) {
   return {
     runtime,
+    getCapabilities() {
+      return {
+        runtime_type: runtime,
+        adapter_id: null,
+        enabled: true,
+        capabilities: {
+          attachments: runtime === 'codex'
+            ? CODEX_ATTACHMENT_CAPABILITIES
+            : UNSUPPORTED_ATTACHMENT_CAPABILITIES,
+        },
+      }
+    },
     async health() { return { status: 'available' } },
     async chat({ onText }) {
       onText?.(`${runtime} reply`)
@@ -122,10 +138,13 @@ test('one chat turn forwards verified media and location attachments without con
   const mediaService = {
     async resolveRuntimeAsset(input) {
       mediaCalls.push(input)
+      const isDocument = input.storageRef.endsWith('-document.pdf')
       return {
         media_asset_id: input.mediaAssetId,
         storage_ref: input.storageRef,
-        name: 'photo.jpg', mime_type: 'image/jpeg', size: 3,
+        name: isDocument ? 'document.pdf' : 'photo.jpg',
+        mime_type: isDocument ? 'application/pdf' : 'image/jpeg',
+        size: 3,
         read_url: 'https://signed.example/read', expires_at: '2026-09-08T01:00:00Z',
       }
     },
@@ -142,6 +161,7 @@ test('one chat turn forwards verified media and location attachments without con
       ...chatBody(), persona_id: 'codex', message: {
         type: 'text', text: '', attachments: [
           { type: 'photo', media_asset_id: '11111111-1111-4111-8111-111111111111', storage_ref: 'media/owner-user/2026/09/11111111-1111-4111-8111-111111111111-photo.jpg' },
+          { type: 'file', media_asset_id: '22222222-2222-4222-8222-222222222222', storage_ref: 'media/owner-user/2026/09/22222222-2222-4222-8222-222222222222-document.pdf' },
           { type: 'location', latitude: 31.2, longitude: 121.5, accuracy: 8, captured_at: '2026-09-08T00:00:00Z' },
         ],
       },
@@ -149,15 +169,16 @@ test('one chat turn forwards verified media and location attachments without con
   })
   assert.equal(response.status, 200)
   await response.text()
-  assert.equal(mediaCalls.length, 1)
+  assert.equal(mediaCalls.length, 2)
   assert.equal(mediaCalls[0].ownerId, OWNER_ID)
   assert.equal(adapterCalls.length, 1)
   assert.equal(adapterCalls[0].text, '')
-  assert.equal(adapterCalls[0].attachments.length, 2)
+  assert.equal(adapterCalls[0].attachments.length, 3)
   assert.equal(adapterCalls[0].attachments[0].read_url, 'https://signed.example/read')
+  assert.equal(adapterCalls[0].attachments[1].mime_type, 'application/pdf')
 })
 
-test('media attachments fail closed on frozen non-Codex personas', async t => {
+test('media attachments fail closed when the resolved provider declares unsupported', async t => {
   const base = await startHarness(t)
   const response = await fetch(`${base}/v1/chat`, {
     method: 'POST', headers: authHeaders(), body: JSON.stringify({
@@ -170,6 +191,99 @@ test('media attachments fail closed on frozen non-Codex personas', async t => {
   })
   assert.equal(response.status, 415)
   assert.equal((await response.json()).error.code, 'ATTACHMENTS_UNSUPPORTED')
+})
+
+test('Codex attachment capability rejects more than its declared max items', async t => {
+  const base = await startHarness(t)
+  const attachments = Array.from({ length: 13 }, (_, index) => ({
+    type: 'location', latitude: 31.2, longitude: 121.5,
+    captured_at: `2026-09-08T00:00:${String(index).padStart(2, '0')}Z`,
+  }))
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({
+      ...chatBody(), persona_id: 'codex',
+      message: { type: 'text', text: '', attachments },
+    }),
+  })
+  assert.equal(response.status, 400)
+  assert.equal((await response.json()).error.code, 'ATTACHMENT_LIMIT_EXCEEDED')
+})
+
+test('Codex attachment capability rejects a type outside its declared set', async t => {
+  const base = await startHarness(t)
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({
+      ...chatBody(), persona_id: 'codex',
+      message: {
+        type: 'text', text: '',
+        attachments: [{ type: 'audio', lifecycle: 'EPHEMERAL' }],
+      },
+    }),
+  })
+  assert.equal(response.status, 415)
+  assert.equal((await response.json()).error.code, 'ATTACHMENT_TYPE_UNSUPPORTED')
+})
+
+test('Codex attachment capability rejects a lifecycle outside its declared set', async t => {
+  const base = await startHarness(t)
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({
+      ...chatBody(), persona_id: 'codex',
+      message: {
+        type: 'text', text: '',
+        attachments: [{
+          type: 'location', lifecycle: 'DURABLE', latitude: 31.2, longitude: 121.5,
+          captured_at: '2026-09-08T00:00:00Z',
+        }],
+      },
+    }),
+  })
+  assert.equal(response.status, 415)
+  assert.equal((await response.json()).error.code, 'ATTACHMENT_LIFECYCLE_UNSUPPORTED')
+})
+
+test('Codex capability accepts text and attachments in the same turn', async t => {
+  const calls = []
+  const adapters = {
+    claude: fakeAdapter('claude'),
+    codex: fakeAdapter('codex', {
+      async chat(input) { calls.push(input); input.onText?.('seen'); return { usage: null } },
+    }),
+  }
+  const base = await startHarness(t, { adapters })
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({
+      ...chatBody(), persona_id: 'codex',
+      message: {
+        type: 'text', text: '我在这里',
+        attachments: [{ type: 'location', latitude: 31.2, longitude: 121.5, captured_at: '2026-09-08T00:00:00Z' }],
+      },
+    }),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].text, '我在这里')
+  assert.equal(calls[0].attachments.length, 1)
+})
+
+test('ordinary chat without attachments is unaffected by an unsupported provider capability', async t => {
+  const base = await startHarness(t)
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(chatBody()),
+  })
+  assert.equal(response.status, 200)
+  const events = parseSse(await response.text())
+  assert.equal(events.at(-1).event, 'message_end')
+  assert.equal(events.at(-1).data.ok, true)
+})
+
+test('provider profiles are the attachment capability truth source', () => {
+  const codex = createCodexAdapter()
+  const claude = createClaudeCliAdapter()
+
+  assert.deepEqual(codex.getCapabilities().capabilities.attachments, CODEX_ATTACHMENT_CAPABILITIES)
+  assert.deepEqual(claude.getCapabilities().capabilities.attachments, UNSUPPORTED_ATTACHMENT_CAPABILITIES)
 })
 
 function fakeEngineeringMemoryService(calls) {
