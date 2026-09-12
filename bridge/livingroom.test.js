@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   createLivingroomRest,
   createPostgresLivingroomReadCutover,
+  createPostgresLivingroomWriteCutover,
   isLivingroomRest,
 } from './livingroom.js'
 
@@ -98,4 +99,53 @@ test('PostgreSQL livingroom cutover rejects queries outside the existing read co
   await assert.rejects(adapter('DELETE', 'livingroom'), /restricted to the livingroom table/)
   await assert.rejects(adapter('GET', 'livingroom?order=id.desc&limit=20'), /restricted/)
   await assert.rejects(adapter('GET', 'livingroom?order=created_at.desc&limit=20&sender=eq.GPT'), /restricted/)
+})
+
+test('PostgreSQL livingroom write cutover inserts through SQL and preserves selected reads', async () => {
+  const legacyCalls = []
+  const legacy = createLivingroomRest({
+    rest: async (...args) => {
+      legacyCalls.push(args)
+      return []
+    },
+  })
+  const poolCalls = []
+  const pool = {
+    async query(text, values) {
+      poolCalls.push({ text, values })
+      return { rows: [{ result: {
+        id: 9,
+        sender: 'GPT',
+        message: 'written',
+        created_at: '2026-09-12T01:02:03.123456+00:00',
+      } }] }
+    },
+  }
+  const adapter = createPostgresLivingroomWriteCutover({ legacy, pool })
+
+  const read = await adapter('GET', 'livingroom?order=created_at.desc&limit=20')
+  const written = await adapter('POST', 'livingroom', { sender: 'GPT', message: 'written' })
+
+  assert.equal(isLivingroomRest(adapter), true)
+  assert.deepEqual(read, [])
+  assert.deepEqual(legacyCalls, [['GET', 'livingroom?order=created_at.desc&limit=20', undefined]])
+  assert.match(poolCalls[0].text, /insert into public\.livingroom/)
+  assert.match(poolCalls[0].text, /returning id, sender, message, created_at/)
+  assert.deepEqual(poolCalls[0].values, ['GPT', 'written'])
+  assert.equal(written[0].id, 9)
+})
+
+test('PostgreSQL livingroom write cutover rejects other mutations and unconfirmed inserts', async () => {
+  const legacy = createLivingroomRest({ rest: async () => [] })
+  const adapter = createPostgresLivingroomWriteCutover({
+    legacy,
+    pool: { query: async () => ({ rows: [] }) },
+  })
+
+  await assert.rejects(adapter('PATCH', 'livingroom', {}), /restricted/)
+  await assert.rejects(adapter('POST', 'other', {}), /restricted/)
+  await assert.rejects(
+    adapter('POST', 'livingroom', { sender: 'GPT', message: 'missing result' }),
+    error => error.code === 'LIVINGROOM_WRITE_NOT_CONFIRMED',
+  )
 })
