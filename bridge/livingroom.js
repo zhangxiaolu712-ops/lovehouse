@@ -80,6 +80,16 @@ const LIVINGROOM_READ_SQL = `
   ) room
 `
 
+const LIVINGROOM_WRITE_SQL = `
+  with inserted as (
+    insert into public.livingroom (sender, message)
+    values ($1::text, $2::text)
+    returning id, sender, message, created_at
+  )
+  select to_jsonb(inserted) as result
+  from inserted
+`
+
 function parseLivingroomReadPath(path) {
   const [table, query = ''] = String(path || '').split('?', 2)
   if (table !== LIVINGROOM_TABLE) throw scopeViolation()
@@ -113,6 +123,34 @@ export function createPostgresLivingroomReadCutover({
     const { since, limit } = parseLivingroomReadPath(path)
     const result = await postgresPool.query(LIVINGROOM_READ_SQL, [since, limit])
     return validateLivingroomRows(result.rows[0]?.result ?? [], { operation: 'read' })
+  }
+
+  Object.defineProperty(livingroomRest, LIVINGROOM_FENCE, { value: true })
+  return livingroomRest
+}
+
+/** Writes livingroom to PostgreSQL and preserves the already-selected read path. */
+export function createPostgresLivingroomWriteCutover({
+  legacy,
+  connectionString,
+  pool = null,
+  ssl = { rejectUnauthorized: false },
+}) {
+  if (!isLivingroomRest(legacy)) throw new TypeError('A fenced livingroom REST function is required')
+  if (!pool && !connectionString) throw new TypeError('LIFE_MEMORY_READ_DATABASE_URL is required')
+  const postgresPool = pool || new pg.Pool({ connectionString, ssl, max: 5, idleTimeoutMillis: 30_000 })
+
+  const livingroomRest = async function livingroomRest(method, path, body) {
+    const normalizedMethod = String(method || '').toUpperCase()
+    if (normalizedMethod === 'GET') return legacy(normalizedMethod, path, body)
+    if (normalizedMethod !== 'POST' || String(path || '') !== LIVINGROOM_TABLE) throw scopeViolation()
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw scopeViolation()
+    const result = await postgresPool.query(LIVINGROOM_WRITE_SQL, [body.sender, body.message])
+    const row = result.rows[0]?.result
+    return validateLivingroomRows(row ? [row] : [], {
+      operation: 'write',
+      requireSingleRow: true,
+    })
   }
 
   Object.defineProperty(livingroomRest, LIVINGROOM_FENCE, { value: true })

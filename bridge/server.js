@@ -39,10 +39,18 @@ import {
   PostgresMemoryV2ReadRepository,
   ReadCutoverMemoryV2Repository,
 } from './memory-v2/postgresReadRepository.js'
+import {
+  PostgresMemoryV2WriteRepository,
+  WriteCutoverMemoryV2Repository,
+} from './memory-v2/postgresWriteRepository.js'
 import { EngineeringShadowMonitor, ShadowEngineeringRepository, ShadowProjectChecklistStore } from './memory-v2/engineeringShadow.js'
 import { createMcpChannel } from './mcp/channel.js'
 import { installMcpTransports } from './mcp/transports.js'
-import { createLivingroomRest, createPostgresLivingroomReadCutover } from './livingroom.js'
+import {
+  createLivingroomRest,
+  createPostgresLivingroomReadCutover,
+  createPostgresLivingroomWriteCutover,
+} from './livingroom.js'
 import { SupabaseLivingroomTaskRepository } from './livingroom-tasks/repository.js'
 import { CODEX_VPS_ROUTE } from './livingroom-tasks/routing.js'
 import { FileTransientThreadReader } from './livingroom-tasks/transientStore.js'
@@ -98,6 +106,13 @@ const SUPABASE_SERVER_KEY = process.env.SUPABASE_SECRET_KEY
 const ENGINEERING_DATABASE_URL = process.env.ENGINEERING_DATABASE_URL || ''
 const ENGINEERING_SHADOW_DATABASE_URL = process.env.ENGINEERING_SHADOW_DATABASE_URL || ''
 const LIFE_MEMORY_READ_DATABASE_URL = process.env.LIFE_MEMORY_READ_DATABASE_URL || ''
+const LIFE_MEMORY_WRITE_SOURCE = process.env.LIFE_MEMORY_WRITE_SOURCE || 'supabase'
+if (!['supabase', 'postgres'].includes(LIFE_MEMORY_WRITE_SOURCE)) {
+  throw new Error('LIFE_MEMORY_WRITE_SOURCE must be supabase or postgres')
+}
+if (LIFE_MEMORY_WRITE_SOURCE === 'postgres' && !LIFE_MEMORY_READ_DATABASE_URL) {
+  throw new Error('PostgreSQL Life Memory writes require LIFE_MEMORY_READ_DATABASE_URL')
+}
 if (ENGINEERING_DATABASE_URL && ENGINEERING_SHADOW_DATABASE_URL) {
   throw new Error('ENGINEERING_DATABASE_URL and ENGINEERING_SHADOW_DATABASE_URL are mutually exclusive')
 }
@@ -244,12 +259,30 @@ const activeMemoryV2Repository = postgresMemoryV2ReadRepository
       postgres: postgresMemoryV2ReadRepository,
     })
   : memoryV2Repository
-const livingroomRest = postgresMemoryV2ReadRepository
+const postgresMemoryV2WriteRepository = LIFE_MEMORY_WRITE_SOURCE === 'postgres'
+  ? new PostgresMemoryV2WriteRepository({
+      pool: postgresMemoryV2ReadRepository.pool,
+      ownerId: OWNER_USER_ID,
+    })
+  : null
+const routedMemoryV2Repository = postgresMemoryV2WriteRepository
+  ? new WriteCutoverMemoryV2Repository({
+      read: activeMemoryV2Repository,
+      postgres: postgresMemoryV2WriteRepository,
+    })
+  : activeMemoryV2Repository
+const livingroomReadRest = postgresMemoryV2ReadRepository
   ? createPostgresLivingroomReadCutover({
       legacy: supabaseLivingroomRest,
       pool: postgresMemoryV2ReadRepository.pool,
     })
   : supabaseLivingroomRest
+const livingroomRest = postgresMemoryV2WriteRepository
+  ? createPostgresLivingroomWriteCutover({
+      legacy: livingroomReadRest,
+      pool: postgresMemoryV2WriteRepository.pool,
+    })
+  : livingroomReadRest
 const railwayEngineeringRepository = ENGINEERING_DATABASE_URL
   ? new PostgresEngineeringRepository({
       connectionString: ENGINEERING_DATABASE_URL,
@@ -275,7 +308,7 @@ const activeEngineeringRepository = engineeringShadowRepository
     ? railwayEngineeringRepository
     : memoryV2Repository
 const memoryV2Service = new MemoryV2Service({
-  repository: activeMemoryV2Repository,
+  repository: routedMemoryV2Repository,
   embedding: createOllamaEmbeddingFromEnv(),
 })
 const engineeringMemoryService = new EngineeringMemoryService({
@@ -499,7 +532,7 @@ installClientApi(app, {
     livingroom: true,
   },
   engineeringMemoryService,
-  memoryV2Repository: activeMemoryV2Repository,
+  memoryV2Repository: routedMemoryV2Repository,
   memoryV2Service,
   projectChecklistStore,
   runtimeStatusProvider,
@@ -628,9 +661,9 @@ app.get('/health', (_req, res) => {
     engineering_read_source: railwayEngineeringRepository ? 'railway_postgres' : 'supabase',
     engineering_write_source: railwayEngineeringRepository ? 'railway_postgres' : 'supabase',
     life_memory_read_source: postgresMemoryV2ReadRepository ? 'postgres' : 'supabase',
-    life_memory_write_source: 'supabase',
+    life_memory_write_source: postgresMemoryV2WriteRepository ? 'postgres' : 'supabase',
     livingroom_read_source: postgresMemoryV2ReadRepository ? 'postgres' : 'supabase',
-    livingroom_write_source: 'supabase',
+    livingroom_write_source: postgresMemoryV2WriteRepository ? 'postgres' : 'supabase',
     engineering_shadow: engineeringShadowMonitor?.snapshot() || { enabled: false },
   })
 })
