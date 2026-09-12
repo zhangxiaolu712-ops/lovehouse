@@ -7,7 +7,7 @@ import androidx.compose.ui.platform.LocalContext
 import fyi.b612.lovehouse.BuildConfig
 import fyi.b612.lovehouse.core.auth.AndroidOwnerSessionStore
 import fyi.b612.lovehouse.core.auth.OwnerSessionStore
-import fyi.b612.lovehouse.core.auth.SupabaseOwnerSessionRefresher
+import fyi.b612.lovehouse.core.auth.createSupabaseCompatibleOwnerSessionRefresher
 import fyi.b612.lovehouse.core.permissions.AndroidPermissionStatusProvider
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.status.DefaultSystemStatusProvider
@@ -49,7 +49,7 @@ fun createAppDependencies(context: Context): AppDependencies {
     val permissions = AndroidPermissionStatusProvider(appContext)
     val ownerSession = AndroidOwnerSessionStore(
         context = appContext,
-        refresher = SupabaseOwnerSessionRefresher(
+        refresher = createSupabaseCompatibleOwnerSessionRefresher(
             baseUrl = BuildConfig.LOVEHOUSE_SUPABASE_URL,
             publishableKey = BuildConfig.LOVEHOUSE_SUPABASE_PUBLISHABLE_KEY,
         ),

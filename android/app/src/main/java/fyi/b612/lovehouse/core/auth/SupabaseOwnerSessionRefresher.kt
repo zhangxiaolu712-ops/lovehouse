@@ -6,32 +6,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/** Temporary Owner Auth adapter. Callers depend only on [OwnerSessionRefresher]. */
-class SupabaseOwnerSessionRefresher(
-    baseUrl: String,
-    private val publishableKey: String,
+/** Provider-neutral JSON refresh transport. Owner Session storage never depends on its provider. */
+class HttpOwnerSessionRefresher(
+    refreshEndpoint: String,
+    private val requestHeaders: Map<String, String> = emptyMap(),
 ) : OwnerSessionRefresher {
-    private val refreshEndpoint = baseUrl.trim().trimEnd('/').let { root ->
-        if (root.isBlank() || !root.startsWith("https://")) null
-        else "$root/auth/v1/token?grant_type=refresh_token"
-    }
-
-    init {
-        validatePublishableKey(publishableKey)
-    }
+    private val configuredEndpoint = refreshEndpoint.trim().takeIf { it.startsWith("https://") }
 
     override suspend fun refresh(refreshToken: String): OwnerSessionInput = withContext(Dispatchers.IO) {
         validateRefreshToken(refreshToken)
-        val endpoint = refreshEndpoint ?: throw OwnerSessionException(
+        val endpoint = configuredEndpoint ?: throw OwnerSessionException(
             OwnerSessionFailure.RefreshUnavailable,
             ownerSessionMessage(OwnerSessionFailure.RefreshUnavailable),
         )
-        if (publishableKey.isBlank()) {
-            throw OwnerSessionException(
-                OwnerSessionFailure.RefreshUnavailable,
-                ownerSessionMessage(OwnerSessionFailure.RefreshUnavailable),
-            )
-        }
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
@@ -39,7 +26,7 @@ class SupabaseOwnerSessionRefresher(
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("apikey", publishableKey)
+            requestHeaders.forEach(::setRequestProperty)
         }
         try {
             val requestBody = JSONObject().put("refresh_token", refreshToken).toString()
@@ -77,6 +64,24 @@ class SupabaseOwnerSessionRefresher(
             connection.disconnect()
         }
     }
+}
+
+/** Keeps every already-issued Supabase refresh token valid during provider migration. */
+fun createSupabaseCompatibleOwnerSessionRefresher(
+    baseUrl: String,
+    publishableKey: String,
+): OwnerSessionRefresher {
+    validatePublishableKey(publishableKey)
+    val root = baseUrl.trim().trimEnd('/')
+    val endpoint = if (root.startsWith("https://") && publishableKey.isNotBlank()) {
+        "$root/auth/v1/token?grant_type=refresh_token"
+    } else {
+        ""
+    }
+    return HttpOwnerSessionRefresher(
+        refreshEndpoint = endpoint,
+        requestHeaders = if (publishableKey.isBlank()) emptyMap() else mapOf("apikey" to publishableKey),
+    )
 }
 
 internal fun validatePublishableKey(key: String) {

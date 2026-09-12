@@ -1,6 +1,7 @@
 import { createCodexChatServer } from './app.js'
 import { CodexCliRuntimeAdapter } from './codexCliRuntimeAdapter.js'
-import { createSupabaseOwnerAuth } from './supabaseOwnerAuth.js'
+import { createOwnerAuthenticator } from './supabaseOwnerAuth.js'
+import { createSupabaseOwnerAuthProvider } from '../../bridge/auth/ownerAuthProvider.js'
 import { FileThreadBindingStore } from './threadBindingStore.js'
 import { createSupabaseRest } from '../../bridge/memory/repository.js'
 import { CODEX_VPS_ROUTE } from '../../bridge/livingroom-tasks/routing.js'
@@ -10,9 +11,12 @@ import { LivingroomTaskDispatcher } from '../../bridge/livingroom-tasks/dispatch
 import { CodexRuntimeEndpoint } from '../../bridge/livingroom-tasks/codexRuntimeEndpoint.js'
 
 const port = Number.parseInt(process.env.CODEX_CHAT_PORT || '3002', 10)
-const authenticate = createSupabaseOwnerAuth({
-  supabaseUrl: process.env.SUPABASE_URL || 'https://cvyguanuaxcypsvoozeo.supabase.co',
-  anonKey: process.env.SUPABASE_ANON_KEY,
+const ownerAuthProvider = createSupabaseOwnerAuthProvider({
+  baseUrl: process.env.SUPABASE_URL || 'https://cvyguanuaxcypsvoozeo.supabase.co',
+  publishableKey: process.env.SUPABASE_ANON_KEY,
+})
+const authenticate = createOwnerAuthenticator({
+  ownerAuthProvider,
   ownerUserId: process.env.OWNER_USER_ID,
 })
 const runtime = new CodexCliRuntimeAdapter({

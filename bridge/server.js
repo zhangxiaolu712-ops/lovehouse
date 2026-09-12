@@ -75,6 +75,7 @@ import {
   installMediaRoutes,
   resolveR2MediaConfig,
 } from './media/index.js'
+import { createSupabaseOwnerAuthProvider } from './auth/ownerAuthProvider.js'
 
 const require = createRequire(import.meta.url)
 const pm2Client = require('/usr/lib/node_modules/pm2')
@@ -174,17 +175,14 @@ const rateCleanup = setInterval(() => {
 }, 5 * 60_000)
 rateCleanup.unref?.()
 
-async function verifyOwnerToken(token) {
-  if (!OWNER_USER_ID || !SUPABASE_ANON_KEY) throw new Error('owner authentication is not configured')
-  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: SUPABASE_ANON_KEY,
-    },
-  })
-  if (!response.ok) return null
-  const user = await response.json()
-  return user.id === OWNER_USER_ID ? user : null
+const ownerAuthProvider = createSupabaseOwnerAuthProvider({
+  baseUrl: SUPABASE_URL,
+  publishableKey: SUPABASE_ANON_KEY,
+})
+
+const verifyOwnerToken = async token => {
+  const identity = await ownerAuthProvider.verifyBearer(token)
+  return identity?.id === OWNER_USER_ID ? identity : null
 }
 
 async function verifyOwnerBearer(req, res, next) {
@@ -622,8 +620,7 @@ const oauthVerifiers = installMcpOAuth(app, {
       metadataPath: '/.well-known/oauth-protected-resource/mcp/claude',
     },
   },
-  supabaseUrl: SUPABASE_URL,
-  supabaseAnonKey: SUPABASE_ANON_KEY,
+  ownerAuthProvider,
   ownerUserId: OWNER_USER_ID,
   tokenSecret: OAUTH_TOKEN_SECRET,
   checkRate,

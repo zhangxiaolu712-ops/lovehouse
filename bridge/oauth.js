@@ -13,6 +13,7 @@ import {
   digestClientSecret,
   digestRefreshToken,
 } from './oauthRefreshStore.js'
+import { assertOwnerAuthProvider } from './auth/ownerAuthProvider.js'
 
 const AUTHORIZATION_CODE = 'authorization_code'
 const REFRESH_TOKEN = 'refresh_token'
@@ -116,8 +117,7 @@ function normalizeResources(resources) {
 export function installMcpOAuth(app, {
   oauthBase,
   resources,
-  supabaseUrl,
-  supabaseAnonKey,
+  ownerAuthProvider,
   ownerUserId,
   tokenSecret,
   checkRate,
@@ -129,6 +129,7 @@ export function installMcpOAuth(app, {
   if (!tokenSecret || tokenSecret.length < 32) {
     throw new Error('OAUTH_TOKEN_SECRET must contain at least 32 characters')
   }
+  const ownerAuth = assertOwnerAuthProvider(ownerAuthProvider)
   const resourceConfigs = normalizeResources(resources)
   const resourcesByUri = new Map(Object.values(resourceConfigs).map(config => [config.resource, config]))
   if (!refreshTokenStore
@@ -190,19 +191,8 @@ export function installMcpOAuth(app, {
   }
 
   async function verifyOwnerCredentials(email, password) {
-    if (!ownerUserId || !supabaseAnonKey) throw new Error('owner OAuth is not configured')
-    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) return false
-    const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
-      method: 'POST',
-      headers: {
-        apikey: supabaseAnonKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, password }),
-    })
-    if (!response.ok) return false
-    const payload = await response.json()
-    return payload.user?.id === ownerUserId
+    const identity = await ownerAuth.verifyCredentials(email, password)
+    return identity?.id === ownerUserId
   }
 
   app.get('/.well-known/oauth-authorization-server', (_req, res) => {

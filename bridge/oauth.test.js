@@ -21,6 +21,7 @@ import {
 } from './oauthRefreshStore.js'
 import { installMcpTransports } from './mcp/transports.js'
 import { createMcpToolDefinitions } from './mcp/tools.js'
+import { createSupabaseOwnerAuthProvider } from './auth/ownerAuthProvider.js'
 
 const oauthBase = 'https://tingtunehouse.example'
 const resource = `${oauthBase}/api/mcp/claude`
@@ -45,8 +46,10 @@ function installTestOAuth(app, overrides = {}) {
         metadataPath: '/.well-known/oauth-protected-resource/mcp/claude',
       },
     },
-    supabaseUrl: 'https://project.example.supabase.co',
-    supabaseAnonKey: 'test-anon-key',
+    ownerAuthProvider: createSupabaseOwnerAuthProvider({
+      baseUrl: 'https://project.example.supabase.co',
+      publishableKey: 'test-anon-key',
+    }),
     ownerUserId: 'owner-1',
     tokenSecret,
     checkRate: () => true,
