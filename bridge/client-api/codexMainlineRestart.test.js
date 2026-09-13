@@ -64,6 +64,7 @@ async function startBridge(sidecarBase) {
     verifyOwner: createClientOwnerAuth({
       verifyOwnerToken: async token => token === 'owner-jwt' ? { id: 'owner' } : null,
     }),
+    chatUserId: 'owner',
     providerRouter,
     startedAt: '2026-08-24T08:00:00.000Z',
   })
@@ -75,7 +76,7 @@ async function startBridge(sidecarBase) {
 async function turn(bridgeBase) {
   const response = await fetch(`${bridgeBase}/v1/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer owner-jwt' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       persona_id: 'codex', thread_id: THREAD_ID, window_id: 'client-window-1',
       scene: 'work', message: { type: 'text', text: 'hello' },
@@ -92,6 +93,7 @@ test('Thread A resumes after the Bridge is fully restarted while the Codex sidec
   const observed = []
   const sidecar = createCodexChatServer({
     authenticate: async () => ({ userId: 'owner' }),
+    chatUserId: 'owner',
     runtime: runtime(observed),
   })
   const sidecarBase = await listen(sidecar)

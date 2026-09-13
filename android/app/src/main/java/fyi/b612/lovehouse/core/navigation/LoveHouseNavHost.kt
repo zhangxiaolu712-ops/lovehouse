@@ -62,7 +62,6 @@ private fun LoveHouseContent(
     val chatStore = remember(dependencies.chatMessages, dependencies.capabilityRegistry, dependencies.claudeWebHistoryImporter) {
         ChatSessionStore(
             codexClient = HttpCodexChatClient(
-                ownerSession = dependencies.ownerSession,
                 allowedToolIdsFor = { dependencies.capabilityRegistry.requestedToolIds() },
             ),
             messageRepository = dependencies.chatMessages,
@@ -108,6 +107,8 @@ private fun LoveHouseContent(
                 capabilityRegistry = dependencies.capabilityRegistry,
                 baseCapabilities = dependencies.baseCapabilities,
                 mediaAttachments = dependencies.mediaAttachments,
+                chatConnections = dependencies.chatConnections,
+                chatConnectionProbe = dependencies.chatConnectionProbe,
                 onBack = { navController.popBackStack() },
             )
         }

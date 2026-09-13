@@ -29,6 +29,10 @@ import fyi.b612.lovehouse.feature.chat.CodexRuntime
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentLifecycle
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentType
 import fyi.b612.lovehouse.feature.chat.ChatRuntimeConfig
+import fyi.b612.lovehouse.feature.chat.AndroidChatConnectionStore
+import fyi.b612.lovehouse.feature.chat.ChatConnectionProbe
+import fyi.b612.lovehouse.feature.chat.ChatConnectionStore
+import fyi.b612.lovehouse.feature.chat.HttpChatConnectionProbe
 import fyi.b612.lovehouse.feature.settings.AndroidToolProfilePreferenceStore
 import fyi.b612.lovehouse.feature.settings.AndroidCapabilityRegistry
 import fyi.b612.lovehouse.feature.settings.CapabilityRegistry
@@ -55,6 +59,8 @@ data class AppDependencies(
     val baseCapabilities: LoveHouseCapabilityRegistry,
     val toolConnections: ToolConnectionStore,
     val toolConnectionProbe: ToolConnectionProbe,
+    val chatConnections: ChatConnectionStore,
+    val chatConnectionProbe: ChatConnectionProbe,
 )
 
 fun createAppDependencies(context: Context): AppDependencies {
@@ -93,6 +99,8 @@ fun createAppDependencies(context: Context): AppDependencies {
         baseCapabilities = baseCapabilities,
         toolConnections = AndroidToolConnectionStore(appContext),
         toolConnectionProbe = HttpToolConnectionProbe(),
+        chatConnections = AndroidChatConnectionStore(appContext),
+        chatConnectionProbe = HttpChatConnectionProbe(),
     )
 }
 

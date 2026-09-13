@@ -36,6 +36,18 @@ fun LoveHouseAppShell(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val appearance = LocalLoveHouseAppearance.current
+    Box(modifier.fillMaxSize()) {
+        LoveHouseWallpaperLayer(appearance)
+        content()
+    }
+}
+
+/** The single wallpaper + fog renderer used by the app shell and chat-scoped surfaces. */
+@Composable
+fun LoveHouseWallpaperLayer(
+    appearance: LoveHouseAppearance,
+    modifier: Modifier = Modifier,
+) {
     val customWallpaper = remember(appearance.customWallpaperPath) {
         appearance.customWallpaperPath?.let { path -> runCatching { BitmapFactory.decodeFile(path)?.asImageBitmap() }.getOrNull() }
     }
@@ -70,7 +82,6 @@ fun LoveHouseAppShell(
                     ),
                 ),
         )
-        content()
     }
 }
 

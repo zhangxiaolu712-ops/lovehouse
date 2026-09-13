@@ -15,6 +15,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -58,6 +68,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -110,6 +121,9 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconGallery
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconOpticalSize
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
+import fyi.b612.lovehouse.core.designsystem.LocalLoveHouseAppearance
+import fyi.b612.lovehouse.core.designsystem.LoveHouseAppearance
+import fyi.b612.lovehouse.core.designsystem.LoveHouseWallpaperLayer
 import fyi.b612.lovehouse.core.capability.CapabilityAvailability
 import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityId
 import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityRegistry
@@ -125,10 +139,24 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
 
 private val PersonaInk = Color(0xFF3E4847)
 private val PersonaMuted = Color(0xFF7F8B88)
 private val PersonaAccent = Color(0xFF718E87)
+
+internal const val CHAT_TEXT_SIZE_KEY = "chat_appearance_text_size_sp_v1"
+internal const val CHAT_BUBBLE_SCALE_KEY = "chat_appearance_bubble_scale_v1"
+
+internal data class ChatAppearanceSettings(
+    val textSizeSp: Float = 14f,
+    val bubbleScale: Float = .90f,
+)
+
+internal fun resolveChatAppearance(textSize: String?, bubbleScale: String?) = ChatAppearanceSettings(
+    textSizeSp = textSize?.toFloatOrNull()?.coerceIn(12f, 18f) ?: 14f,
+    bubbleScale = bubbleScale?.toFloatOrNull()?.coerceIn(.80f, 1.10f) ?: .90f,
+)
 
 private object ChatRhythm {
     val SameSenderSpacing = 8.dp
@@ -221,6 +249,8 @@ internal data class ChatVisualContext(
     val chatOverrideKey: String?,
     val customWallpaper: ImageBitmap? = null,
     val customTint: Color? = null,
+    val globalAppearance: LoveHouseAppearance = LoveHouseAppearance(),
+    val followsGlobalWallpaper: Boolean = false,
 ) {
     val topTint: Color = customTint ?: wallpaper.topTint
     val bottomTint: Color = customTint?.copy(
@@ -234,8 +264,8 @@ internal data class ChatVisualContext(
         blue = topTint.blue * .58f + .42f,
     )
     private val darkWallpaper = topTint.red * .2126f + topTint.green * .7152f + topTint.blue * .0722f < .46f
-    val panelGlass: Color = paleTint.copy(alpha = .48f)
-    val popupGlass: Color = paleTint.copy(alpha = .64f)
+    val panelGlass: Color = paleTint.copy(alpha = .42f)
+    val popupGlass: Color = paleTint.copy(alpha = .56f)
     val popupBorder: Color = if (darkWallpaper) Color.White.copy(alpha = .24f) else Color.Black.copy(alpha = .14f)
     val brightEdge: Color = Color.White.copy(alpha = .42f)
     val outsideScrim: Color = bottomTint.copy(alpha = .025f)
@@ -301,7 +331,7 @@ internal fun resolveChatWallpaperPath(
 private fun chatBackdropFor(key: String): ChatBackdrop =
     ChatBackdrop.entries.firstOrNull { it.key == key } ?: ChatBackdrop.Green
 
-private enum class PersonaPanel { Detail, Search, DateJump, Bookshelf, Appearance, Status, IconGallery, MemberPicker, ForwardTarget, WorkflowForward, ForwardBundle, AvatarPicker }
+private enum class PersonaPanel { Detail, Search, DateJump, Bookshelf, Appearance, Status, Models, IconGallery, MemberPicker, ForwardTarget, WorkflowForward, ForwardBundle, AvatarPicker }
 private enum class BubbleStyle(val title: String, val subtitle: String) {
     None("无气泡", "文字直接浮在壁纸上"),
     Soft("轻气泡", "参考图式柔软浅气泡"),
@@ -317,6 +347,8 @@ fun ChatShellScreen(
     capabilityRegistry: CapabilityRegistry,
     baseCapabilities: LoveHouseCapabilityRegistry,
     mediaAttachments: MediaAttachmentClient,
+    chatConnections: ChatConnectionStore,
+    chatConnectionProbe: ChatConnectionProbe,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -327,6 +359,10 @@ fun ChatShellScreen(
     var panel by remember { mutableStateOf<PersonaPanel?>(null) }
     var bubbleStyle by remember { mutableStateOf(BubbleStyle.Soft) }
     val globalWallpaper by localStorage.observeString(APPEARANCE_WALLPAPER_KEY).collectAsState(initial = null)
+    val chatTextSize by localStorage.observeString(CHAT_TEXT_SIZE_KEY).collectAsState(initial = null)
+    val chatBubbleScale by localStorage.observeString(CHAT_BUBBLE_SCALE_KEY).collectAsState(initial = null)
+    val chatAppearance = resolveChatAppearance(chatTextSize, chatBubbleScale)
+    val globalAppearance = LocalLoveHouseAppearance.current
     val chatWallpaperOverride = store.backgroundOverride(threadId)
     val globalWallpaperPath by localStorage.observeString(APPEARANCE_CUSTOM_WALLPAPER_KEY).collectAsState(initial = null)
     val threadWallpaperPath by localStorage.observeString(chatWallpaperPathKey(threadId)).collectAsState(initial = null)
@@ -344,6 +380,8 @@ fun ChatShellScreen(
         chatOverrideKey = chatWallpaperOverride,
         customWallpaper = localWallpaper?.image,
         customTint = localWallpaper?.tint,
+        globalAppearance = globalAppearance,
+        followsGlobalWallpaper = chatWallpaperOverride == null && threadWallpaperPath == null,
     )
     val customWallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) wallpaperScope.launch {
@@ -364,17 +402,10 @@ fun ChatShellScreen(
         if (isClaudeRuntime) ClaudeRuntime else CodexRuntime,
         baseCapabilityState,
     )
-    var selectedModel by remember(threadId) {
-        mutableStateOf(
-            when {
-                isCodexRuntime -> actualRuntimeLabel
-                isClaudeRuntime -> "${ClaudeRuntime.expectedRuntime} · ${ClaudeRuntime.expectedAdapterId}"
-                else -> "Runtime 尚未接入"
-            },
-        )
-    }
-    LaunchedEffect(actualRuntimeLabel, threadId) {
-        if (isRuntimeThread && actualRuntimeLabel != "Runtime 尚未返回") selectedModel = actualRuntimeLabel
+    val selectedModel = when {
+        isCodexRuntime -> actualRuntimeLabel
+        isClaudeRuntime -> "${ClaudeRuntime.expectedRuntime} · ${ClaudeRuntime.expectedAdapterId}"
+        else -> "Runtime 尚未接入"
     }
     var input by remember { mutableStateOf("") }
     var pendingAttachments by remember(threadId) { mutableStateOf<List<ChatAttachment>>(emptyList()) }
@@ -564,7 +595,7 @@ fun ChatShellScreen(
         panel = when (panel) {
             PersonaPanel.MemberPicker, PersonaPanel.AvatarPicker, PersonaPanel.Search,
             PersonaPanel.DateJump, PersonaPanel.Bookshelf, PersonaPanel.Appearance,
-            PersonaPanel.Status, PersonaPanel.IconGallery -> PersonaPanel.Detail
+            PersonaPanel.Status, PersonaPanel.Models, PersonaPanel.IconGallery -> PersonaPanel.Detail
             else -> null
         }
         if (panel == null && selectedMessages.isNotEmpty()) selectedMessages = emptySet()
@@ -603,6 +634,7 @@ fun ChatShellScreen(
                             spacingAfter = spacingAfter,
                             task = message.taskId?.let(store::task),
                             style = bubbleStyle,
+                            appearance = chatAppearance,
                             visualContext = visualContext,
                             selected = message.messageId in selectedMessages,
                             selectionMode = selectedMessages.isNotEmpty(),
@@ -688,10 +720,14 @@ fun ChatShellScreen(
                 PersonaPanel.AvatarPicker -> AvatarPickerSheet(visualContext, onClose = { panel = PersonaPanel.Detail }) { store.updateAvatar(threadId, it); panel = PersonaPanel.Detail }
                 else -> PersonaSheet(
                     panel!!, thread, store, selectedModel, bubbleStyle, visualContext,
+                    appearance = chatAppearance,
+                    chatConnections = chatConnections,
+                    chatConnectionProbe = chatConnectionProbe,
                     onClose = { panel = if (panel == PersonaPanel.Detail) null else PersonaPanel.Detail },
                     onNavigate = { panel = it },
-                    onModel = { selectedModel = it },
                     onBubble = { bubbleStyle = it; panel = PersonaPanel.Detail },
+                    onTextSize = { value -> wallpaperScope.launch { localStorage.writeString(CHAT_TEXT_SIZE_KEY, value.toString()) } },
+                    onBubbleScale = { value -> wallpaperScope.launch { localStorage.writeString(CHAT_BUBBLE_SCALE_KEY, value.toString()) } },
                     onBackdrop = { choice ->
                         wallpaperScope.launch { localStorage.remove(chatWallpaperPathKey(threadId)) }
                         if (choice == null) store.clearBackground(threadId) else store.setBackground(threadId, choice.key)
@@ -747,6 +783,10 @@ private fun ChatNavigationBarTint(visualContext: ChatVisualContext) {
 
 @Composable
 internal fun ChatBackdropLayer(visualContext: ChatVisualContext) {
+    if (visualContext.followsGlobalWallpaper) {
+        LoveHouseWallpaperLayer(visualContext.globalAppearance)
+        return
+    }
     val backdrop = visualContext.wallpaper
     visualContext.customWallpaper?.let { image ->
         Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -756,13 +796,7 @@ internal fun ChatBackdropLayer(visualContext: ChatVisualContext) {
         modifier = Modifier.fillMaxSize(),
         contentScale = ContentScale.Crop,
     )
-    val tintAlpha = if (visualContext.customWallpaper != null) .10f else when (backdrop) {
-        ChatBackdrop.Green -> .06f
-        ChatBackdrop.Lavender -> .12f
-        ChatBackdrop.Rose -> .32f
-        ChatBackdrop.Warm -> .24f
-        ChatBackdrop.Night -> .42f
-    }
+    val tintAlpha = if (visualContext.customWallpaper != null) .06f else .08f
     Box(
         Modifier.fillMaxSize().background(
             Brush.verticalGradient(
@@ -774,26 +808,9 @@ internal fun ChatBackdropLayer(visualContext: ChatVisualContext) {
 
 @Composable
 internal fun ChatAtmosphere(visualContext: ChatVisualContext) {
-    Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier.fillMaxWidth().fillMaxHeight(.22f).align(Alignment.TopCenter).background(
-                Brush.verticalGradient(
-                    0f to Color.White.copy(alpha = .34f),
-                    .42f to visualContext.topTint.copy(alpha = .18f),
-                    1f to Color.Transparent,
-                ),
-            ),
-        )
-        Box(
-            Modifier.fillMaxWidth().fillMaxHeight(.28f).align(Alignment.BottomCenter).background(
-                Brush.verticalGradient(
-                    0f to Color.Transparent,
-                    .62f to visualContext.bottomTint.copy(alpha = .16f),
-                    1f to Color.White.copy(alpha = .36f),
-                ),
-            ),
-        )
-    }
+    // Keep chat brightness aligned with ChatList/Persona list. Readability comes
+    // from the bounded glass surfaces, not a page-wide dark or white scrim.
+    Box(Modifier.fillMaxSize())
 }
 
 @Composable
@@ -933,47 +950,67 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
 }
 
 @Composable private fun ProcessTimeline(events: List<ChatProcessEvent>) {
-    var expandedId by remember(events) { mutableStateOf<String?>(null) }
-    Column(Modifier.padding(top = 3.dp, bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        events.forEachIndexed { index, event ->
-            val expanded = expandedId == event.id
-            Row(
-                Modifier.clip(RoundedCornerShape(8.dp)).clickable {
-                    expandedId = if (expanded) null else event.id
-                }.padding(vertical = 2.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(
-                        Modifier.padding(top = 3.dp).size(7.dp).background(
-                            when (event.status) {
-                                ChatProcessStatus.Succeeded -> PersonaAccent
-                                ChatProcessStatus.Failed -> MaterialTheme.colorScheme.error.copy(alpha = .72f)
-                                ChatProcessStatus.Running -> PersonaAccent.copy(alpha = .48f)
-                            },
-                            CircleShape,
-                        ),
-                    )
-                    if (index != events.lastIndex) Box(Modifier.width(1.dp).height(15.dp).background(PersonaAccent.copy(alpha = .22f)))
-                }
-                Column(Modifier.padding(start = 7.dp).widthIn(max = 250.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(event.title, color = PersonaInk.copy(alpha = .82f), fontSize = 8.5.sp)
-                        if (event.detail != null) LoveHouseIconView(
-                            if (expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
-                            null,
-                            Modifier.padding(start = 3.dp).size(9.dp),
-                            PersonaMuted,
-                            LoveHouseIconOpticalSize.Compact,
-                        )
-                    }
-                    if (expanded) event.detail?.let { detail ->
-                        Text(detail, Modifier.padding(top = 2.dp), color = PersonaMuted, fontSize = 8.sp, lineHeight = 11.sp)
-                    }
+    var expanded by remember { mutableStateOf(false) }
+    val thinking = events.any { it.kind == ChatProcessKind.Thinking || it.kind == ChatProcessKind.ReasoningStatus }
+    val running = events.any { it.status == ChatProcessStatus.Running }
+    val title = when {
+        thinking -> "思考过程"
+        events.any { it.kind == ChatProcessKind.ToolCall || it.kind == ChatProcessKind.ToolResult || it.kind == ChatProcessKind.ToolError } -> "工具调用"
+        else -> "执行过程"
+    }
+    Column(
+        Modifier.padding(top = 5.dp, bottom = 4.dp).animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            Modifier.clip(RoundedCornerShape(8.dp)).clickable { expanded = !expanded }.padding(vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LoveHouseIconView(
+                if (thinking) LoveHouseIcon.Thinking else LoveHouseIcon.Wrench,
+                null,
+                Modifier.size(if (thinking) 16.dp else 14.dp),
+                PersonaMuted,
+                LoveHouseIconOpticalSize.Compact,
+            )
+            Text(title, Modifier.padding(start = 7.dp), color = PersonaInk.copy(alpha = .78f), fontSize = 10.sp)
+            if (running) BreathingDots()
+            LoveHouseIconView(
+                if (expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
+                null,
+                Modifier.padding(start = 5.dp).size(11.dp),
+                PersonaMuted,
+                LoveHouseIconOpticalSize.Compact,
+            )
+        }
+        if (expanded) events.forEach { event ->
+            Row(Modifier.padding(start = 2.dp), verticalAlignment = Alignment.Top) {
+                LoveHouseIconView(
+                    if (event.kind == ChatProcessKind.Thinking || event.kind == ChatProcessKind.ReasoningStatus) LoveHouseIcon.Thinking else LoveHouseIcon.Wrench,
+                    null,
+                    Modifier.padding(top = 1.dp).size(13.dp),
+                    if (event.status == ChatProcessStatus.Failed) MaterialTheme.colorScheme.error.copy(alpha = .74f) else PersonaMuted,
+                    LoveHouseIconOpticalSize.Compact,
+                )
+                Column(Modifier.padding(start = 7.dp).widthIn(max = 260.dp)) {
+                    Text(event.title, color = PersonaInk.copy(alpha = .76f), fontSize = 9.sp)
+                    event.detail?.let { detail -> Text(detail, Modifier.padding(top = 2.dp), color = PersonaMuted, fontSize = 8.5.sp, lineHeight = 12.sp) }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun BreathingDots() {
+    val transition = rememberInfiniteTransition(label = "thinking-dots")
+    val alpha by transition.animateFloat(
+        initialValue = .28f,
+        targetValue = .82f,
+        animationSpec = infiniteRepeatable(tween(760), RepeatMode.Reverse),
+        label = "thinking-dots-alpha",
+    )
+    Text(" ···", color = PersonaMuted.copy(alpha = alpha), fontSize = 9.sp)
 }
 
 @Composable private fun MessageBubble(
@@ -982,6 +1019,7 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
     spacingAfter: Dp,
     task: RemoteAgentTask?,
     style: BubbleStyle,
+    appearance: ChatAppearanceSettings,
     visualContext: ChatVisualContext,
     selected: Boolean,
     selectionMode: Boolean,
@@ -996,13 +1034,13 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.mine) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Top) {
         val color = when (style) {
             BubbleStyle.None -> Color.Transparent
-            BubbleStyle.Soft -> if (message.mine) Color(0xFFDDEAE5).copy(alpha = .82f) else Color(0xFFF8F5EF).copy(alpha = .76f)
-            BubbleStyle.Glass -> Color.White.copy(alpha = .34f)
+            BubbleStyle.Soft -> if (message.mine) Color(0xFFE7F0EC).copy(alpha = .68f) else Color.White.copy(alpha = .58f)
+            BubbleStyle.Glass -> Color.White.copy(alpha = .48f)
             BubbleStyle.Paper -> Color(0xFFF6F0E2).copy(alpha = .92f)
         }
         if (!message.mine) { if (startsGroup) MessageAvatar(message) else Spacer(Modifier.size(30.dp)) }
         Column(
-            modifier = Modifier.widthIn(max = 300.dp).padding(horizontal = 7.dp),
+            modifier = Modifier.fillMaxWidth((.78f * appearance.bubbleScale).coerceIn(.62f, .86f)).padding(horizontal = 7.dp).animateContentSize(),
             horizontalAlignment = if (message.mine) Alignment.End else Alignment.Start,
         ) {
             if (startsGroup) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1023,7 +1061,11 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
                 },
                 onLongClick = onToggleSelection,
             )
-            val bubbleBorder = when { selected -> BorderStroke(1.5.dp, PersonaAccent); style == BubbleStyle.Glass -> BorderStroke(1.dp, Color.White.copy(alpha = .72f)); else -> null }
+            val bubbleBorder = when {
+                selected -> BorderStroke(1.5.dp, PersonaAccent)
+                style != BubbleStyle.None -> BorderStroke(.8.dp, Color.White.copy(alpha = .62f))
+                else -> null
+            }
             if (message.kind == ChatMessageKind.Text) {
                 Column(
                     Modifier.padding(top = if (startsGroup) 1.dp else 0.dp),
@@ -1031,11 +1073,27 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
                     horizontalAlignment = if (message.mine) Alignment.End else Alignment.Start,
                 ) {
                     if (message.attachments.isNotEmpty()) {
-                        MessageAttachmentSegments(message, color, bubbleBorder, bubbleModifier)
+                        MessageAttachmentSegments(message, color, bubbleBorder, bubbleModifier, appearance.bubbleScale)
                     }
                     message.body.takeIf(String::isNotBlank)?.naturalMessageSegments()?.forEach { segment ->
-                        Surface(modifier = bubbleModifier, shape = RoundedCornerShape(15.dp), color = color, border = bubbleBorder) {
-                            Text(segment, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = PersonaInk, fontSize = 11.5.sp, lineHeight = 17.sp)
+                        AnimatedVisibility(visible = true, enter = fadeIn(tween(140))) {
+                            Surface(
+                                modifier = bubbleModifier.animateContentSize(),
+                                shape = RoundedCornerShape(18.dp * appearance.bubbleScale),
+                                color = color,
+                                border = bubbleBorder,
+                            ) {
+                                Text(
+                                    segment,
+                                    Modifier.padding(
+                                        horizontal = 16.dp * appearance.bubbleScale,
+                                        vertical = 12.dp * appearance.bubbleScale,
+                                    ),
+                                    color = PersonaInk,
+                                    fontSize = appearance.textSizeSp.sp,
+                                    lineHeight = (appearance.textSizeSp * 1.5f).sp,
+                                )
+                            }
                         }
                     }
                     message.deliveryError?.let { error ->
@@ -1146,6 +1204,7 @@ private fun PersonaComposer(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var showAttachments by remember { mutableStateOf(false) }
+    var attachmentToolMode by remember { mutableStateOf(false) }
     var inputFocused by remember { mutableStateOf(false) }
     var composerExpanded by remember { mutableStateOf(false) }
     var imeShownDuringCurrentFocus by remember { mutableStateOf(false) }
@@ -1270,6 +1329,22 @@ private fun PersonaComposer(
                     }
                 }
             }
+            AnimatedVisibility(
+                visible = showAttachments,
+                enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
+                exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
+            ) {
+                AttachmentBottomSheet(
+                    visualContext = visualContext,
+                    toolMode = attachmentToolMode,
+                    onToolModeChange = { attachmentToolMode = it },
+                    onDismiss = { showAttachments = false; attachmentToolMode = false },
+                    onToolAction = onToolAction,
+                    eligibleTools = eligibleTools,
+                    unavailableActions = unavailableActions,
+                    onToolMention = onToolMention,
+                )
+            }
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(17.dp),
@@ -1283,12 +1358,7 @@ private fun PersonaComposer(
                     attachment = {
                         ComposerAttachmentButton(
                             expanded = showAttachments,
-                            visualContext = visualContext,
-                            onExpandedChange = { showAttachments = it },
-                            onToolAction = onToolAction,
-                            eligibleTools = eligibleTools,
-                            unavailableActions = unavailableActions,
-                            onToolMention = onToolMention,
+                            onExpandedChange = { showAttachments = it; if (!it) attachmentToolMode = false },
                         )
                     },
                     textField = {
@@ -1388,65 +1458,67 @@ private fun ComposerContentLayout(
 @Composable
 private fun ComposerAttachmentButton(
     expanded: Boolean,
-    visualContext: ChatVisualContext,
     onExpandedChange: (Boolean) -> Unit,
+) {
+    ChatIconButton(LoveHouseIcon.Plus, "添加附件", touchSize = 34.dp) { onExpandedChange(!expanded) }
+}
+
+@Composable
+private fun AttachmentBottomSheet(
+    visualContext: ChatVisualContext,
+    toolMode: Boolean,
+    onToolModeChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
     onToolAction: (String) -> Unit,
     eligibleTools: List<ToolCapability>,
     unavailableActions: Map<String, String>,
     onToolMention: (ToolCapability) -> Unit,
 ) {
-    var toolMode by remember { mutableStateOf(false) }
-    Box {
-        ChatIconButton(LoveHouseIcon.Plus, "添加附件", touchSize = 34.dp) { toolMode = false; onExpandedChange(true) }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { onExpandedChange(false) },
-            modifier = Modifier.widthIn(max = 124.dp),
-            shape = RoundedCornerShape(14.dp),
-            containerColor = visualContext.popupGlass,
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
-            border = BorderStroke(.5.dp, visualContext.popupBorder),
-        ) {
-            val rows = if (toolMode) {
-                eligibleTools.map { LoveHouseIcon.Wrench to "@${it.groupLabel}" }
-            } else listOf(
-                LoveHouseIcon.Camera to "相机", LoveHouseIcon.Photo to "照片", LoveHouseIcon.File to "文件",
-                LoveHouseIcon.Location to "定位", LoveHouseIcon.Wrench to "工具", LoveHouseIcon.More to "其他",
-            )
-            if (toolMode && rows.isEmpty()) {
-                Text("没有已启用且可用的工具", Modifier.padding(horizontal = 10.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp)
+    val rows = if (toolMode) eligibleTools.map { LoveHouseIcon.Wrench to "@${it.groupLabel}" } else listOf(
+        LoveHouseIcon.Camera to "相机", LoveHouseIcon.Photo to "照片", LoveHouseIcon.File to "文件",
+        LoveHouseIcon.Location to "定位", LoveHouseIcon.Wrench to "工具", LoveHouseIcon.More to "其他",
+    )
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(topStart = 19.dp, topEnd = 19.dp, bottomStart = 13.dp, bottomEnd = 13.dp),
+        color = visualContext.popupGlass,
+        border = BorderStroke(.7.dp, visualContext.popupBorder),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(if (toolMode) "选择工具" else "添加到消息", Modifier.weight(1f), color = PersonaInk, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                ChatIconButton(LoveHouseIcon.Close, "关闭", iconSize = 14.dp, touchSize = 30.dp, onClick = onDismiss)
             }
-            rows.forEach { (icon, item) ->
-                val unavailable = item in unavailableActions
-                Row(
-                    Modifier.fillMaxWidth().clickable {
-                        if (unavailable) {
-                            onExpandedChange(false)
-                            toolMode = false
-                            onToolAction(item)
-                        } else if (item == "工具") toolMode = true
-                        else if (toolMode) {
-                            eligibleTools.firstOrNull { "@${it.groupLabel}" == item }?.let(onToolMention)
-                            onExpandedChange(false)
-                            toolMode = false
-                        } else {
-                            onExpandedChange(false)
-                            onToolAction(item)
+            if (toolMode && rows.isEmpty()) Text("没有已启用且可用的工具", color = PersonaMuted, fontSize = 9.sp)
+            rows.chunked(3).forEach { rowItems ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    rowItems.forEach { (icon, item) ->
+                        val unavailable = item in unavailableActions
+                        Row(
+                            Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = .22f)).clickable {
+                                when {
+                                    unavailable -> { onDismiss(); onToolAction(item) }
+                                    item == "工具" -> onToolModeChange(true)
+                                    toolMode -> {
+                                        eligibleTools.firstOrNull { "@${it.groupLabel}" == item }?.let(onToolMention)
+                                        onDismiss()
+                                    }
+                                    else -> { onDismiss(); onToolAction(item) }
+                                }
+                            }.padding(horizontal = 8.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            LoveHouseIconView(icon, null, Modifier.size(17.dp), if (unavailable) PersonaMuted.copy(alpha = .5f) else PersonaMuted)
+                            Text(if (unavailable) "$item · 暂不可用" else item, color = if (unavailable) PersonaMuted else PersonaInk, fontSize = 9.5.sp, maxLines = 1)
                         }
                     }
-                        .padding(horizontal = 10.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    LoveHouseIconView(icon, null, Modifier.size(16.dp), if (unavailable) PersonaMuted.copy(alpha = .58f) else PersonaMuted)
-                    Text(
-                        if (unavailable) "$item · 暂不可用" else item,
-                        color = if (unavailable) PersonaMuted else PersonaInk,
-                        fontSize = 10.sp,
-                    )
+                    repeat(3 - rowItems.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
+            if (toolMode) Text("返回附件", Modifier.clickable { onToolModeChange(false) }.padding(vertical = 4.dp), color = PersonaAccent, fontSize = 9.sp)
         }
     }
 }
@@ -1502,7 +1574,24 @@ private fun PawSendButton(enabled: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: ChatSessionStore, model: String, bubble: BubbleStyle, visualContext: ChatVisualContext, onClose: () -> Unit, onNavigate: (PersonaPanel) -> Unit, onModel: (String) -> Unit, onBubble: (BubbleStyle) -> Unit, onBackdrop: (ChatBackdrop?) -> Unit, onPickCustomWallpaper: () -> Unit) {
+private fun PersonaSheet(
+    panel: PersonaPanel,
+    thread: ChatThreadSummary,
+    store: ChatSessionStore,
+    model: String,
+    bubble: BubbleStyle,
+    visualContext: ChatVisualContext,
+    appearance: ChatAppearanceSettings,
+    chatConnections: ChatConnectionStore,
+    chatConnectionProbe: ChatConnectionProbe,
+    onClose: () -> Unit,
+    onNavigate: (PersonaPanel) -> Unit,
+    onBubble: (BubbleStyle) -> Unit,
+    onTextSize: (Float) -> Unit,
+    onBubbleScale: (Float) -> Unit,
+    onBackdrop: (ChatBackdrop?) -> Unit,
+    onPickCustomWallpaper: () -> Unit,
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         ChatBackdropLayer(visualContext)
         ChatAtmosphere(visualContext)
@@ -1517,13 +1606,24 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
                 PersonaPanel.Detail -> when (thread.kind) {
                     ChatThreadKind.LivingRoom -> LivingRoomDetailPanel(thread, store, onClose, onNavigate)
                     ChatThreadKind.TemporaryTask -> Column { SheetHeader(thread.title, "Workflow 已作为临时任务主详情。", onClose) }
-                    else -> DirectDetailPanel(thread, model, onClose, onNavigate, onModel)
+                    else -> DirectDetailPanel(thread, model, onClose, onNavigate)
                 }
-                PersonaPanel.Appearance -> AppearancePanel(bubble, visualContext, onClose, onBubble, onBackdrop, onPickCustomWallpaper)
+                PersonaPanel.Appearance -> AppearancePanel(
+                    current = bubble,
+                    visualContext = visualContext,
+                    appearance = appearance,
+                    onClose = onClose,
+                    onBubble = onBubble,
+                    onTextSize = onTextSize,
+                    onBubbleScale = onBubbleScale,
+                    onBackdrop = onBackdrop,
+                    onPickCustomWallpaper = onPickCustomWallpaper,
+                )
                 PersonaPanel.Search -> SearchPanel(thread, store.messages(thread.threadId), onClose)
                 PersonaPanel.DateJump -> DatePanel(onClose)
                 PersonaPanel.Bookshelf -> BookshelfPanel(onClose)
                 PersonaPanel.Status -> StatusPanel(onClose)
+                PersonaPanel.Models -> ModelConnectionsPanel(chatConnections, chatConnectionProbe, onClose)
                 PersonaPanel.IconGallery -> IconGalleryPanel(onClose)
                 else -> Unit
             }
@@ -1541,7 +1641,7 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
     }
 }
 
-@Composable private fun DirectDetailPanel(thread: ChatThreadSummary, model: String, onClose: () -> Unit, onNavigate: (PersonaPanel) -> Unit, onModel: (String) -> Unit) {
+@Composable private fun DirectDetailPanel(thread: ChatThreadSummary, model: String, onClose: () -> Unit, onNavigate: (PersonaPanel) -> Unit) {
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 15.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1559,9 +1659,147 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
             DetailRow("聊天书架", "›") { onNavigate(PersonaPanel.Bookshelf) }
             DetailRow("聊天外观", "气泡 · 壁纸 · 雾面  ›") { onNavigate(PersonaPanel.Appearance) }
             DetailRow("会话状态", "Usage · 状态 · 工作记忆  ›") { onNavigate(PersonaPanel.Status) }
-            DetailRow("新增 / 管理模型", "尚未接入")
+            if (thread.threadId == "agent-codex") {
+                DetailRow("新增 / 管理模型", "已接入 / 添加模型  ›") { onNavigate(PersonaPanel.Models) }
+            } else {
+                DetailRow("新增 / 管理模型", "当前 Persona 暂未支持")
+            }
             Text("运行模型 · 只改变底层引擎，不改变人格、Thread、Memory 和书架", Modifier.padding(horizontal = 19.dp, vertical = 14.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
-            Text("当前 Android/Bridge 尚无正式模型切换 contract，因此这里不提供只改变选中态的假按钮。", Modifier.padding(horizontal = 19.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
+            Text("这里保存并测试连接信息；Claude / Codex 正式聊天统一使用当前 /api/v1/chat 解耦链。", Modifier.padding(horizontal = 19.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
+        }
+    }
+}
+
+@Composable
+private fun ModelConnectionsPanel(
+    store: ChatConnectionStore,
+    probe: ChatConnectionProbe,
+    onClose: () -> Unit,
+) {
+    val connections by store.connections.collectAsState()
+    val scope = rememberCoroutineScope()
+    var adding by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    var endpoint by remember { mutableStateOf("") }
+    var credential by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf<ChatConnectionTestResult?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+
+    LazyColumn(contentPadding = PaddingValues(bottom = 28.dp)) {
+        item { SheetHeader("接入模型", "已接入 / + 添加模型", onClose) }
+        if (!adding) {
+            item {
+                Text("已接入", Modifier.padding(horizontal = 19.dp, vertical = 7.dp), color = PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+            if (connections.isEmpty()) {
+                item { Text("尚未添加 Chat Connection", Modifier.padding(horizontal = 19.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp) }
+            }
+            items(connections, key = { it.id }) { connection ->
+                Column(
+                    Modifier.fillMaxWidth().clickable { store.select(connection.id) }
+                        .padding(horizontal = 19.dp, vertical = 10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(connection.name, color = PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                            Text(connection.endpoint, color = PersonaMuted, fontSize = 8.5.sp)
+                        }
+                        Text(if (connection.selected) "✓ 当前" else "选择", color = if (connection.selected) PersonaAccent else PersonaMuted, fontSize = 9.sp)
+                    }
+                    Text(
+                        connection.lastResult ?: when (connection.status) {
+                            ChatConnectionStatus.Connected -> "连接已测试"
+                            ChatConnectionStatus.Failed -> "连接测试失败"
+                            ChatConnectionStatus.Untested -> "尚未测试"
+                        },
+                        Modifier.padding(top = 3.dp),
+                        color = PersonaMuted,
+                        fontSize = 8.sp,
+                    )
+                    Text(
+                        "删除",
+                        Modifier.align(Alignment.End).clip(RoundedCornerShape(9.dp)).clickable { store.delete(connection.id) }
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                        color = MaterialTheme.colorScheme.error.copy(alpha = .78f),
+                        fontSize = 8.5.sp,
+                    )
+                }
+            }
+            item {
+                Text(
+                    "+ 添加模型",
+                    Modifier.fillMaxWidth().clickable { adding = true }.padding(horizontal = 19.dp, vertical = 13.dp),
+                    color = PersonaAccent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        } else {
+            item {
+                Column(Modifier.padding(horizontal = 19.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    ChatConnectionField("名称", name, { name = it }, "例如：Codex 私有连接")
+                    ChatConnectionField("URL", endpoint, { endpoint = normalizeChatConnectionEndpointInput(it) }, "https://chat.b612.fyi/v1/chat/codex")
+                    ChatConnectionField("Key", credential, { credential = it }, "安全加密保存", secret = true)
+                    result?.let { Text(it.message, color = if (it.succeeded) PersonaAccent else MaterialTheme.colorScheme.error, fontSize = 9.sp) }
+                    notice?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 9.sp) }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                        Text("取消", Modifier.clip(RoundedCornerShape(10.dp)).clickable { adding = false }.padding(horizontal = 12.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 10.sp)
+                        Text(
+                            if (busy) "测试中…" else "测试连接",
+                            Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = !busy) {
+                                val draft = ChatConnectionDraft(name = name, endpoint = endpoint, credential = credential)
+                                busy = true
+                                notice = null
+                                scope.launch {
+                                    result = probe.test(draft)
+                                    busy = false
+                                }
+                            }.padding(horizontal = 12.dp, vertical = 8.dp),
+                            color = PersonaAccent,
+                            fontSize = 10.sp,
+                        )
+                        Text(
+                            "保存",
+                            Modifier.clip(RoundedCornerShape(10.dp)).background(PersonaAccent.copy(alpha = .16f)).clickable {
+                                runCatching {
+                                    store.save(ChatConnectionDraft(name = name, endpoint = endpoint, credential = credential), result)
+                                }.onSuccess { adding = false }.onFailure { notice = it.message }
+                            }.padding(horizontal = 13.dp, vertical = 8.dp),
+                            color = PersonaInk,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    Text("Key 仅保存在 Android Keystore 加密的本机连接存储中，不进入 Chat History。", color = PersonaMuted, fontSize = 8.sp, lineHeight = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatConnectionField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    secret: Boolean = false,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, color = PersonaInk, fontSize = 9.5.sp)
+        Surface(shape = RoundedCornerShape(13.dp), color = Color.White.copy(alpha = .36f), border = BorderStroke(.6.dp, Color.White.copy(alpha = .58f))) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(color = PersonaInk, fontSize = 11.sp),
+                visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+                singleLine = true,
+                decorationBox = { inner ->
+                    Box { if (value.isEmpty()) Text(placeholder, color = PersonaMuted.copy(alpha = .72f), fontSize = 10.sp); inner() }
+                },
+            )
         }
     }
 }
@@ -1599,10 +1837,63 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
     }
 }
 
-@Composable private fun AppearancePanel(current: BubbleStyle, visualContext: ChatVisualContext, onClose: () -> Unit, onBubble: (BubbleStyle) -> Unit, onBackdrop: (ChatBackdrop?) -> Unit, onPickCustomWallpaper: () -> Unit) {
+@Composable private fun AppearancePanel(
+    current: BubbleStyle,
+    visualContext: ChatVisualContext,
+    appearance: ChatAppearanceSettings,
+    onClose: () -> Unit,
+    onBubble: (BubbleStyle) -> Unit,
+    onTextSize: (Float) -> Unit,
+    onBubbleScale: (Float) -> Unit,
+    onBackdrop: (ChatBackdrop?) -> Unit,
+    onPickCustomWallpaper: () -> Unit,
+) {
+    var textSize by remember { mutableStateOf(appearance.textSizeSp) }
+    var bubbleScale by remember { mutableStateOf(appearance.bubbleScale) }
+    LaunchedEffect(appearance.textSizeSp) { textSize = appearance.textSizeSp }
+    LaunchedEffect(appearance.bubbleScale) { bubbleScale = appearance.bubbleScale }
     Column(Modifier.navigationBarsPadding().padding(bottom = 18.dp)) {
-        SheetHeader("G老师 · 聊天外观", onClose = onClose)
-        Text("聊天背景只作用于当前窗口；上下氛围层会跟随背景取色。", Modifier.padding(horizontal = 19.dp, vertical = 5.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
+        SheetHeader("聊天外观", onClose = onClose)
+        Text("文字与气泡尺寸由 Claude / Codex 共用并即时保存；聊天背景仍按当前窗口生效。", Modifier.padding(horizontal = 19.dp, vertical = 5.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
+        AppearanceSlider(
+            title = "文字大小",
+            valueLabel = "${textSize.roundToInt()}sp",
+            value = textSize,
+            valueRange = 12f..18f,
+            steps = 5,
+        ) { value ->
+            textSize = value
+            onTextSize(value)
+        }
+        AppearanceSlider(
+            title = "气泡大小",
+            valueLabel = "${(bubbleScale * 100).roundToInt()}%",
+            value = bubbleScale,
+            valueRange = .80f..1.10f,
+            steps = 5,
+        ) { value ->
+            bubbleScale = value
+            onBubbleScale(value)
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 19.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Surface(
+                modifier = Modifier.widthIn(max = 240.dp * bubbleScale).animateContentSize(),
+                shape = RoundedCornerShape(18.dp * bubbleScale),
+                color = Color(0xFFE7F0EC).copy(alpha = .68f),
+                border = BorderStroke(.8.dp, Color.White.copy(alpha = .62f)),
+            ) {
+                Text(
+                    "聊天外观即时预览",
+                    Modifier.padding(horizontal = 16.dp * bubbleScale, vertical = 12.dp * bubbleScale),
+                    color = PersonaInk,
+                    fontSize = textSize.sp,
+                    lineHeight = (textSize * 1.5f).sp,
+                )
+            }
+        }
         BubbleStyle.entries.forEach { choice ->
             Row(Modifier.fillMaxWidth().clickable { onBubble(choice) }.padding(horizontal = 19.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) { Text(choice.title, color = PersonaInk, fontSize = 11.sp); Text(choice.subtitle, color = PersonaMuted, fontSize = 8.sp) }
@@ -1635,6 +1926,30 @@ private fun PersonaSheet(panel: PersonaPanel, thread: ChatThreadSummary, store: 
     }
 }
 
+@Composable
+private fun AppearanceSlider(
+    title: String,
+    valueLabel: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 19.dp, vertical = 5.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, Modifier.weight(1f), color = PersonaInk, fontSize = 11.sp)
+            Text(valueLabel, color = PersonaAccent, fontSize = 9.sp, fontWeight = FontWeight.Medium)
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
+            modifier = Modifier.fillMaxWidth().height(30.dp),
+        )
+    }
+}
+
 @Composable private fun SearchPanel(thread: ChatThreadSummary, messages: List<ChatMessageUi>, onClose: () -> Unit) {
     var query by remember { mutableStateOf("") }
     val results = remember(query, messages.size) {
@@ -1658,13 +1973,14 @@ private fun MessageAttachmentSegments(
     color: Color,
     border: BorderStroke?,
     messageModifier: Modifier,
+    bubbleScale: Float,
 ) {
     attachmentSegments(message.attachments).forEach { segment ->
         when (segment.kind) {
-            ChatAttachmentSegmentKind.Photos -> PhotoAttachmentBubble(segment.attachments.filterIsInstance<ChatMediaAttachment>(), color, border, messageModifier)
-            ChatAttachmentSegmentKind.Files -> FileAttachmentBubble(message.messageId, segment.attachments.filterIsInstance<ChatMediaAttachment>(), color, border, messageModifier)
-            ChatAttachmentSegmentKind.Location -> LocationAttachmentBubble(segment.attachments.single() as ChatLocationAttachment, color, border, messageModifier)
-            ChatAttachmentSegmentKind.Audio -> AttachmentUnavailableBubble("语音附件 transport 尚未接通", color, border)
+            ChatAttachmentSegmentKind.Photos -> PhotoAttachmentBubble(segment.attachments.filterIsInstance<ChatMediaAttachment>(), color, border, messageModifier, bubbleScale)
+            ChatAttachmentSegmentKind.Files -> FileAttachmentBubble(message.messageId, segment.attachments.filterIsInstance<ChatMediaAttachment>(), color, border, messageModifier, bubbleScale)
+            ChatAttachmentSegmentKind.Location -> LocationAttachmentBubble(segment.attachments.single() as ChatLocationAttachment, color, border, messageModifier, bubbleScale)
+            ChatAttachmentSegmentKind.Audio -> AttachmentUnavailableBubble("语音附件 transport 尚未接通", color, border, bubbleScale)
         }
     }
 }
@@ -1675,9 +1991,10 @@ private fun PhotoAttachmentBubble(
     color: Color,
     border: BorderStroke?,
     messageModifier: Modifier,
+    bubbleScale: Float,
 ) {
     val pagerState = rememberPagerState(pageCount = { photos.size })
-    Box(Modifier.width(232.dp).height(164.dp)) {
+    Box(Modifier.width(232.dp * bubbleScale).height(164.dp * bubbleScale)) {
         if (photos.size > 1) {
             Surface(
                 Modifier.fillMaxSize().padding(start = 14.dp, top = 8.dp),
@@ -1726,13 +2043,17 @@ private fun FileAttachmentBubble(
     color: Color,
     border: BorderStroke?,
     messageModifier: Modifier,
+    bubbleScale: Float,
 ) {
     var expanded by remember(messageId) { mutableStateOf(false) }
     Surface(
         modifier = messageModifier.animateContentSize().clickable(enabled = files.size > 1) { expanded = !expanded },
-        shape = RoundedCornerShape(15.dp), color = color, border = border,
+        shape = RoundedCornerShape(15.dp * bubbleScale), color = color, border = border,
     ) {
-        Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Column(
+            Modifier.padding(horizontal = 11.dp * bubbleScale, vertical = 8.dp * bubbleScale),
+            verticalArrangement = Arrangement.spacedBy(7.dp * bubbleScale),
+        ) {
             (if (expanded) files else files.take(1)).forEachIndexed { index, file ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     if (index == 0 && files.size > 1) Surface(shape = CircleShape, color = PersonaAccent.copy(alpha = .18f)) {
@@ -1754,9 +2075,9 @@ private fun FileAttachmentBubble(
 }
 
 @Composable
-private fun AttachmentUnavailableBubble(label: String, color: Color, border: BorderStroke?) {
-    Surface(shape = RoundedCornerShape(15.dp), color = color, border = border) {
-        Text(label, Modifier.padding(horizontal = 11.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp)
+private fun AttachmentUnavailableBubble(label: String, color: Color, border: BorderStroke?, bubbleScale: Float) {
+    Surface(shape = RoundedCornerShape(15.dp * bubbleScale), color = color, border = border) {
+        Text(label, Modifier.padding(horizontal = 11.dp * bubbleScale, vertical = 8.dp * bubbleScale), color = PersonaMuted, fontSize = 9.sp)
     }
 }
 
@@ -1778,9 +2099,10 @@ private fun LocationAttachmentBubble(
     color: Color,
     border: BorderStroke?,
     messageModifier: Modifier,
+    bubbleScale: Float,
 ) {
-    Surface(messageModifier, RoundedCornerShape(15.dp), color, border = border) {
-        Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Surface(messageModifier, RoundedCornerShape(15.dp * bubbleScale), color, border = border) {
+        Row(Modifier.padding(horizontal = 11.dp * bubbleScale, vertical = 8.dp * bubbleScale), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp * bubbleScale)) {
             LoveHouseIconView(LoveHouseIcon.Location, null, Modifier.size(17.dp), PersonaAccent)
             Column {
                 Text(location.address ?: "位置快照", color = PersonaInk, fontSize = 10.sp)
