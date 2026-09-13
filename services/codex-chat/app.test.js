@@ -32,6 +32,8 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
         message: input.message,
         previousUsage: input.previousUsage,
         attachments: input.attachments,
+        allowedToolIds: input.allowedToolIds,
+        authorization: input.authorization,
       })
       input.onRuntimeBinding(input.sessionId || sessionId)
       input.onEvent('reasoning_status', {
@@ -64,7 +66,7 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
 
 async function open({
   runtimeAdapter = runtime(), threadBindings = new InMemoryThreadBindingStore(),
-  taskRepository = null, transientStore = null,
+  taskRepository = null, transientStore = null, proxyAccess = null,
 } = {}) {
   const server = createCodexChatServer({
     authenticate: async authorization => {
@@ -78,6 +80,7 @@ async function open({
     threadBindings,
     taskRepository,
     transientStore,
+    proxyAccess,
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -86,6 +89,29 @@ async function open({
     close: () => new Promise(resolve => server.close(resolve)),
   }
 }
+
+test('existing proxy compatibility route remains isolated from Login auth and MCP', async t => {
+  const observed = []
+  const base = await start(t, {
+    runtimeAdapter: runtime({ observed }),
+    proxyAccess: { routePrefix: '/proxy/codex', apiKey: 'gateway-key' },
+  })
+  const denied = await fetch(`${base}/proxy/codex/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'hello' }),
+  })
+  assert.equal(denied.status, 401)
+  const response = await fetch(`${base}/proxy/codex/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-LoveHouse-Chat-Key': 'gateway-key' },
+    body: JSON.stringify({
+      thread_id: THREAD_ID, message: 'hello', allowed_tool_ids: ['builtin.engineering.read_current'],
+    }),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.deepEqual(observed[0].allowedToolIds, [])
+  assert.equal(observed[0].authorization, null)
+})
 
 async function start(t, options) {
   const opened = await open(options)

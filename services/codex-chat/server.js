@@ -51,6 +51,12 @@ const taskDispatcher = taskRepository
 const server = createCodexChatServer({
   authenticate,
   chatUserId: process.env.CHAT_STABLE_USER_ID || process.env.OWNER_USER_ID,
+  proxyAccess: process.env.CODEX_CHAT_PROXY_KEY
+    ? {
+        routePrefix: '/proxy/codex',
+        apiKey: process.env.CODEX_CHAT_PROXY_KEY,
+      }
+    : null,
   runtime,
   threadBindings,
   taskRepository,

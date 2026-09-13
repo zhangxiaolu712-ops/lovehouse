@@ -69,10 +69,14 @@ export function createCodexChatHandler({
   serviceName = 'lovehouse-codex-chat',
   taskRepository = null,
   transientStore = null,
+  proxyAccess = null,
 }) {
   assertRuntimeAdapter(runtime)
   if (typeof chatUserId !== 'string' || !chatUserId) throw new TypeError('Chat runtime requires a stable user id')
   if (taskRepository && typeof authenticate !== 'function') throw new TypeError('Task routes require Owner auth')
+  if (proxyAccess && (!proxyAccess.routePrefix || !proxyAccess.apiKey)) {
+    throw new TypeError('Chat proxy compatibility requires routePrefix and apiKey')
+  }
 
   return async function handler(req, res) {
     const pathname = new URL(req.url, 'http://localhost').pathname
@@ -116,7 +120,8 @@ export function createCodexChatHandler({
         return json(res, error.status || 500, { error: publicRuntimeError(error) })
       }
     }
-    if (pathname !== `${routePrefix}/chat`) {
+    const isProxyChat = proxyAccess && pathname === `${proxyAccess.routePrefix}/chat`
+    if (pathname !== `${routePrefix}/chat` && !isProxyChat) {
       return json(res, 404, { error: publicRuntimeError(new ChatRuntimeError(
         'UNKNOWN_RUNTIME', 'Not found', { stage: 'routing', status: 404 },
       )) })
@@ -133,8 +138,14 @@ export function createCodexChatHandler({
     let session
     let persisted
     try {
+      if (isProxyChat && req.headers['x-lovehouse-chat-key'] !== proxyAccess.apiKey) {
+        throw new ChatRuntimeError('CHAT_PROXY_DENIED', 'Chat proxy key is invalid', {
+          stage: 'transport', status: 401,
+        })
+      }
       owner = { userId: chatUserId }
       input = normalizeBody(await readJson(req))
+      if (isProxyChat) input.allowedToolIds = []
       persisted = await threadBindings.get({
         ownerUserId: owner.userId,
         threadId: input.threadId,
