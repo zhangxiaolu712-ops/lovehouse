@@ -42,7 +42,7 @@ function oauthError(res, status, error, description) {
 function authorizationFailurePage(message) {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>LoveHouse 授权失败</title><style>body{font-family:-apple-system,sans-serif;background:#f7f1e7;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}.card{background:#fffdf8;border:1px solid #d8cdbd;border-radius:18px;padding:32px;text-align:center;box-shadow:0 10px 32px rgba(58,48,38,.09);max-width:360px;width:86%}a{color:#947235}</style></head>
-  <body><div class="card"><h2>没有打开门</h2><p>${escapeHtml(message)}</p><p>请关闭本页，再从 CC 重新点一次授权。</p></div></body></html>`
+  <body><div class="card"><h2>没有打开门</h2><p>${escapeHtml(message)}</p><p>请返回 LoveHouse Tool Center 后重新发起授权。</p></div></body></html>`
 }
 
 function validGrantTypes(value) {
@@ -123,6 +123,7 @@ export function installMcpOAuth(app, {
   checkRate,
   clientRegistry,
   refreshTokenStore,
+  identityVerifier = null,
   tokenTtlSeconds = 30 * 24 * 60 * 60,
   refreshTokenTtlSeconds = 90 * 24 * 60 * 60,
 }) {
@@ -142,6 +143,9 @@ export function installMcpOAuth(app, {
     throw new Error('OAuth client registry is required')
   }
   const codes = new Map()
+  if (identityVerifier && typeof identityVerifier.verifyCredentials !== 'function') {
+    throw new Error('App Identity verifier is invalid')
+  }
 
   const cleanupTimer = setInterval(() => {
     const now = Date.now()
@@ -189,7 +193,7 @@ export function installMcpOAuth(app, {
       || clientLike.token_endpoint_auth_method === 'none') && !body.client_secret
   }
 
-  async function verifyOwnerCredentials(email, password) {
+  async function legacyVerifyOwnerCredentials(email, password) {
     if (!ownerUserId || !supabaseAnonKey) throw new Error('owner OAuth is not configured')
     if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) return false
     const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
@@ -202,8 +206,12 @@ export function installMcpOAuth(app, {
     })
     if (!response.ok) return false
     const payload = await response.json()
-    return payload.user?.id === ownerUserId
+    return payload.user?.id === ownerUserId ? { id: payload.user.id, email: payload.user.email || email } : null
   }
+
+  const verifyAuthorizationCredentials = identityVerifier
+    ? (email, password) => identityVerifier.verifyCredentials(email, password)
+    : legacyVerifyOwnerCredentials
 
   app.get('/.well-known/oauth-authorization-server', (_req, res) => {
     res.json({
@@ -344,8 +352,9 @@ export function installMcpOAuth(app, {
     }
     setAuthorizationHeaders(res, req.body.redirect_uri)
     try {
-      const approved = await verifyOwnerCredentials(req.body.email, req.body.password)
-      if (!approved) return res.status(401).send(authorizationFailurePage('账号或密码不正确。'))
+      const identity = await verifyAuthorizationCredentials(req.body.email, req.body.password)
+      if (!identity) return res.status(401).send(authorizationFailurePage('邮箱或密码不正确。'))
+      req.appIdentity = identity
     } catch (error) {
       console.error('[oauth approval error]', error.message)
       return res.status(503).send(authorizationFailurePage('授权服务暂时没有配置好。'))
@@ -358,6 +367,7 @@ export function installMcpOAuth(app, {
       code_challenge: req.body.code_challenge,
       resource: req.body.resource,
       scope: requestedScope(req.body.scope),
+      user_id: req.appIdentity.id,
       expires_at: Date.now() + 600_000,
     })
     const redirect = new URL(req.body.redirect_uri)
@@ -366,7 +376,7 @@ export function installMcpOAuth(app, {
     return res.redirect(303, redirect.toString())
   })
 
-  function refreshRecord({ rawToken, client, familyId, generation, expiresAt, resource, scope }) {
+  function refreshRecord({ rawToken, client, familyId, generation, expiresAt, resource, scope, userId }) {
     return {
       token_digest: digestRefreshToken(rawToken, tokenSecret),
       family_id: familyId,
@@ -375,7 +385,7 @@ export function installMcpOAuth(app, {
       client_auth_method: client.token_endpoint_auth_method,
       client_secret_digest: client.client_secret_digest
         || (client.client_secret ? digestClientSecret(client.client_secret, tokenSecret) : null),
-      owner_user_id: ownerUserId,
+      owner_user_id: userId,
       resource,
       scope,
       created_at: Date.now(),
@@ -417,7 +427,7 @@ export function installMcpOAuth(app, {
       const response = {
         access_token: issueAccessToken({
           clientId: req.body.client_id,
-          ownerUserId,
+          ownerUserId: stored.user_id,
           audience: stored.resource,
           secret: tokenSecret,
           scope: stored.scope,
@@ -438,6 +448,7 @@ export function installMcpOAuth(app, {
           expiresAt,
           resource: stored.resource,
           scope: stored.scope,
+          userId: stored.user_id,
         }))
         response.refresh_token = rawToken
         response.refresh_token_expires_in = refreshTokenTtlSeconds
@@ -487,8 +498,9 @@ export function installMcpOAuth(app, {
           expiresAt: current.expires_at,
           resource: current.resource,
           scope: current.scope,
+          userId: current.owner_user_id,
         }),
-        current => current.owner_user_id === ownerUserId
+        current => Boolean(current.owner_user_id)
           && resourcesByUri.has(current.resource)
           && (requestedResource === null || requestedResource === current.resource)
           && (scope === null || scope === current.scope)
@@ -500,7 +512,7 @@ export function installMcpOAuth(app, {
       return res.json({
         access_token: issueAccessToken({
           clientId: rotated.record.client_id,
-          ownerUserId,
+          ownerUserId: rotated.record.owner_user_id,
           audience: rotated.record.resource,
           secret: tokenSecret,
           scope: rotated.record.scope,
@@ -536,7 +548,7 @@ export function installMcpOAuth(app, {
         return res.status(401).json({ error: 'unauthorized' })
       }
       const payload = verifyAccessToken(auth.slice(7), tokenSecret, config.resource)
-      if (!payload || payload.sub !== ownerUserId) {
+      if (!payload || typeof payload.sub !== 'string' || !payload.sub) {
         res.setHeader('WWW-Authenticate', `Bearer error="invalid_token", resource_metadata="${config.resourceMetadataUrl}", scope="mcp:tools"`)
         return res.status(401).json({ error: 'invalid_token' })
       }
