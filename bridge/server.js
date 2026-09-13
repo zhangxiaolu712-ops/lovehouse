@@ -524,6 +524,7 @@ app.post('/reset', verifyOwnerBearer, (req, res) => {
 // stable public /api/v1/* contract is mounted internally at /v1/*.
 installClientApi(app, {
   verifyOwner: verifyClientOwner,
+  chatUserId: OWNER_USER_ID,
   providerRouter,
   startedAt: BRIDGE_STARTED_AT,
   deploymentSha: resolveDeploymentSha(process.cwd()),

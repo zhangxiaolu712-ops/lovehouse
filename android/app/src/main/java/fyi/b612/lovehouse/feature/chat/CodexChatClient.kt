@@ -1,9 +1,6 @@
 package fyi.b612.lovehouse.feature.chat
 
 import fyi.b612.lovehouse.BuildConfig
-import fyi.b612.lovehouse.core.auth.OwnerSessionException
-import fyi.b612.lovehouse.core.auth.OwnerSessionStore
-import fyi.b612.lovehouse.core.auth.MissingOwnerSessionStore
 import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -60,7 +57,6 @@ interface CodexChatClient {
 
 class HttpCodexChatClient(
     private val endpoint: String = BuildConfig.LOVEHOUSE_CHAT_URL,
-    private val ownerSession: OwnerSessionStore = MissingOwnerSessionStore,
     private val allowedToolIdsFor: (String) -> Set<String> = { emptySet() },
 ) : CodexChatClient {
     override suspend fun streamMessage(
@@ -88,11 +84,6 @@ class HttpCodexChatClient(
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
     ): CodexChatResult {
-        val bearer = try {
-            ownerSession.currentBearer()
-        } catch (error: OwnerSessionException) {
-            throw CodexChatException(error.message ?: "Owner 登录已失效，请重新登录 / 重新连接服务器")
-        }
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
@@ -100,7 +91,6 @@ class HttpCodexChatClient(
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "text/event-stream")
-            setRequestProperty("Authorization", "Bearer ${bearer.value}")
         }
         val allowedToolIds = allowedToolIdsFor(threadId).intersect(requestedToolIds)
         val payload = buildCodexChatPayload(
@@ -113,9 +103,6 @@ class HttpCodexChatClient(
             connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload) }
             if (connection.responseCode !in 200..299) {
                 val detail = connection.errorStream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
-                if (connection.responseCode == 401 || connection.responseCode == 403) {
-                    ownerSession.reject(bearer.fingerprint)
-                }
                 throw CodexChatException(httpFailure(connection.responseCode, detail))
             }
             var event = "message"
@@ -205,7 +192,7 @@ class HttpCodexChatClient(
     }
 
     private fun httpFailure(status: Int, body: String): String = when (status) {
-        401, 403 -> "Owner 登录已失效，请重新登录 / 重新连接服务器"
+        401, 403 -> "聊天服务暂时不可用（HTTP $status）"
         else -> jsonString(body, "message") ?: "连接失败（HTTP $status）"
     }
 }

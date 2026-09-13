@@ -48,7 +48,14 @@ const taskDispatcher = taskRepository
       pollMs: Number.parseInt(process.env.LIVINGROOM_DISPATCH_POLL_MS || '3000', 10),
     })
   : null
-const server = createCodexChatServer({ authenticate, runtime, threadBindings, taskRepository, transientStore })
+const server = createCodexChatServer({
+  authenticate,
+  chatUserId: process.env.CHAT_STABLE_USER_ID || process.env.OWNER_USER_ID,
+  runtime,
+  threadBindings,
+  taskRepository,
+  transientStore,
+})
 server.requestTimeout = 120_000
 server.headersTimeout = 10_000
 server.listen(port, '127.0.0.1', () => {

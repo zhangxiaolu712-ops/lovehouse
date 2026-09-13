@@ -61,6 +61,7 @@ async function startHarness(t, {
   })
   installClientApi(app, {
     verifyOwner,
+    chatUserId: OWNER_ID,
     providerRouter,
     startedAt: '2026-08-24T08:00:00.000Z',
     deploymentSha: 'a'.repeat(40),
@@ -278,6 +279,46 @@ test('all v1 routes require the existing owner bearer boundary with a uniform er
   assert.equal(payload.error.code, 'AUTH_REQUIRED')
   assert.equal(payload.error.stage, 'auth')
   assert.match(payload.error.request_id, /^[0-9a-f-]{36}$/i)
+})
+
+test('Chat and reset do not depend on Owner session while other v1 routes remain protected', async t => {
+  const base = await startHarness(t)
+  const chat = await fetch(`${base}/v1/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer invalid-login-token' },
+    body: JSON.stringify(chatBody()),
+  })
+  assert.equal(chat.status, 200)
+  assert.match(await chat.text(), /event: message_end/)
+
+  const reset = await fetch(`${base}/v1/chat/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ persona_id: 'claude', thread_id: THREAD_ID, window_id: 'client-window-1' }),
+  })
+  assert.equal(reset.status, 200)
+  assert.equal((await fetch(`${base}/v1/bootstrap`)).status, 401)
+})
+
+test('a Claude sidecar failure does not affect the independent Codex route', async t => {
+  const base = await startHarness(t, {
+    adapters: {
+      claude: fakeAdapter('claude', {
+        async chat() {
+          throw new ClientApiError('PROVIDER_UNAVAILABLE', 'Claude unavailable', {
+            stage: 'provider', status: 503, retryable: true,
+          })
+        },
+      }),
+      codex: fakeAdapter('codex'),
+    },
+  })
+  const send = personaId => fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chatBody({ persona_id: personaId })),
+  }).then(response => response.text())
+  assert.match(await send('claude'), /"ok":false/)
+  assert.match(await send('codex'), /codex reply/)
 })
 
 test('runtime status is Owner-only and returns the provider safe snapshot', async t => {
@@ -665,7 +706,7 @@ test('Claude usage-limit text maps to the uniform provider quota code', async ()
   )
 })
 
-test('Codex adapter forwards owner auth and translates sidecar SSE without leaking its session id', async () => {
+test('Codex adapter does not forward Login auth and preserves the sidecar SSE contract', async () => {
   let request
   const adapter = createCodexAdapter({
     fetchImpl: async (url, options) => {
@@ -690,12 +731,11 @@ test('Codex adapter forwards owner auth and translates sidecar SSE without leaki
   const result = await adapter.chat({
     threadId: THREAD_ID,
     text: 'hi',
-    authorization: 'Bearer owner-token',
     onText: delta => text.push(delta),
     onEvent: (event, data) => events.push({ event, data }),
   })
   assert.match(request.url, /\/api\/codex\/chat$/)
-  assert.equal(request.options.headers.Authorization, 'Bearer owner-token')
+  assert.equal(request.options.headers.Authorization, undefined)
   assert.deepEqual(JSON.parse(request.options.body), {
     thread_id: THREAD_ID, window_id: THREAD_ID, message: 'hi',
     allowed_tool_ids: [],
@@ -742,12 +782,11 @@ test('Claude CLI adapter uses the same safe stream contract without exposing its
   await adapter.chat({
     threadId: THREAD_ID,
     text: 'hi',
-    authorization: 'Bearer owner-token',
     onText: delta => text.push(delta),
     onEvent: (event, data) => events.push({ event, data }),
   })
   assert.match(request.url, /\/api\/claude\/chat$/)
-  assert.equal(request.options.headers.Authorization, 'Bearer owner-token')
+  assert.equal(request.options.headers.Authorization, undefined)
   assert.deepEqual(JSON.parse(request.options.body), {
     thread_id: THREAD_ID, window_id: THREAD_ID, message: 'hi',
     allowed_tool_ids: [],

@@ -312,6 +312,7 @@ function safeFeatures(features = {}) {
 
 export function installClientApi(app, {
   verifyOwner,
+  chatUserId,
   providerRouter,
   startedAt,
   deploymentSha = resolveDeploymentSha(),
@@ -326,6 +327,9 @@ export function installClientApi(app, {
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
+  if (typeof chatUserId !== 'string' || !chatUserId) {
+    throw new TypeError('Client API Chat requires a stable user id')
+  }
   if (!providerRouter || typeof providerRouter.resolve !== 'function') {
     throw new TypeError('Client API requires a provider router')
   }
@@ -342,7 +346,14 @@ export function installClientApi(app, {
     throw new TypeError('Client API Tool Center service is invalid')
   }
 
-  app.use('/v1', requestContext, verifyOwner)
+  app.use('/v1', requestContext)
+  app.use('/v1', (req, res, next) => {
+    if (req.path === '/chat' || req.path === '/chat/reset') {
+      req.userId = chatUserId
+      return next()
+    }
+    return verifyOwner(req, res, next)
+  })
 
   if (memoryV2Repository && memoryV2Service) {
     installMemoryTimeline(app, { memoryV2Repository, memoryV2Service })
@@ -642,7 +653,6 @@ export function installClientApi(app, {
         source: normalized.message.source,
         attachments: normalized.message.attachments,
         threadSource: normalized.source,
-        authorization: req.headers.authorization,
         signal: controller.signal,
         allowedToolIds: normalized.allowedToolIds,
         onText(delta) {

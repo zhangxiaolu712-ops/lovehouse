@@ -62,7 +62,6 @@ private fun LoveHouseContent(
     val chatStore = remember(dependencies.chatMessages, dependencies.capabilityRegistry) {
         ChatSessionStore(
             codexClient = HttpCodexChatClient(
-                ownerSession = dependencies.ownerSession,
                 allowedToolIdsFor = { dependencies.capabilityRegistry.requestedToolIds() },
             ),
             messageRepository = dependencies.chatMessages,
