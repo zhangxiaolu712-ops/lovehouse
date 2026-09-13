@@ -1,5 +1,6 @@
 import cors from 'cors'
 import express from 'express'
+import fs from 'node:fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -7,6 +8,7 @@ import {
 } from './oauth.js'
 import { createFileOAuthClientRegistry } from './oauthClientRegistry.js'
 import { createFileRefreshTokenStore } from './oauthRefreshStore.js'
+import { createAppIdentityVerifier } from './appIdentityVerifier.js'
 import {
   sendMessage as claudeSend,
   abortWindow,
@@ -122,6 +124,14 @@ const OAUTH_BASE = process.env.OAUTH_BASE_URL || 'https://tingtunehouse.duckdns.
 const OAUTH_TOKEN_SECRET = process.env.OAUTH_TOKEN_SECRET || ''
 const OAUTH_CLIENT_REGISTRY_PATH = process.env.OAUTH_CLIENT_REGISTRY_PATH || ''
 const OAUTH_REFRESH_STORE_PATH = process.env.OAUTH_REFRESH_STORE_PATH || ''
+const APP_IDENTITY_VERIFY_URL = process.env.APP_IDENTITY_VERIFY_URL || ''
+const APP_IDENTITY_INTERNAL_KEY_FILE = process.env.APP_IDENTITY_INTERNAL_KEY_FILE || ''
+const appIdentityVerifier = APP_IDENTITY_VERIFY_URL && APP_IDENTITY_INTERNAL_KEY_FILE
+  ? createAppIdentityVerifier({
+      endpoint: APP_IDENTITY_VERIFY_URL,
+      internalKey: fs.readFileSync(APP_IDENTITY_INTERNAL_KEY_FILE, 'utf8').trim(),
+    })
+  : null
 const CODEX_CHAT_INTERNAL_URL = process.env.CODEX_CHAT_INTERNAL_URL
   || 'http://127.0.0.1:3002/api/codex'
 const CLAUDE_CHAT_INTERNAL_URL = process.env.CLAUDE_CHAT_INTERNAL_URL
@@ -630,6 +640,7 @@ const oauthVerifiers = installMcpOAuth(app, {
   checkRate,
   clientRegistry: createFileOAuthClientRegistry({ filePath: OAUTH_CLIENT_REGISTRY_PATH }),
   refreshTokenStore: createFileRefreshTokenStore({ filePath: OAUTH_REFRESH_STORE_PATH }),
+  identityVerifier: appIdentityVerifier,
 })
 
 installMcpTransports(app, {

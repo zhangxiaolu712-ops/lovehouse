@@ -532,6 +532,46 @@ test('owner credential failure is explicit 401 and approval is not subject to th
   }
 })
 
+test('App Identity is the OAuth credential source and Supabase availability cannot block authorization', async t => {
+  const calls = []
+  const identityVerifier = {
+    async verifyCredentials(email, password) {
+      calls.push({ email, password })
+      if (email === 'app@example.com' && password === 'correct') return { id: 'app-user-1', email }
+      return null
+    },
+  }
+  const base = await createServer(t, { identityVerifier, supabaseUrl: 'https://supabase-must-not-be-called.invalid' })
+  const registered = await register(base)
+  const verifier = 'a'.repeat(64)
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
+  const fields = {
+    response_type: 'code', client_id: registered.body.client_id, redirect_uri: registered.body.redirect_uris[0],
+    code_challenge: challenge, code_challenge_method: 'S256', resource, scope: 'mcp:tools', state: 'app-state',
+  }
+  const unknown = await nativeFetch(`${base}/oauth/authorize`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ ...fields, email: 'unknown@example.com', password: 'wrong' }), redirect: 'manual',
+  })
+  assert.equal(unknown.status, 401)
+  assert.match(await unknown.text(), /LoveHouse Tool Center/)
+  const approval = await nativeFetch(`${base}/oauth/authorize`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ ...fields, email: 'app@example.com', password: 'correct' }), redirect: 'manual',
+  })
+  assert.equal(approval.status, 303)
+  const callback = new URL(approval.headers.get('location'))
+  assert.equal(callback.searchParams.get('state'), 'app-state')
+  const exchanged = await exchangeCode(base, registered.body, { code: callback.searchParams.get('code'), verifier, resource })
+  assert.equal(exchanged.response.status, 200)
+  const authenticated = await nativeFetch(`${base}/mcp/claude`, { headers: { Authorization: `Bearer ${exchanged.body.access_token}` } })
+  assert.equal(authenticated.status, 200)
+  assert.deepEqual(calls, [
+    { email: 'unknown@example.com', password: 'wrong' },
+    { email: 'app@example.com', password: 'correct' },
+  ])
+})
+
 test('dynamic registration accepts the real Claude Code auth-code plus refresh contract', async t => {
   const base = await createServer(t)
   const { response, body } = await register(base)
