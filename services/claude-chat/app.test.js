@@ -43,6 +43,7 @@ async function open(observed, bindings) {
       }
       return { userId: 'owner' }
     },
+    chatUserId: 'owner',
     runtime: runtime(observed),
     threadBindings: bindings,
     routePrefix: '/api/claude',
@@ -59,7 +60,7 @@ async function open(observed, bindings) {
 async function chat(base) {
   return fetch(`${base}/api/claude/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer good' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ thread_id: THREAD_ID, message: 'hello' }),
   })
 }
@@ -96,6 +97,7 @@ test('Claude sidecar streams thinking separately and stores正文-only history',
       }
       return { userId: 'owner' }
     },
+    chatUserId: 'owner',
     runtime: isolatedRuntime,
     routePrefix: '/api/claude',
     serviceName: 'lovehouse-claude-chat',
@@ -114,7 +116,7 @@ test('Claude sidecar streams thinking separately and stores正文-only history',
 
   const second = await fetch(`${base}/api/claude/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer good' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ thread_id: THREAD_ID, message: 'next' }),
   })
   assert.equal(second.status, 200)

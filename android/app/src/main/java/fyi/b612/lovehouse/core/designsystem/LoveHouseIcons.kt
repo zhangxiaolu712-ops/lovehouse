@@ -1,6 +1,7 @@
 package fyi.b612.lovehouse.core.designsystem
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,11 +19,14 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
@@ -30,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.cos
 import kotlin.math.sin
+import fyi.b612.lovehouse.R
 
 enum class LoveHouseIcon {
     Back, Close, More, Search, Settings, Plus, Expand, Collapse, Home,
@@ -37,7 +42,7 @@ enum class LoveHouseIcon {
     Copy, Transcribe, Play, ReadAloud, Retry, Regenerate, Translate, Reply, Forward, Delete,
     Camera, Photo, File, Location, Mic, VoiceMessage, Keyboard, ModelSwitch, CatPawSend,
     Calendar, Clock, Music, Cart, Wallet, Travel, Car, Computer, Emoji, Volume, Weather,
-    Wrench, Star,
+    Wrench, Star, Thinking, Edit, MultiSelect, Check,
 }
 
 enum class LoveHouseIconOpticalSize { Regular, Compact }
@@ -50,6 +55,15 @@ fun LoveHouseIconView(
     tint: Color = LoveHouseGlass.Ink,
     opticalSize: LoveHouseIconOpticalSize = LoveHouseIconOpticalSize.Regular,
 ) {
+    referenceIconResource(icon)?.let { resource ->
+        Image(
+            painter = painterResource(resource),
+            contentDescription = contentDescription,
+            modifier = modifier.graphicsLayer(rotationZ = if (icon == LoveHouseIcon.Collapse) 180f else 0f),
+            colorFilter = ColorFilter.tint(tint),
+        )
+        return
+    }
     val iconStyle = LocalLoveHouseAppearance.current.iconStyle
     Canvas(
         modifier.then(
@@ -58,6 +72,38 @@ fun LoveHouseIconView(
     ) {
         drawLoveHouseIcon(icon, tint, opticalSize, iconStyle)
     }
+}
+
+/** Exact Android conversions of the Owner-provided 24x24, 2px, round-cap/join SVG library. */
+private fun referenceIconResource(icon: LoveHouseIcon): Int? = when (icon) {
+    LoveHouseIcon.Copy -> R.drawable.lh_ref_copy
+    LoveHouseIcon.Retry, LoveHouseIcon.Regenerate -> R.drawable.lh_ref_rotate_ccw
+    LoveHouseIcon.Edit -> R.drawable.lh_ref_pencil
+    LoveHouseIcon.Forward -> R.drawable.lh_ref_share
+    LoveHouseIcon.Delete -> R.drawable.lh_ref_trash
+    LoveHouseIcon.MultiSelect -> R.drawable.lh_ref_list_checks
+    LoveHouseIcon.File -> R.drawable.lh_ref_file
+    LoveHouseIcon.Photo -> R.drawable.lh_ref_image
+    LoveHouseIcon.Mic, LoveHouseIcon.VoiceMessage -> R.drawable.lh_ref_mic_vocal
+    LoveHouseIcon.Call -> R.drawable.lh_ref_phone
+    LoveHouseIcon.Play -> R.drawable.lh_ref_play
+    LoveHouseIcon.Send -> R.drawable.lh_ref_send
+    LoveHouseIcon.Emoji -> R.drawable.lh_ref_smile
+    LoveHouseIcon.Transcribe -> R.drawable.lh_ref_mic_2
+    LoveHouseIcon.Star -> R.drawable.lh_ref_star
+    LoveHouseIcon.Home -> R.drawable.lh_ref_home
+    LoveHouseIcon.Search -> R.drawable.lh_ref_search
+    LoveHouseIcon.Bell -> R.drawable.lh_ref_bell
+    LoveHouseIcon.Settings -> R.drawable.lh_ref_settings
+    LoveHouseIcon.Contact -> R.drawable.lh_ref_user
+    LoveHouseIcon.Back -> R.drawable.lh_ref_arrow_left
+    LoveHouseIcon.Expand, LoveHouseIcon.Collapse -> R.drawable.lh_ref_chevron_down
+    LoveHouseIcon.Plus -> R.drawable.lh_ref_plus
+    LoveHouseIcon.Close -> R.drawable.lh_ref_x
+    LoveHouseIcon.Check -> R.drawable.lh_ref_check
+    LoveHouseIcon.Thinking -> R.drawable.lh_ref_thinking
+    LoveHouseIcon.Wrench -> R.drawable.lh_ref_wrench
+    else -> null
 }
 
 private fun DrawScope.drawLoveHouseIcon(icon: LoveHouseIcon, tint: Color, opticalSize: LoveHouseIconOpticalSize, iconStyle: LoveHouseIconStyle) {
@@ -157,6 +203,7 @@ private fun DrawScope.drawLoveHouseIcon(icon: LoveHouseIcon, tint: Color, optica
         LoveHouseIcon.Computer -> { roundRect(3.5f, 4f, 17f, 13f, 2f); segment(9f, 20f, 15f, 20f); segment(12f, 17f, 12f, 20f) }
         LoveHouseIcon.Emoji -> { circle(12f, 12f, 8f); circle(9f, 10f, .7f, true); circle(15f, 10f, .7f, true); arc(15f, 150f, 8f, 11f, 8f, 5f) }
         LoveHouseIcon.Weather -> { circle(15.5f, 8f, 3.5f); segment(15.5f, 2f, 15.5f, 3.5f); segment(20f, 3.5f, 19f, 4.5f); strokedPath { moveTo(p(5f, 18f).x, p(5f, 18f).y); cubicTo(p(2f, 18f).x, p(2f, 18f).y, p(2f, 13f).x, p(2f, 13f).y, p(6f, 13f).x, p(6f, 13f).y); cubicTo(p(7f, 8f).x, p(7f, 8f).y, p(14f, 9f).x, p(14f, 9f).y, p(14.5f, 13f).x, p(14.5f, 13f).y); cubicTo(p(19f, 12f).x, p(19f, 12f).y, p(21f, 18f).x, p(21f, 18f).y, p(17f, 18f).x, p(17f, 18f).y); close() } }
+        LoveHouseIcon.Thinking, LoveHouseIcon.Edit, LoveHouseIcon.MultiSelect, LoveHouseIcon.Check -> Unit
         LoveHouseIcon.Wrench -> { strokedPath { moveTo(p(5f, 4f).x, p(5f, 4f).y); cubicTo(p(8f, 3f).x, p(8f, 3f).y, p(10f, 5f).x, p(10f, 5f).y, p(10f, 8f).x, p(10f, 8f).y); lineTo(p(20f, 18f).x, p(20f, 18f).y); lineTo(p(18f, 20f).x, p(18f, 20f).y); lineTo(p(8f, 10f).x, p(8f, 10f).y); cubicTo(p(5f, 10f).x, p(5f, 10f).y, p(3f, 8f).x, p(3f, 8f).y, p(4f, 5f).x, p(4f, 5f).y); lineTo(p(6f, 7f).x, p(6f, 7f).y); lineTo(p(8f, 5f).x, p(8f, 5f).y); close() } }
         LoveHouseIcon.Star -> strokedPath { moveTo(p(12f, 3f).x, p(12f, 3f).y); lineTo(p(14.7f, 8.6f).x, p(14.7f, 8.6f).y); lineTo(p(21f, 9.5f).x, p(21f, 9.5f).y); lineTo(p(16.5f, 14f).x, p(16.5f, 14f).y); lineTo(p(17.5f, 20.5f).x, p(17.5f, 20.5f).y); lineTo(p(12f, 17.5f).x, p(12f, 17.5f).y); lineTo(p(6.5f, 20.5f).x, p(6.5f, 20.5f).y); lineTo(p(7.5f, 14f).x, p(7.5f, 14f).y); lineTo(p(3f, 9.5f).x, p(3f, 9.5f).y); lineTo(p(9.3f, 8.6f).x, p(9.3f, 8.6f).y); close() }
     }

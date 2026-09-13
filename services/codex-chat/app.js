@@ -61,6 +61,7 @@ function normalizeBody(body) {
 
 export function createCodexChatHandler({
   authenticate,
+  chatUserId,
   runtime,
   sessions = new SessionStore(),
   threadBindings = new InMemoryThreadBindingStore(),
@@ -70,7 +71,8 @@ export function createCodexChatHandler({
   transientStore = null,
 }) {
   assertRuntimeAdapter(runtime)
-  if (typeof authenticate !== 'function') throw new TypeError('Chat runtime requires Owner auth')
+  if (typeof chatUserId !== 'string' || !chatUserId) throw new TypeError('Chat runtime requires a stable user id')
+  if (taskRepository && typeof authenticate !== 'function') throw new TypeError('Task routes require Owner auth')
 
   return async function handler(req, res) {
     const pathname = new URL(req.url, 'http://localhost').pathname
@@ -131,7 +133,7 @@ export function createCodexChatHandler({
     let session
     let persisted
     try {
-      owner = await authenticate(req.headers.authorization)
+      owner = { userId: chatUserId }
       input = normalizeBody(await readJson(req))
       persisted = await threadBindings.get({
         ownerUserId: owner.userId,
@@ -192,7 +194,7 @@ export function createCodexChatHandler({
         signal: controller.signal,
         getContinuationContext: async () => session.history,
         allowedToolIds: input.allowedToolIds,
-        authorization: req.headers.authorization,
+        authorization: null,
         threadId: input.threadId,
         onRuntimeBinding: value => {
           runtimeSessionId = value

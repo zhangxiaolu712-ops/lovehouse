@@ -23,6 +23,7 @@ const threadBindings = new FileThreadBindingStore({
 
 const server = createChatRuntimeServer({
   authenticate,
+  chatUserId: process.env.CHAT_STABLE_USER_ID || process.env.OWNER_USER_ID,
   runtime,
   threadBindings,
   routePrefix: '/api/claude',

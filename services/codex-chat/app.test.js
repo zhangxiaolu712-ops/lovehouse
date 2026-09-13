@@ -73,6 +73,7 @@ async function open({
       }
       return { userId: 'owner' }
     },
+    chatUserId: 'owner',
     runtime: runtimeAdapter,
     threadBindings,
     taskRepository,
@@ -101,10 +102,13 @@ function parseSse(text) {
   })
 }
 
-async function chat(base, body, authorization = 'Bearer good') {
+async function chat(base, body, authorization) {
   return fetch(`${base}/api/codex/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: authorization },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authorization ? { Authorization: authorization } : {}),
+    },
     body: JSON.stringify(body),
   })
 }
@@ -160,13 +164,9 @@ test('owner can read a transient task thread and approve the same task', async t
   assert.deepEqual(calls, [[THREAD_ID, 'approved']])
 })
 
-test('owner auth fails before runtime and successful stream exposes normalized metadata', async t => {
+test('chat ignores Login auth while preserving normalized runtime metadata', async t => {
   const base = await start(t)
-  const denied = await chat(base, { thread_id: THREAD_ID, message: 'hello' }, 'Bearer bad')
-  assert.equal(denied.status, 401)
-  assert.equal((await denied.json()).error.code, 'AUTH_FAILED')
-
-  const response = await chat(base, { thread_id: THREAD_ID, message: 'hello' })
+  const response = await chat(base, { thread_id: THREAD_ID, message: 'hello' }, 'Bearer invalid-login-token')
   assert.equal(response.status, 200)
   const events = parseSse(await response.text())
   assert.deepEqual(events.map(item => item.event), [
