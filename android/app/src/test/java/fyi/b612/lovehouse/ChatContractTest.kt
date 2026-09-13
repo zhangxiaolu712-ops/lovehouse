@@ -115,30 +115,36 @@ class ChatContractTest {
         }
         val store = ChatSessionStore(client, repository)
 
-        assertTrue(store.sendClaudeMessage("continue") {}.isSuccess)
+        val attachment = ChatLocationAttachment(31.2, 121.5, 8f, 1_757_257_600_000L)
+        assertTrue(store.sendClaudeMessage("continue", listOf(attachment)) {}.isSuccess)
 
         assertEquals(ClaudeRuntime, observedConfig)
         assertEquals(2, repository.messages(ClaudeRuntime.threadId).size)
         assertEquals("Claude reply", repository.messages(ClaudeRuntime.threadId).last().content)
-        assertTrue(repository.messages(ClaudeRuntime.threadId).all { it.attachments.isEmpty() })
+        assertEquals(listOf(attachment), repository.messages(ClaudeRuntime.threadId).first().attachments)
     }
 
     @Test
-    fun `claude payload inherits fixed window and exposes neither tools nor attachments`() {
-        val payload = buildChatPayload(ClaudeRuntime, "hello", emptySet(), emptyList())
+    fun `claude payload inherits fixed window and exposes shared attachments without tools`() {
+        val payload = buildChatPayload(
+            ClaudeRuntime,
+            "hello",
+            emptySet(),
+            listOf(ChatLocationAttachment(31.2, 121.5, 8f, 1_757_257_600_000L)),
+        )
 
         assertTrue(payload.contains("\"persona_id\":\"claude\""))
         assertTrue(payload.contains("\"thread_id\":\"${ClaudeRuntime.threadId}\""))
         assertTrue(payload.contains("\"window_id\":\"${ClaudeRuntime.windowId}\""))
         assertFalse(payload.contains("allowed_tool_ids"))
-        assertFalse(payload.contains("attachments"))
+        assertTrue(payload.contains("attachments"))
     }
 
     @Test
-    fun `claude keeps composer actions visible but unavailable without changing codex`() {
+    fun `claude shares attachment actions while Tool Center stays unavailable`() {
         val claudeUnavailable = composerUnavailableActions(ClaudeRuntime)
 
-        assertEquals(setOf("相机", "照片", "文件", "定位", "工具"), claudeUnavailable.keys)
+        assertEquals(setOf("工具"), claudeUnavailable.keys)
         assertTrue(claudeUnavailable.values.all { it.contains("当前未启用") })
         assertTrue(composerUnavailableActions(fyi.b612.lovehouse.feature.chat.CodexRuntime).isEmpty())
     }

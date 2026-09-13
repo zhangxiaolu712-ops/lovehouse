@@ -24,14 +24,7 @@ class GlobalCapabilityRegistryTest {
         supportedAttachmentLifecycles = setOf(CapabilityLifecycle.Local, CapabilityLifecycle.Ephemeral),
         consumesVoiceTranscriptAsText = true,
     )
-    private val claude = ProviderCapabilityProfile(
-        providerId = "claude",
-        acceptedAttachmentTypes = emptySet(),
-        maxAttachmentItems = 0,
-        supportsTextWithAttachments = false,
-        supportedAttachmentLifecycles = emptySet(),
-        consumesVoiceTranscriptAsText = true,
-    )
+    private val claude = codex.copy(providerId = "claude")
 
     @Test
     fun `attachment capability belongs to LoveHouse while providers only declare consumption`() {
@@ -40,7 +33,7 @@ class GlobalCapabilityRegistryTest {
         val photo = state.capability(LoveHouseCapabilityId.AttachmentPhoto)!!
         assertEquals(CapabilityAvailability.Available, photo.availability)
         assertEquals(ProviderConsumption.Supported, photo.providerConsumption["codex"])
-        assertEquals(ProviderConsumption.Unsupported, photo.providerConsumption["claude"])
+        assertEquals(ProviderConsumption.Supported, photo.providerConsumption["claude"])
         assertEquals(12, codex.maxAttachmentItems)
     }
 

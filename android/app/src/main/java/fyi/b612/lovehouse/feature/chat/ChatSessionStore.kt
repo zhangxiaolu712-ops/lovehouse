@@ -158,6 +158,7 @@ class ChatSessionStore(
 
     suspend fun sendClaudeMessage(
         body: String,
+        attachments: List<ChatAttachment> = emptyList(),
         onText: (String) -> Unit,
     ): Result<CodexChatResult> = sendRuntimeMessage(
         localThreadId = ClaudeRuntime.threadId,
@@ -166,7 +167,7 @@ class ChatSessionStore(
         assistantAvatar = "C",
         body = body,
         requestedToolIds = emptySet(),
-        attachments = emptyList(),
+        attachments = attachments,
         onText = onText,
     )
 

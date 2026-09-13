@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { estimateTokens } from '../codex-chat/contextBreakdown.js'
 import { ChatRuntimeError } from '../codex-chat/errors.js'
 import { unknownQuota } from '../codex-chat/runtimeContract.js'
+import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -20,9 +21,17 @@ function narrowRuntimeEnv(source) {
     .map(key => [key, source[key]]))
 }
 
-function buildPrompt(history, message) {
+function buildPrompt(history, message, attachments = []) {
   const transcript = history.map(item => `${item.role === 'user' ? 'User' : 'Assistant'}: ${item.content}`)
-  return [...transcript, `User: ${message}`, 'Assistant:'].join('\n\n')
+  const manifest = attachments.length ? [
+    'The Owner attached these verified local inputs for this turn:',
+    ...attachments.map(item => item.type === 'location'
+      ? `- Location: latitude=${item.latitude}, longitude=${item.longitude}${item.accuracy == null ? '' : `, accuracy=${item.accuracy}m`}, captured_at=${item.captured_at}${item.address ? `, address=${item.address}` : ''}`
+      : `- ${item.type}: ${item.name} (${item.mime_type}, ${item.size} bytes) at ${item.local_path}`),
+    'Use the Read tool for every attached file relevant to the request. Do not claim an attachment was read unless it was actually available.',
+  ].join('\n') : ''
+  return [...transcript, manifest, `User: ${message || '[attachment only]'}`, 'Assistant:']
+    .filter(Boolean).join('\n\n')
 }
 
 export function createStreamParser(callbacks = {}) {
@@ -82,7 +91,7 @@ export function createStreamParser(callbacks = {}) {
 
 const VALID_THINKING_DISPLAY = new Set(['summarized', 'omitted'])
 
-function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay }) {
+function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay, allowAttachmentRead }) {
   return [
     '-p', prompt,
     ...(model ? ['--model', model] : []),
@@ -91,7 +100,8 @@ function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay }) {
     '--include-partial-messages',
     '--verbose',
     '--system-prompt', CHAT_GUARDRAIL,
-    '--tools', '',
+    '--tools', allowAttachmentRead ? 'Read' : '',
+    ...(allowAttachmentRead ? ['--allowedTools', 'Read'] : []),
     '--permission-mode', 'dontAsk',
     '--disable-slash-commands',
     '--setting-sources', '',
@@ -163,6 +173,7 @@ export class ClaudeCliRuntimeAdapter {
   constructor({
     executable = '/usr/bin/claude', spawnImpl = spawn, cwd = '/tmp', env = process.env,
     model = null, thinkingDisplay = null, createSessionId = () => crypto.randomUUID(),
+    fetchImpl = globalThis.fetch, attachmentMaterializer = null,
   } = {}) {
     this.executable = executable
     this.spawnImpl = spawnImpl
@@ -172,6 +183,11 @@ export class ClaudeCliRuntimeAdapter {
     this.thinkingDisplay = typeof thinkingDisplay === 'string' && VALID_THINKING_DISPLAY.has(thinkingDisplay)
       ? thinkingDisplay : null
     this.createSessionId = createSessionId
+    this.attachmentMaterializer = attachmentMaterializer || new SecureAttachmentMaterializer({
+      cwd: this.cwd,
+      fetchImpl,
+      createError: (code, message, options) => new ChatRuntimeError(code, message, options),
+    })
   }
 
   getCapabilities() {
@@ -191,7 +207,7 @@ export class ClaudeCliRuntimeAdapter {
     }
   }
 
-  startOrResume({ sessionId = null, prompt = '' } = {}) {
+  startOrResume({ sessionId = null, prompt = '', attachmentItems = [] } = {}) {
     const runtimeSessionId = sessionId || this.createSessionId()
     return {
       session_id: runtimeSessionId,
@@ -199,6 +215,7 @@ export class ClaudeCliRuntimeAdapter {
       args: runtimeArgs({
         prompt, sessionId: runtimeSessionId, resume: Boolean(sessionId),
         model: this.model, thinkingDisplay: this.thinkingDisplay,
+        allowAttachmentRead: attachmentItems.some(item => item.type === 'photo' || item.type === 'file'),
       }),
     }
   }
@@ -303,10 +320,19 @@ export class ClaudeCliRuntimeAdapter {
     })
   }
 
-  async #run({ message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent }) {
-    const prompt = buildPrompt(sessionId ? [] : history, message)
+  async #run(input) {
+    const materialized = await this.attachmentMaterializer.materialize(input.attachments || [], input.signal)
+    try {
+      return await this.#runMaterialized({ ...input, attachments: materialized.items })
+    } finally {
+      await materialized.cleanup()
+    }
+  }
+
+  async #runMaterialized({ message, attachments, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent }) {
+    const prompt = buildPrompt(sessionId ? [] : history, message, attachments)
     const estimatedInputTokens = estimateTokens(prompt)
-    const command = this.startOrResume({ sessionId, prompt })
+    const command = this.startOrResume({ sessionId, prompt, attachmentItems: attachments })
     const tools = new Map()
     let reportedSessionId = ''
     let reportedModel = ''
@@ -440,13 +466,13 @@ export class ClaudeCliRuntimeAdapter {
   }
 
   async streamEvents({
-    message, history = [], sessionId = null, signal,
+    message, attachments = [], history = [], sessionId = null, signal,
     onRuntimeBinding = () => {}, onText = () => {}, onThinking = () => {}, onEvent = () => {},
     getContinuationContext,
   }) {
     try {
       return await this.#run({
-        message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
+        message, attachments, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -457,7 +483,7 @@ export class ClaudeCliRuntimeAdapter {
         status: 'recovering', runtime_type: 'claude_cli', adapter_id: 'claude-cli-v1',
       })
       return this.#run({
-        message, history: fallbackHistory, sessionId: null, signal,
+        message, attachments, history: fallbackHistory, sessionId: null, signal,
         onRuntimeBinding, onText, onThinking, onEvent,
       })
     }

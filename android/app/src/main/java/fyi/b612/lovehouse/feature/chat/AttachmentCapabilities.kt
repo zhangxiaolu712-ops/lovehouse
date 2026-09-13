@@ -31,7 +31,7 @@ data class AttachmentCapabilities(
     }
 }
 
-internal val CodexAttachmentCapabilities = AttachmentCapabilities(
+internal val GlobalChatAttachmentCapabilities = AttachmentCapabilities(
     acceptedTypes = setOf(
         ChatAttachmentType.Photo,
         ChatAttachmentType.File,
@@ -45,4 +45,5 @@ internal val CodexAttachmentCapabilities = AttachmentCapabilities(
     ),
 )
 
-internal val ClaudeAttachmentCapabilities = AttachmentCapabilities.Unsupported
+internal val CodexAttachmentCapabilities = GlobalChatAttachmentCapabilities
+internal val ClaudeAttachmentCapabilities = GlobalChatAttachmentCapabilities

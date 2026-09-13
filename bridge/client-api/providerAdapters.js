@@ -1,6 +1,6 @@
 import { ClientApiError, normalizeClientApiError } from './errors.js'
 import {
-  CODEX_ATTACHMENT_CAPABILITIES,
+  GLOBAL_CHAT_ATTACHMENT_CAPABILITIES,
   UNSUPPORTED_ATTACHMENT_CAPABILITIES,
 } from './attachmentCapabilities.js'
 
@@ -466,7 +466,7 @@ const CODEX_SIDECAR_PROFILE = Object.freeze({
   quotaSource: 'codex_cli_unavailable',
   toolTypes: Object.freeze(['command', 'file_change', 'mcp', 'web_search']),
   usageSources: Object.freeze(['codex_cli_cumulative_delta', 'codex_cli_cumulative_baseline', 'codex_cli']),
-  attachmentCapabilities: CODEX_ATTACHMENT_CAPABILITIES,
+  attachmentCapabilities: GLOBAL_CHAT_ATTACHMENT_CAPABILITIES,
 })
 
 const CLAUDE_SIDECAR_PROFILE = Object.freeze({
@@ -479,7 +479,7 @@ const CLAUDE_SIDECAR_PROFILE = Object.freeze({
   quotaSource: 'claude_cli_unavailable',
   toolTypes: Object.freeze(['claude_tool']),
   usageSources: Object.freeze(['claude_cli']),
-  attachmentCapabilities: UNSUPPORTED_ATTACHMENT_CAPABILITIES,
+  attachmentCapabilities: GLOBAL_CHAT_ATTACHMENT_CAPABILITIES,
 })
 
 export function createCodexAdapter({

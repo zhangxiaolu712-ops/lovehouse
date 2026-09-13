@@ -523,16 +523,11 @@ fun ChatShellScreen(
             }
             store.sendMessage(threadId, outgoing)
         } else {
-            if (isClaudeRuntime && localAttachmentsForTurn.isNotEmpty()) {
-                pendingAttachments = localAttachmentsForTurn
-                input = outgoing
-                actionNotice = "Claude Runtime 当前未启用附件"
-                return@submit
-            }
             sending = true
             chatScope.launch {
                 try {
-                    val attachmentsForTurn = if (isCodexRuntime) {
+                    val runtime = if (isClaudeRuntime) ClaudeRuntime else CodexRuntime
+                    val attachmentsForTurn = if (runtime.attachmentsEnabled) {
                         try {
                             mediaAttachments.makeEphemeral(localAttachmentsForTurn) { progress ->
                                 withContext(Dispatchers.Main.immediate) {
@@ -554,7 +549,7 @@ fun ChatShellScreen(
                         "canonical_turn_send attachments=${attachmentsForTurn.size} tools=${toolsForTurn.size}",
                     )
                     val result = if (isClaudeRuntime) {
-                        store.sendClaudeMessage(outgoing) { }
+                        store.sendClaudeMessage(outgoing, attachmentsForTurn) { }
                     } else {
                         store.sendCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { }
                     }

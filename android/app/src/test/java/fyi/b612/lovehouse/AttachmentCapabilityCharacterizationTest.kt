@@ -1,6 +1,5 @@
 package fyi.b612.lovehouse
 
-import fyi.b612.lovehouse.feature.chat.AttachmentCapabilities
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentLifecycle
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentType
 import fyi.b612.lovehouse.feature.chat.ChatLocationAttachment
@@ -12,6 +11,7 @@ import fyi.b612.lovehouse.feature.chat.ClaudeAttachmentCapabilities
 import fyi.b612.lovehouse.feature.chat.ClaudeRuntime
 import fyi.b612.lovehouse.feature.chat.CodexAttachmentCapabilities
 import fyi.b612.lovehouse.feature.chat.CodexRuntime
+import fyi.b612.lovehouse.feature.chat.GlobalChatAttachmentCapabilities
 import fyi.b612.lovehouse.feature.chat.MediaAttachmentException
 import fyi.b612.lovehouse.feature.chat.MediaAttachmentProgress
 import fyi.b612.lovehouse.feature.chat.MediaAttachmentStage
@@ -23,7 +23,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -45,9 +44,17 @@ class AttachmentCapabilityCharacterizationTest {
     }
 
     @Test
-    fun `claude remains explicitly unsupported`() {
-        assertEquals(AttachmentCapabilities.Unsupported, ClaudeAttachmentCapabilities)
-        assertFalse(ClaudeRuntime.attachmentsEnabled)
+    fun `codex and claude consume the same global attachment capability`() {
+        assertSame(GlobalChatAttachmentCapabilities, CodexAttachmentCapabilities)
+        assertSame(GlobalChatAttachmentCapabilities, ClaudeAttachmentCapabilities)
+        assertTrue(CodexRuntime.attachmentsEnabled)
+        assertTrue(ClaudeRuntime.attachmentsEnabled)
+
+        val attachment = remoteMedia("photo", "image/jpeg", "one.jpg", "claude")
+        val payload = buildChatPayload(ClaudeRuntime, "看图片", emptySet(), listOf(attachment))
+        assertTrue(payload.contains("\"persona_id\":\"claude\""))
+        assertTrue(payload.contains("\"attachments\""))
+        assertEquals(1, Regex("media_asset_id").findAll(payload).count())
     }
 
     @Test
