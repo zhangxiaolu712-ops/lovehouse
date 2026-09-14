@@ -86,6 +86,7 @@ private data class SettingGroup(val title: String, val entries: List<SettingEntr
 
 private val groupTemplates = listOf(
     SettingGroup("账号与个性化", listOf(
+        SettingEntry("账号", "LoveHouse App 登录与会话", "未登录", LoveHouseIcon.Contact),
         SettingEntry("我的个人资料", "头像、昵称与个人简介", "婷", LoveHouseIcon.Contact),
         SettingEntry("美化", "字体、图标、主题与聊天样式", "雾蓝", LoveHouseIcon.Star),
         SettingEntry("AI 档案管理", "人格、专属记忆与头像", "2 个", LoveHouseIcon.Chat),
@@ -123,6 +124,8 @@ fun SettingsScreen(
     baseCapabilities: LoveHouseCapabilityRegistry,
     toolConnections: ToolConnectionStore,
     toolConnectionProbe: ToolConnectionProbe,
+    appAccount: AppAccountRepository,
+    mcpConnections: McpConnectionRepository,
     onOpenConnectionControl: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -137,6 +140,7 @@ fun SettingsScreen(
                 ownerSession = ownerSession,
                 baseCapabilities = baseCapabilities,
                 toolConnections = toolConnections,
+                appAccount = appAccount,
                 onOpenConnectionControl = onOpenConnectionControl,
                 onSelect = { selected = it },
             )
@@ -149,6 +153,8 @@ fun SettingsScreen(
                 baseCapabilities = baseCapabilities,
                 toolConnections = toolConnections,
                 toolConnectionProbe = toolConnectionProbe,
+                appAccount = appAccount,
+                mcpConnections = mcpConnections,
                 onBack = { selected = null },
                 modifier = modifier.statusBarsPadding().navigationBarsPadding(),
             )
@@ -164,6 +170,7 @@ private fun SettingsHome(
     ownerSession: OwnerSessionStore,
     baseCapabilities: LoveHouseCapabilityRegistry,
     toolConnections: ToolConnectionStore,
+    appAccount: AppAccountRepository,
     onOpenConnectionControl: () -> Unit,
     onSelect: (SettingEntry) -> Unit,
 ) {
@@ -173,6 +180,7 @@ private fun SettingsHome(
     val baseCapabilityState by baseCapabilities.state.collectAsState()
     val session by ownerSession.state.collectAsState()
     val savedToolConnections by toolConnections.connections.collectAsState()
+    val appAccountState by appAccount.state.collectAsState()
     val appearance = LocalLoveHouseAppearance.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val deviceContext = remember(context.applicationContext) {
@@ -182,6 +190,7 @@ private fun SettingsHome(
         ).getCurrentDeviceContext()
     }
     LaunchedEffect(baseCapabilities) { baseCapabilities.refresh() }
+    LaunchedEffect(appAccount) { appAccount.refresh() }
     val deviceCapabilities = baseCapabilityState.capabilities.filter { it.kind == fyi.b612.lovehouse.core.capability.LoveHouseCapabilityKind.Device }
     val availablePermissions = deviceCapabilities.count { it.availability == CapabilityAvailability.Available }
     val notificationState = baseCapabilityState.capability(LoveHouseCapabilityId.DeviceNotifications).settingsLabel()
@@ -196,6 +205,12 @@ private fun SettingsHome(
         else -> "默认"
     }
     val values = mapOf(
+        "账号" to when (val account = appAccountState) {
+            is AppAccountState.SignedIn -> account.email
+            is AppAccountState.Error -> account.signedInEmail ?: "连接失败"
+            AppAccountState.Checking -> "检查中"
+            AppAccountState.SignedOut -> "未登录"
+        },
         "我的个人资料" to (ownerName ?: "未填写"),
         "美化" to appearanceLabel,
         "AI 档案管理" to (personaCount?.let { "$it 个" } ?: "本机"),
@@ -205,7 +220,7 @@ private fun SettingsHome(
         "语音" to "原生录音可用",
         "天气与时间" to "天气未接入",
         "主动唤醒" to "尚未启用",
-        "工具添加" to "${savedToolConnections.size} 个连接",
+        "工具添加" to if (savedToolConnections.any { it.kind == ToolConnectionKind.Api }) "本机 API + MCP" else "App Backend MCP",
         "本地资源" to "本机存储",
         "设备" to (deviceContext.battery.levelPercent?.let { "电量 $it%" } ?: "状态可刷新"),
         "密码库 / Secret Vault" to "尚未启用",
@@ -368,6 +383,8 @@ private fun SettingsDetail(
     baseCapabilities: LoveHouseCapabilityRegistry,
     toolConnections: ToolConnectionStore,
     toolConnectionProbe: ToolConnectionProbe,
+    appAccount: AppAccountRepository,
+    mcpConnections: McpConnectionRepository,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -384,6 +401,7 @@ private fun SettingsDetail(
             verticalArrangement = Arrangement.spacedBy(SettingsSpacing.CardGap),
         ) {
             when (entry.title) {
+                "账号" -> item { SettingsCardStack { AppAccountSettings(appAccount) } }
                 "我的个人资料" -> item { SettingsCardStack { OwnerProfileSettings(localStorage) } }
                 "美化" -> item { SettingsCardStack { AppearanceProductSettings(localStorage) } }
                 "AI 档案管理" -> item { SettingsCardStack { AiProfileManager(localStorage) } }
@@ -404,6 +422,7 @@ private fun SettingsDetail(
                             registry = capabilityRegistry,
                             connections = toolConnections,
                             probe = toolConnectionProbe,
+                            mcpRepository = mcpConnections,
                         )
                     }
                 }

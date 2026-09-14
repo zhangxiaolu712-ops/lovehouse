@@ -39,6 +39,7 @@ import fyi.b612.lovehouse.feature.nativelab.NativeLabScreen
 import fyi.b612.lovehouse.feature.settings.ConnectionControlScreen
 import fyi.b612.lovehouse.feature.settings.SettingsScreen
 import fyi.b612.lovehouse.feature.settings.ToolCenterLabScreen
+import fyi.b612.lovehouse.feature.settings.McpOAuthResultScreen
 import fyi.b612.lovehouse.feature.shell.NavGlyph
 import fyi.b612.lovehouse.feature.shell.PlaceholderScreen
 
@@ -149,6 +150,8 @@ private fun LoveHouseContent(
                 baseCapabilities = dependencies.baseCapabilities,
                 toolConnections = dependencies.toolConnections,
                 toolConnectionProbe = dependencies.toolConnectionProbe,
+                appAccount = dependencies.appAccount,
+                mcpConnections = dependencies.mcpConnections,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
             )
         }
@@ -177,7 +180,6 @@ private fun LoveHouseContent(
 
         composable(
             route = AppDestination.ToolCenterLab.route,
-            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ToolCenterLab.deepLink }),
         ) {
             ToolCenterLabScreen(
                 repository = dependencies.toolCenter,
@@ -186,6 +188,22 @@ private fun LoveHouseContent(
                 threadId = stableCodexThreadId(),
                 onBack = { navController.popBackStack() },
                 onReconnect = { navController.navigate(AppDestination.ConnectionControl.route) },
+            )
+        }
+
+        composable(
+            route = AppDestination.McpOAuthCallback.route,
+            arguments = listOf(
+                navArgument("connectionId") { type = NavType.StringType; defaultValue = "" },
+                navArgument("status") { type = NavType.StringType; defaultValue = "" },
+            ),
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.McpOAuthCallback.deepLink }),
+        ) { entry ->
+            McpOAuthResultScreen(
+                repository = dependencies.mcpConnections,
+                connectionId = entry.arguments?.getString("connectionId").orEmpty(),
+                callbackStatus = entry.arguments?.getString("status").orEmpty(),
+                onBack = { navController.popBackStack() },
             )
         }
 
