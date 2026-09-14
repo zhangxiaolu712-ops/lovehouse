@@ -43,6 +43,10 @@ import fyi.b612.lovehouse.feature.settings.ToolConnectionProbe
 import fyi.b612.lovehouse.feature.settings.ToolConnectionStore
 import fyi.b612.lovehouse.feature.settings.ToolCenterRepository
 import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
+import fyi.b612.lovehouse.feature.settings.AndroidAppAccountRepository
+import fyi.b612.lovehouse.feature.settings.AppAccountRepository
+import fyi.b612.lovehouse.feature.settings.AppBackendMcpConnectionRepository
+import fyi.b612.lovehouse.feature.settings.McpConnectionRepository
 import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
 
 data class AppDependencies(
@@ -61,6 +65,8 @@ data class AppDependencies(
     val toolConnectionProbe: ToolConnectionProbe,
     val chatConnections: ChatConnectionStore,
     val chatConnectionProbe: ChatConnectionProbe,
+    val appAccount: AppAccountRepository,
+    val mcpConnections: McpConnectionRepository,
 )
 
 fun createAppDependencies(context: Context): AppDependencies {
@@ -101,6 +107,8 @@ fun createAppDependencies(context: Context): AppDependencies {
         toolConnectionProbe = HttpToolConnectionProbe(),
         chatConnections = AndroidChatConnectionStore(appContext),
         chatConnectionProbe = HttpChatConnectionProbe(),
+        appAccount = AndroidAppAccountRepository(appContext, BuildConfig.LOVEHOUSE_APP_BACKEND_URL),
+        mcpConnections = AppBackendMcpConnectionRepository(BuildConfig.LOVEHOUSE_APP_BACKEND_URL),
     )
 }
 

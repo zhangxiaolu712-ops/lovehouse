@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,6 +44,7 @@ internal fun SettingsToolCenter(
     registry: CapabilityRegistry,
     connections: ToolConnectionStore,
     probe: ToolConnectionProbe,
+    mcpRepository: McpConnectionRepository,
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var testResults by remember { mutableStateOf<Map<String, ToolTestResult>>(emptyMap()) }
@@ -51,16 +53,18 @@ internal fun SettingsToolCenter(
     val capabilities = capabilityState.capabilities
     val preferred = capabilityState.enabledToolIds
     val saved by connections.connections.collectAsState()
+    val savedApiConnections = saved.filter { it.kind == ToolConnectionKind.Api }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     ProductPanel {
         Text("Tool Center", color = LoveHouseGlass.Ink, fontSize = 14.sp)
         Text(
-            "${saved.size} 个本机连接 · ${capabilities.count { it.availability == ToolAvailability.Available } + saved.sumOf { it.discoveredTools.size }} 个已发现工具",
+            "${savedApiConnections.size} 个本机 API · MCP 连接由 App Backend 管理",
             color = LoveHouseGlass.MutedInk,
             fontSize = 10.sp,
         )
-        Text("外部连接尚未注册到 Bridge 时，只能在本机测试/发现，不能被 Chat Runtime 调用。", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
+        Text("本轮只安装和授权完整 MCP Server，不调用其中任何工具。", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
     }
     ProductPanel {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -110,7 +114,7 @@ internal fun SettingsToolCenter(
                 }
                 if (capabilities.isEmpty()) OutlinedButton(onClick = registry::refresh) { Text("重试真实状态") }
             }
-            saved.forEach { connection ->
+            savedApiConnections.forEach { connection ->
                 ProductPanel {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -136,9 +140,18 @@ internal fun SettingsToolCenter(
                     }
                 }
             }
+            McpConnectionsPanel(
+                repository = mcpRepository,
+                showAddForm = false,
+                onOpenAuthorization = { openMcpAuthorization(context, it) },
+            )
         }
         1 -> ToolConnectionForm(ToolConnectionKind.Api, connections, probe, editing?.takeIf { it.kind == ToolConnectionKind.Api }) { editing = null; tab = 0 }
-        else -> ToolConnectionForm(ToolConnectionKind.Mcp, connections, probe, editing?.takeIf { it.kind == ToolConnectionKind.Mcp }) { editing = null; tab = 0 }
+        else -> McpConnectionsPanel(
+            repository = mcpRepository,
+            showAddForm = true,
+            onOpenAuthorization = { openMcpAuthorization(context, it) },
+        )
     }
 }
 

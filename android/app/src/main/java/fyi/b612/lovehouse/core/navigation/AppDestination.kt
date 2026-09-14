@@ -17,6 +17,13 @@ enum class AppDestination(
     ConnectionControl("lab/connection-control", "连接与工程控制", "连", "lovehouse://lab/connection-control", false),
     NativeLab("lab/native", "原生能力测试", "验", "lovehouse://lab/native", false),
     ToolCenterLab("lab/tool-center", "MCP Tools Lab", "验", "lovehouse://lab/tool-center", false),
+    McpOAuthCallback(
+        "settings/mcp/oauth?connectionId={connectionId}&status={status}",
+        "MCP 授权结果",
+        "连",
+        "lovehouse://lab/tool-center?connection_id={connectionId}&status={status}",
+        false,
+    ),
     ;
 
     companion object {

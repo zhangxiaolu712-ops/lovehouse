@@ -14,6 +14,8 @@ android {
     val supabasePublishableKey = providers.gradleProperty("lovehouse.supabasePublishableKey")
         .orElse(providers.gradleProperty("lovehouse.supabaseAnonKey"))
         .orElse("")
+    val appBackendUrl = providers.gradleProperty("lovehouse.appBackendUrl")
+        .orElse("https://app.b612.fyi")
 
     defaultConfig {
         applicationId = "fyi.b612.lovehouse"
@@ -28,6 +30,7 @@ android {
         val chatBaseUrl = providers.gradleProperty("lovehouse.chatBaseUrl")
             .orElse("https://tingtunehouse.duckdns.org/api/v1/chat")
         buildConfigField("String", "LOVEHOUSE_CHAT_URL", quotedBuildConfig(chatBaseUrl.get()))
+        buildConfigField("String", "LOVEHOUSE_APP_BACKEND_URL", quotedBuildConfig(appBackendUrl.get()))
         buildConfigField("String", "LOVEHOUSE_SUPABASE_URL", quotedBuildConfig(supabaseUrl.get()))
         buildConfigField("String", "LOVEHOUSE_SUPABASE_PUBLISHABLE_KEY", quotedBuildConfig(supabasePublishableKey.get()))
     }
