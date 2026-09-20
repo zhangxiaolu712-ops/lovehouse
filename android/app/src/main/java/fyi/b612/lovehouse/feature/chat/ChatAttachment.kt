@@ -19,6 +19,18 @@ sealed interface ChatAttachment {
     fun transportJson(): String
 }
 
+/** App-owned draft state; it deliberately has no provider, persona, thread or runtime-session owner. */
+data class ChatAttachmentDraft(
+    val attachments: List<ChatAttachment> = emptyList(),
+) {
+    fun add(items: List<ChatAttachment>): ChatAttachmentDraft = copy(attachments = attachments + items)
+    fun remove(item: ChatAttachment): ChatAttachmentDraft = copy(attachments = attachments - item)
+    fun replaceLocation(location: ChatLocationAttachment): ChatAttachmentDraft = copy(
+        attachments = attachments.filterNot { it is ChatLocationAttachment } + location,
+    )
+    fun clear(): ChatAttachmentDraft = ChatAttachmentDraft()
+}
+
 data class ChatMediaAttachment(
     override val type: String,
     val mediaAssetId: String? = null,

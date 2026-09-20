@@ -5,12 +5,14 @@ export const UNSUPPORTED_ATTACHMENT_CAPABILITIES = Object.freeze({
   supported_lifecycles: Object.freeze([]),
 })
 
-export const CODEX_ATTACHMENT_CAPABILITIES = Object.freeze({
+export const GLOBAL_CHAT_ATTACHMENT_CAPABILITIES = Object.freeze({
   accepted_types: Object.freeze(['photo', 'file', 'location']),
   max_items: 12,
   supports_text_with_attachments: true,
   supported_lifecycles: Object.freeze(['LOCAL', 'EPHEMERAL']),
 })
+
+export const CODEX_ATTACHMENT_CAPABILITIES = GLOBAL_CHAT_ATTACHMENT_CAPABILITIES
 
 function inferredLifecycle(attachment) {
   if (typeof attachment?.lifecycle === 'string' && attachment.lifecycle.trim()) {

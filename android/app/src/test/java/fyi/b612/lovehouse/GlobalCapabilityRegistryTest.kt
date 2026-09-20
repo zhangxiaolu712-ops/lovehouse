@@ -11,6 +11,9 @@ import fyi.b612.lovehouse.core.capability.buildLoveHouseCapabilities
 import fyi.b612.lovehouse.core.permissions.CapabilityPermissionStatus
 import fyi.b612.lovehouse.core.permissions.NativeCapability
 import fyi.b612.lovehouse.core.permissions.PermissionState
+import fyi.b612.lovehouse.feature.chat.AttachmentCapabilities
+import fyi.b612.lovehouse.feature.chat.ChatRuntimeConfig
+import fyi.b612.lovehouse.feature.chat.composerUnavailableActions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,14 +27,7 @@ class GlobalCapabilityRegistryTest {
         supportedAttachmentLifecycles = setOf(CapabilityLifecycle.Local, CapabilityLifecycle.Ephemeral),
         consumesVoiceTranscriptAsText = true,
     )
-    private val claude = ProviderCapabilityProfile(
-        providerId = "claude",
-        acceptedAttachmentTypes = emptySet(),
-        maxAttachmentItems = 0,
-        supportsTextWithAttachments = false,
-        supportedAttachmentLifecycles = emptySet(),
-        consumesVoiceTranscriptAsText = true,
-    )
+    private val claude = codex.copy(providerId = "claude")
 
     @Test
     fun `attachment capability belongs to LoveHouse while providers only declare consumption`() {
@@ -40,7 +36,7 @@ class GlobalCapabilityRegistryTest {
         val photo = state.capability(LoveHouseCapabilityId.AttachmentPhoto)!!
         assertEquals(CapabilityAvailability.Available, photo.availability)
         assertEquals(ProviderConsumption.Supported, photo.providerConsumption["codex"])
-        assertEquals(ProviderConsumption.Unsupported, photo.providerConsumption["claude"])
+        assertEquals(ProviderConsumption.Supported, photo.providerConsumption["claude"])
         assertEquals(12, codex.maxAttachmentItems)
     }
 
@@ -67,6 +63,30 @@ class GlobalCapabilityRegistryTest {
         assertEquals(CapabilityAvailability.Partial, cameraAttachment.availability)
         assertTrue(cameraAttachment.unavailableReason!!.contains("transport"))
         assertEquals(state.capabilities.size, state.capabilities.map { it.id }.distinct().size)
+    }
+
+    @Test
+    fun `virtual window mounts global attachment entry points without a provider`() {
+        val state = buildLoveHouseCapabilities(grantedPermissions(), true, listOf(codex, claude), 35)
+        val noRuntime = ChatRuntimeConfig(
+            personaId = "virtual",
+            threadId = "virtual-window",
+            windowId = "virtual-window",
+            expectedRuntime = "none",
+            expectedAdapterId = "none",
+            attachmentCapabilities = AttachmentCapabilities.Unsupported,
+            toolCenterEnabled = false,
+        )
+
+        val unavailable = composerUnavailableActions(noRuntime, state)
+
+        assertTrue("照片" !in unavailable)
+        assertTrue("文件" !in unavailable)
+        assertTrue("定位" !in unavailable)
+        assertTrue(unavailable["相机"].orEmpty().contains("transport"))
+        assertEquals(CapabilityAvailability.Available, state.capability(LoveHouseCapabilityId.DevicePhotoPicker)!!.availability)
+        assertEquals(CapabilityAvailability.Available, state.capability(LoveHouseCapabilityId.DeviceFilePicker)!!.availability)
+        assertEquals(CapabilityAvailability.Available, state.capability(LoveHouseCapabilityId.DeviceLocation)!!.availability)
     }
 
     private fun grantedPermissions(): List<CapabilityPermissionStatus> = NativeCapability.entries.map {

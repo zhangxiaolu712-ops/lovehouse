@@ -12,7 +12,7 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
     fun refresh() = repository.refresh()
 
     companion object {
-        fun factory(repository: SettingsRepository = MockSettingsRepository()): ViewModelProvider.Factory =
+        fun factory(repository: SettingsRepository = UnavailableSettingsRepository()): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T = SettingsViewModel(repository) as T

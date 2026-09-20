@@ -66,8 +66,10 @@ class ChatSessionStore(
     private val messageRepository: LocalChatMessageRepository = NoOpLocalChatMessageRepository,
     private val now: () -> Long = System::currentTimeMillis,
     private val claudeWebHistoryImporter: ClaudeWebHistoryImporter? = null,
+    initialTasks: List<RemoteAgentTask> = emptyList(),
+    initialThreads: List<ChatThreadSummary> = LoveHouseChatCatalog.threads,
 ) {
-    val threads = mutableStateListOf<ChatThreadSummary>().apply { addAll(MockChatRepository.mockThreads.filter { it.kind != ChatThreadKind.Archive }) }
+    val threads = mutableStateListOf<ChatThreadSummary>().apply { addAll(initialThreads) }
     val personas = mutableStateListOf(
         ChatPersona("g", "G老师", "G", "gpt_private"),
         ChatPersona("claude", "Claude", "C", "claude_private"),
@@ -77,29 +79,13 @@ class ChatSessionStore(
     private val messagesByThread = mutableStateMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessageUi>>()
     private val membersByThread = mutableStateMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMember>>()
     private val backgrounds = mutableStateMapOf<String, String>()
-    private val tasksById = mutableStateMapOf<String, RemoteAgentTask>().apply { RemoteTaskMocks.scenarios.forEach { put(it.taskId, it) } }
+    private val tasksById = mutableStateMapOf<String, RemoteAgentTask>().apply {
+        initialTasks.forEach { put(it.taskId, it) }
+    }
 
     init {
-        messagesByThread["persona-gpt"] = mutableStateListOf(
-            message("g1", "G老师", "G", "回来啦。", "20:17", thoughtDuration = "2s", thoughtSummary = "已检查当前窗口的上下文与可展示工具状态。"),
-            message("g2", "我", "我", "今天先把 LoveHouse 的聊天界面定下来。", "20:17", mine = true),
-            message("g3", "G老师", "G", "窗口只按人格切，模型藏到右上角详情里。", "20:18"),
-            message("g4", "我", "我", "好。前台切人格，后台换模型。", "20:18", mine = true),
-            message("g5", "G老师", "G", "长消息会在合理的最大宽度内自然换行。头像、姓名和时间都留在气泡外面。", "20:19"),
-        )
-        messagesByThread["living-room"] = mutableStateListOf(
-            message("l1", "GPT", "G", "小客厅已经同步到最新 Chat Shell。", "21:03"),
-            message("l2", "Claude", "C", "我负责检查文案和交互边界。", "21:04"),
-            ChatMessageUi("l3", "Codex", "⌘", "Chat 页面迁移 · 正在施工", "21:05", false, ChatMessageKind.Task, taskId = "mock-running-001"),
-            message("l4", "我", "我", "完成后把结果直接放在正文时间线。", "21:06", mine = true),
-        )
-        val activeTask = tasksById.getValue("mock-running-001")
-        messagesByThread["task-remote-ui"] = mutableStateListOf<ChatMessageUi>().apply {
-            activeTask.workflow.forEachIndexed { index, event ->
-                add(message("task-log-$index", "Codex", "⌘", "${event.action}\n${event.summary}", event.timestamp, workflowEventId = event.id))
-            }
-            add(ChatMessageUi("task-card", "Codex", "⌘", activeTask.title, "刚刚", false, ChatMessageKind.Task, taskId = activeTask.taskId))
-        }
+        messagesByThread["persona-gpt"] = mutableStateListOf()
+        messagesByThread["living-room"] = mutableStateListOf()
         // The production Codex window starts empty: assistant text must only
         // come from the real runtime stream, never from a local placeholder.
         val persistedCodexMessages = messageRepository.messages(stableCodexThreadId()).map(::persistedMessageUi)
@@ -117,11 +103,7 @@ class ChatSessionStore(
                 it.copy(preview = latest.body, updatedAt = latest.time)
             }
         }
-        membersByThread["living-room"] = mutableStateListOf(
-            ChatMember("g", "GPT", "G", "本地演示"),
-            ChatMember("claude", "Claude", "C", "本地演示"),
-            ChatMember("codex", "Codex", "⌘", "本地演示"),
-        )
+        membersByThread["living-room"] = mutableStateListOf()
     }
 
     fun thread(threadId: String): ChatThreadSummary? = threads.firstOrNull { it.threadId == threadId }
@@ -133,10 +115,23 @@ class ChatSessionStore(
     fun setBackground(threadId: String, key: String) { backgrounds[threadId] = key }
     fun clearBackground(threadId: String) { backgrounds.remove(threadId) }
 
-    fun sendMessage(threadId: String, body: String) {
-        if (body.isBlank()) return
-        messages(threadId) += message("sent-${UUID.randomUUID()}", "我", "我", body, "刚刚", mine = true)
-        updateThread(threadId) { it.copy(preview = body, updatedAt = "刚刚") }
+    fun sendMessage(threadId: String, body: String, attachments: List<ChatAttachment> = emptyList()) {
+        if (body.isBlank() && attachments.isEmpty()) return
+        val createdAt = now()
+        val localMessage = LocalChatMessage(
+            localMessageId = "sent-${UUID.randomUUID()}",
+            threadId = threadId,
+            role = LocalChatRole.User,
+            sender = "owner",
+            content = body.trim(),
+            attachments = attachments,
+            createdAtEpochMillis = createdAt,
+            status = LocalChatDeliveryStatus.Sent,
+        )
+        messageRepository.upsert(localMessage)
+        messages(threadId) += persistedMessageUi(localMessage)
+        val preview = body.trim().ifEmpty { attachments.joinToString(" · ", transform = ChatAttachment::displaySummary) }
+        updateThread(threadId) { it.copy(preview = preview, updatedAt = "刚刚") }
     }
 
     suspend fun sendCodexMessage(
@@ -158,6 +153,7 @@ class ChatSessionStore(
 
     suspend fun sendClaudeMessage(
         body: String,
+        attachments: List<ChatAttachment> = emptyList(),
         onText: (String) -> Unit,
     ): Result<CodexChatResult> = sendRuntimeMessage(
         localThreadId = ClaudeRuntime.threadId,
@@ -166,7 +162,7 @@ class ChatSessionStore(
         assistantAvatar = "C",
         body = body,
         requestedToolIds = emptySet(),
-        attachments = emptyList(),
+        attachments = attachments,
         onText = onText,
     )
 
@@ -329,16 +325,16 @@ class ChatSessionStore(
             threadId = id,
             kind = if (temporary) ChatThreadKind.TemporaryTask else ChatThreadKind.Direct,
             title = if (temporary) "${persona.name} · 临时窗口" else persona.name,
-            preview = "窗口已创建，可以开始聊天。",
+            preview = "本地窗口 · Runtime 尚未连接",
             updatedAt = "刚刚",
-            presence = ChatPresence.Online,
+            presence = null,
             speakerLabel = if (temporary) "72h 临时 Thread" else "长期单聊",
             expiresAtLabel = if (temporary) "72小时" else null,
-            taskId = if (temporary) "mock-running-001" else null,
+            taskId = null,
             avatarGlyph = persona.avatar,
         )
         threads.add(0, thread)
-        messagesByThread[id] = mutableStateListOf(message("welcome-$id", persona.name, persona.avatar, "窗口已经准备好了。", "刚刚"))
+        messagesByThread[id] = mutableStateListOf()
         return thread
     }
 
