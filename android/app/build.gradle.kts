@@ -1,3 +1,5 @@
+import java.time.Instant
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
@@ -16,6 +18,16 @@ android {
         .orElse("")
     val appBackendUrl = providers.gradleProperty("lovehouse.appBackendUrl")
         .orElse("https://app.b612.fyi")
+    val buildGitSha = providers.environmentVariable("GITHUB_SHA")
+        .orElse(
+            providers.exec {
+                workingDir = rootDir.parentFile
+                commandLine("git", "rev-parse", "HEAD")
+            }.standardOutput.asText.map(String::trim),
+        )
+    val buildTimestamp = providers.environmentVariable("SOURCE_DATE_EPOCH")
+        .map { Instant.ofEpochSecond(it.toLong()).toString() }
+        .orElse(providers.provider { Instant.now().toString() })
 
     defaultConfig {
         applicationId = "fyi.b612.lovehouse"
@@ -33,6 +45,8 @@ android {
         buildConfigField("String", "LOVEHOUSE_APP_BACKEND_URL", quotedBuildConfig(appBackendUrl.get()))
         buildConfigField("String", "LOVEHOUSE_SUPABASE_URL", quotedBuildConfig(supabaseUrl.get()))
         buildConfigField("String", "LOVEHOUSE_SUPABASE_PUBLISHABLE_KEY", quotedBuildConfig(supabasePublishableKey.get()))
+        buildConfigField("String", "LOVEHOUSE_GIT_SHA", quotedBuildConfig(buildGitSha.get()))
+        buildConfigField("String", "LOVEHOUSE_BUILD_TIME", quotedBuildConfig(buildTimestamp.get()))
     }
 
     buildTypes {

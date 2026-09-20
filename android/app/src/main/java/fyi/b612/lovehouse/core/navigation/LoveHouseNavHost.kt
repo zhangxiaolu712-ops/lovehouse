@@ -152,6 +152,7 @@ private fun LoveHouseContent(
                 toolConnectionProbe = dependencies.toolConnectionProbe,
                 appAccount = dependencies.appAccount,
                 mcpConnections = dependencies.mcpConnections,
+                selfCheck = dependencies.selfCheck,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
             )
         }
