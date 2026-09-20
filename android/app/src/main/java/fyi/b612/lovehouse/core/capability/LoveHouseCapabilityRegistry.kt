@@ -35,11 +35,13 @@ enum class LoveHouseCapabilityId(val value: String) {
     DeviceBluetooth("device.bluetooth"),
     DeviceShare("device.share"),
     DeviceBiometrics("device.biometrics"),
+    DeviceContext("device.context"),
     DeviceDeepLink("device.deep_link"),
 }
 
 enum class LoveHouseCapabilityKind { Attachment, Media, Voice, Device }
 enum class CapabilityAvailability { Available, Partial, Unavailable }
+enum class CapabilityMaturity { Complete, Partial, NotBuilt }
 enum class ProviderConsumption { Supported, Unsupported, NotConnected }
 enum class CapabilityAttachmentType { Photo, File, Location, Audio }
 enum class CapabilityLifecycle { Local, Ephemeral, Durable }
@@ -64,6 +66,7 @@ data class LoveHouseCapability(
     val requiredAndroidPermissions: Set<String> = emptySet(),
     val providerConsumption: Map<String, ProviderConsumption> = emptyMap(),
     val unavailableReason: String? = null,
+    val maturity: CapabilityMaturity = CapabilityMaturity.Complete,
 )
 
 data class LoveHouseCapabilityState(
@@ -181,13 +184,14 @@ internal fun buildLoveHouseCapabilities(
                 setOf(Manifest.permission.CAMERA),
                 attachmentConsumers(CapabilityAttachmentType.Photo),
                 cameraReason ?: "相机可拍摄，但原图附件 transport 尚未接通",
+                CapabilityMaturity.Partial,
             ),
             LoveHouseCapability(LoveHouseCapabilityId.MediaEphemeralUpload, "临时媒体上传", LoveHouseCapabilityKind.Media, CapabilityAvailability.Available, providerConsumption = providerProfiles.associate { it.providerId to if (it.supportsAttachments && CapabilityLifecycle.Ephemeral in it.supportedAttachmentLifecycles) ProviderConsumption.Supported else ProviderConsumption.Unsupported }),
             LoveHouseCapability(LoveHouseCapabilityId.MediaSecureMaterialize, "受控媒体读取与清理", LoveHouseCapabilityKind.Media, CapabilityAvailability.Available, providerConsumption = providerProfiles.associate { it.providerId to if (it.supportsAttachments) ProviderConsumption.Supported else ProviderConsumption.Unsupported }),
             LoveHouseCapability(LoveHouseCapabilityId.VoiceMicrophone, "麦克风", LoveHouseCapabilityKind.Voice, microphoneAvailability, setOf(Manifest.permission.RECORD_AUDIO), voiceConsumers, microphoneReason),
             LoveHouseCapability(LoveHouseCapabilityId.VoiceRecording, "本地录音", LoveHouseCapabilityKind.Voice, microphoneAvailability, setOf(Manifest.permission.RECORD_AUDIO), voiceConsumers, microphoneReason),
             LoveHouseCapability(LoveHouseCapabilityId.VoiceStt, "系统语音识别", LoveHouseCapabilityKind.Voice, if (microphoneAvailability == CapabilityAvailability.Available && speechRecognitionAvailable) CapabilityAvailability.Available else CapabilityAvailability.Unavailable, setOf(Manifest.permission.RECORD_AUDIO), voiceConsumers, when { microphoneReason != null -> microphoneReason; !speechRecognitionAvailable -> "当前设备没有可用的系统语音识别服务"; else -> null }),
-            LoveHouseCapability(LoveHouseCapabilityId.VoiceTts, "文字朗读", LoveHouseCapabilityKind.Voice, CapabilityAvailability.Unavailable, providerConsumption = notConnectedConsumers, unavailableReason = "LoveHouse 尚未接入可验证的 TTS 实现"),
+            LoveHouseCapability(LoveHouseCapabilityId.VoiceTts, "文字朗读", LoveHouseCapabilityKind.Voice, CapabilityAvailability.Unavailable, providerConsumption = notConnectedConsumers, unavailableReason = "LoveHouse 尚未接入可验证的 TTS 实现", maturity = CapabilityMaturity.NotBuilt),
             native(LoveHouseCapabilityId.DeviceLocation, "一次性位置", NativeCapability.Location, setOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)),
             native(LoveHouseCapabilityId.DeviceCamera, "相机", NativeCapability.Camera, setOf(Manifest.permission.CAMERA)),
             native(LoveHouseCapabilityId.DeviceFilePicker, "文件选择", NativeCapability.Files),
@@ -196,6 +200,7 @@ internal fun buildLoveHouseCapabilities(
             native(LoveHouseCapabilityId.DeviceBluetooth, "蓝牙 / BLE", NativeCapability.Bluetooth, bluetoothPermissions),
             native(LoveHouseCapabilityId.DeviceShare, "系统分享", NativeCapability.Share),
             native(LoveHouseCapabilityId.DeviceBiometrics, "生物识别", NativeCapability.Biometrics),
+            LoveHouseCapability(LoveHouseCapabilityId.DeviceContext, "设备状态", LoveHouseCapabilityKind.Device, CapabilityAvailability.Available, providerConsumption = notConnectedConsumers),
             native(LoveHouseCapabilityId.DeviceDeepLink, "Deep Link", NativeCapability.DeepLink),
         ),
     )

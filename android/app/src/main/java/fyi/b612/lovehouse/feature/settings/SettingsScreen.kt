@@ -62,6 +62,7 @@ import fyi.b612.lovehouse.core.designsystem.LocalLoveHouseAppearance
 import fyi.b612.lovehouse.core.devicecontext.AndroidDeviceContextProvider
 import fyi.b612.lovehouse.core.permissions.PermissionStatusProvider
 import fyi.b612.lovehouse.core.storage.LocalStorage
+import fyi.b612.lovehouse.core.selfcheck.DeploymentSelfCheckRunner
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
@@ -108,6 +109,7 @@ private val groupTemplates = listOf(
         SettingEntry("同步", "云端同步、冲突与离线状态", "正常", LoveHouseIcon.Regenerate),
     )),
     SettingGroup("数据与版本", listOf(
+        SettingEntry("部署自检", "检查当前安装包与 production wiring", "只读", LoveHouseIcon.Regenerate),
         SettingEntry("控制台", "LoveHouse 全屋运行状态中心", "状态未知", LoveHouseIcon.Computer),
         SettingEntry("工作项目", "工程目录与当前项目", "LoveHouse", LoveHouseIcon.Wrench),
         SettingEntry("数据与迁移", "独立的数据备份与迁移能力", "尚未启用", LoveHouseIcon.Forward),
@@ -126,6 +128,7 @@ fun SettingsScreen(
     toolConnectionProbe: ToolConnectionProbe,
     appAccount: AppAccountRepository,
     mcpConnections: McpConnectionRepository,
+    selfCheck: DeploymentSelfCheckRunner,
     onOpenConnectionControl: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -155,6 +158,7 @@ fun SettingsScreen(
                 toolConnectionProbe = toolConnectionProbe,
                 appAccount = appAccount,
                 mcpConnections = mcpConnections,
+                selfCheck = selfCheck,
                 onBack = { selected = null },
                 modifier = modifier.statusBarsPadding().navigationBarsPadding(),
             )
@@ -385,6 +389,7 @@ private fun SettingsDetail(
     toolConnectionProbe: ToolConnectionProbe,
     appAccount: AppAccountRepository,
     mcpConnections: McpConnectionRepository,
+    selfCheck: DeploymentSelfCheckRunner,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -401,6 +406,7 @@ private fun SettingsDetail(
             verticalArrangement = Arrangement.spacedBy(SettingsSpacing.CardGap),
         ) {
             when (entry.title) {
+                "部署自检" -> item { DeploymentSelfCheckScreen(selfCheck) }
                 "账号" -> item { SettingsCardStack { AppAccountSettings(appAccount) } }
                 "我的个人资料" -> item { SettingsCardStack { OwnerProfileSettings(localStorage) } }
                 "美化" -> item { SettingsCardStack { AppearanceProductSettings(localStorage) } }
