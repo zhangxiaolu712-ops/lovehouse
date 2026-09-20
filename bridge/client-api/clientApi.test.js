@@ -21,6 +21,7 @@ import {
 import { InMemoryRuntimeBindingStore } from './runtimeBindingStore.js'
 import {
   CODEX_ATTACHMENT_CAPABILITIES,
+  GLOBAL_CHAT_ATTACHMENT_CAPABILITIES,
   UNSUPPORTED_ATTACHMENT_CAPABILITIES,
 } from './attachmentCapabilities.js'
 
@@ -179,6 +180,40 @@ test('one chat turn forwards verified media and location attachments without con
   assert.equal(adapterCalls[0].attachments[1].mime_type, 'application/pdf')
 })
 
+test('Claude provider capability forwards the same verified attachment contract', async t => {
+  const calls = []
+  const adapters = {
+    claude: fakeAdapter('claude', {
+      getCapabilities() {
+        return {
+          runtime_type: 'claude', adapter_id: null, enabled: true,
+          capabilities: { attachments: GLOBAL_CHAT_ATTACHMENT_CAPABILITIES },
+        }
+      },
+      async chat(input) { calls.push(input); input.onText?.('seen'); return { usage: null } },
+    }),
+    codex: fakeAdapter('codex'),
+  }
+  const base = await startHarness(t, { adapters })
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({
+      ...chatBody(), persona_id: 'claude',
+      message: {
+        type: 'text', text: '我在这里',
+        attachments: [{
+          type: 'location', latitude: 31.2, longitude: 121.5,
+          captured_at: '2026-09-13T00:00:00Z',
+        }],
+      },
+    }),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].text, '我在这里')
+  assert.equal(calls[0].attachments.length, 1)
+})
+
 test('media attachments fail closed when the resolved provider declares unsupported', async t => {
   const base = await startHarness(t)
   const response = await fetch(`${base}/v1/chat`, {
@@ -284,7 +319,7 @@ test('provider profiles are the attachment capability truth source', () => {
   const claude = createClaudeCliAdapter()
 
   assert.deepEqual(codex.getCapabilities().capabilities.attachments, CODEX_ATTACHMENT_CAPABILITIES)
-  assert.deepEqual(claude.getCapabilities().capabilities.attachments, UNSUPPORTED_ATTACHMENT_CAPABILITIES)
+  assert.deepEqual(claude.getCapabilities().capabilities.attachments, GLOBAL_CHAT_ATTACHMENT_CAPABILITIES)
 })
 
 function fakeEngineeringMemoryService(calls) {

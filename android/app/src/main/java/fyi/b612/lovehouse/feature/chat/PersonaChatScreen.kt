@@ -128,7 +128,6 @@ import fyi.b612.lovehouse.core.capability.CapabilityAvailability
 import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityId
 import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityRegistry
 import fyi.b612.lovehouse.core.capability.LoveHouseCapabilityState
-import fyi.b612.lovehouse.core.capability.ProviderConsumption
 import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.core.capability.OneShotLocationProvider
 import fyi.b612.lovehouse.feature.settings.ToolAvailability
@@ -199,9 +198,8 @@ internal fun composerUnavailableActions(
     )
     attachmentActions.forEach { (action, capabilityId) ->
         val capability = baseCapabilities?.capability(capabilityId)
-        val providerSupport = capability?.providerConsumption?.get(runtime.personaId)
-        if (!runtime.attachmentsEnabled || providerSupport == ProviderConsumption.Unsupported) {
-            put(action, "${runtime.personaId.replaceFirstChar(Char::uppercase)} Runtime 当前未启用附件")
+        if (capability != null && capability.availability != CapabilityAvailability.Available) {
+            put(action, capability.unavailableReason ?: "${capability.label}当前不可用")
         }
     }
     if (!runtime.toolCenterEnabled) {
@@ -397,6 +395,11 @@ fun ChatShellScreen(
     val isCodexRuntime = threadId == "agent-codex"
     val isClaudeRuntime = threadId == ClaudeRuntime.threadId
     val isRuntimeThread = isCodexRuntime || isClaudeRuntime
+    val runtimeConfig = when {
+        isClaudeRuntime -> ClaudeRuntime
+        isCodexRuntime -> CodexRuntime
+        else -> null
+    }
     val baseCapabilityState by baseCapabilities.state.collectAsState()
     val unavailableComposerActions = composerUnavailableActions(
         if (isClaudeRuntime) ClaudeRuntime else CodexRuntime,
@@ -408,7 +411,7 @@ fun ChatShellScreen(
         else -> "Runtime 尚未接入"
     }
     var input by remember { mutableStateOf("") }
-    var pendingAttachments by remember(threadId) { mutableStateOf<List<ChatAttachment>>(emptyList()) }
+    var attachmentDraft by remember(threadId) { mutableStateOf(ChatAttachmentDraft()) }
     var uploadingAttachments by remember(threadId) { mutableStateOf(false) }
     var requestedToolIds by remember(threadId) { mutableStateOf<Set<String>>(emptySet()) }
     var sending by remember { mutableStateOf(false) }
@@ -429,13 +432,14 @@ fun ChatShellScreen(
         actionNotice = "正在获取一次当前位置…"
         locationReader.request { result ->
             result.snapshot?.let { snapshot ->
-                pendingAttachments = pendingAttachments.filterNot { it is ChatLocationAttachment } +
+                attachmentDraft = attachmentDraft.replaceLocation(
                     ChatLocationAttachment(
                         latitude = snapshot.latitude,
                         longitude = snapshot.longitude,
                         accuracyMeters = snapshot.accuracyMeters,
                         capturedAtEpochMillis = snapshot.capturedAtEpochMillis,
-                    )
+                    ),
+                )
             }
             actionNotice = result.message.takeIf { result.snapshot == null }
         }
@@ -448,7 +452,7 @@ fun ChatShellScreen(
             uris.forEach { runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
             runCatching { mediaAttachments.importLocal(uris, "photo") }
                 .onSuccess { imported ->
-                    pendingAttachments = pendingAttachments + imported
+                    attachmentDraft = attachmentDraft.add(imported)
                     actionNotice = "${imported.size} 张照片已保存为本地草稿"
                 }
                 .onFailure { actionNotice = it.message ?: "照片导入失败" }
@@ -462,7 +466,7 @@ fun ChatShellScreen(
             uris.forEach { runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
             runCatching { mediaAttachments.importLocal(uris, "file") }
                 .onSuccess { imported ->
-                    pendingAttachments = pendingAttachments + imported
+                    attachmentDraft = attachmentDraft.add(imported)
                     actionNotice = "${imported.size} 个文件已保存为本地草稿"
                 }
                 .onFailure { actionNotice = it.message ?: "文件导入失败" }
@@ -500,7 +504,7 @@ fun ChatShellScreen(
     ChatNavigationBarTint(visualContext)
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
-        if (sending || uploadingAttachments || (outgoing.isBlank() && pendingAttachments.isEmpty())) return@submit
+        if (sending || uploadingAttachments || (outgoing.isBlank() && attachmentDraft.attachments.isEmpty())) return@submit
         val toolsForTurn = if (isCodexRuntime) {
             resolveRequestedToolIds(
                 message = outgoing,
@@ -510,29 +514,30 @@ fun ChatShellScreen(
         } else {
             emptySet()
         }
-        val localAttachmentsForTurn = pendingAttachments
+        val localAttachmentsForTurn = attachmentDraft.attachments
         requestedToolIds = emptySet()
-        pendingAttachments = emptyList()
+        attachmentDraft = attachmentDraft.clear()
         input = ""
         if (!isRuntimeThread) {
-            if (localAttachmentsForTurn.isNotEmpty()) {
-                pendingAttachments = localAttachmentsForTurn
-                input = outgoing
-                actionNotice = "当前窗口尚未接入真实附件 transport，未发送"
-                return@submit
-            }
-            store.sendMessage(threadId, outgoing)
+            runCatching { store.sendMessage(threadId, outgoing, localAttachmentsForTurn) }
+                .onFailure { error ->
+                    attachmentDraft = ChatAttachmentDraft(localAttachmentsForTurn)
+                    input = outgoing
+                    actionNotice = error.message ?: "本地消息保存失败；附件草稿已保留"
+                }
         } else {
-            if (isClaudeRuntime && localAttachmentsForTurn.isNotEmpty()) {
-                pendingAttachments = localAttachmentsForTurn
+            val rejection = runtimeConfig?.attachmentCapabilities
+                ?.rejectionReason(outgoing, localAttachmentsForTurn)
+            if (rejection != null) {
+                attachmentDraft = ChatAttachmentDraft(localAttachmentsForTurn)
                 input = outgoing
-                actionNotice = "Claude Runtime 当前未启用附件"
+                actionNotice = rejection
                 return@submit
             }
             sending = true
             chatScope.launch {
                 try {
-                    val attachmentsForTurn = if (isCodexRuntime) {
+                    val attachmentsForTurn = if (runtimeConfig?.attachmentsEnabled == true) {
                         try {
                             mediaAttachments.makeEphemeral(localAttachmentsForTurn) { progress ->
                                 withContext(Dispatchers.Main.immediate) {
@@ -540,7 +545,7 @@ fun ChatShellScreen(
                                 }
                             }
                         } catch (error: Exception) {
-                            pendingAttachments = localAttachmentsForTurn
+                            attachmentDraft = ChatAttachmentDraft(localAttachmentsForTurn)
                             requestedToolIds = toolsForTurn
                             actionNotice = error.message ?: "媒体 transport 尚不可用"
                             return@launch
@@ -554,7 +559,7 @@ fun ChatShellScreen(
                         "canonical_turn_send attachments=${attachmentsForTurn.size} tools=${toolsForTurn.size}",
                     )
                     val result = if (isClaudeRuntime) {
-                        store.sendClaudeMessage(outgoing) { }
+                        store.sendClaudeMessage(outgoing, attachmentsForTurn) { }
                     } else {
                         store.sendCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { }
                     }
@@ -605,7 +610,11 @@ fun ChatShellScreen(
         ChatAtmosphere(visualContext)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             PersonaTopBar(thread, onBack = onBack, onMore = {
-                if (thread.kind == ChatThreadKind.TemporaryTask) openWorkflowTaskId = thread.taskId ?: "mock-running-001" else panel = PersonaPanel.Detail
+                if (thread.kind == ChatThreadKind.TemporaryTask && thread.taskId != null) {
+                    openWorkflowTaskId = thread.taskId
+                } else {
+                    panel = PersonaPanel.Detail
+                }
             })
             Box(
                 Modifier.weight(1f).fillMaxWidth().clickable(
@@ -681,10 +690,10 @@ fun ChatShellScreen(
                 forwardingIds = selectedMessages; panel = PersonaPanel.ForwardTarget
             } else PersonaComposer(
                 value = input,
-                attachments = pendingAttachments,
+                attachments = attachmentDraft.attachments,
                 visualContext = visualContext,
                 onValueChange = { input = it },
-                onRemoveAttachment = { target -> pendingAttachments = pendingAttachments - target },
+                onRemoveAttachment = { target -> attachmentDraft = attachmentDraft.remove(target) },
                 onSend = { submitMessage(input) },
                 onToolAction = { action ->
                     val unavailableReason = unavailableComposerActions[action]

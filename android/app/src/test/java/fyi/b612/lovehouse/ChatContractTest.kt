@@ -25,6 +25,8 @@ import fyi.b612.lovehouse.feature.chat.attachmentSegments
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentSegmentKind
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentAvailability
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentLifecycle
+import fyi.b612.lovehouse.feature.chat.ChatAttachmentDraft
+import fyi.b612.lovehouse.feature.chat.AttachmentCapabilities
 import fyi.b612.lovehouse.feature.chat.ChatProcessEvent
 import fyi.b612.lovehouse.feature.chat.ChatProcessKind
 import fyi.b612.lovehouse.feature.chat.ChatProcessStatus
@@ -34,8 +36,10 @@ import fyi.b612.lovehouse.feature.chat.chatMessageSpacing
 import fyi.b612.lovehouse.feature.chat.mergeProcessEvent
 import fyi.b612.lovehouse.feature.chat.mergeThinkingText
 import fyi.b612.lovehouse.feature.chat.resolveRequestedToolIds
+import fyi.b612.lovehouse.feature.chat.rejectionReason
 import fyi.b612.lovehouse.feature.chat.transitionVoiceComposer
 import fyi.b612.lovehouse.feature.chat.STT_UNAVAILABLE_MESSAGE
+import fyi.b612.lovehouse.feature.chat.RemoteTaskMocks
 import fyi.b612.lovehouse.feature.settings.ToolAvailability
 import fyi.b612.lovehouse.feature.settings.ToolCapability
 import fyi.b612.lovehouse.feature.settings.ToolCapabilityKind
@@ -58,6 +62,45 @@ class ChatContractTest {
         override fun upsert(message: LocalChatMessage) {
             rows[message.localMessageId] = message
         }
+    }
+
+    @Test
+    fun `virtual window saves canonical attachment message without a runtime`() {
+        val repository = DurableLocalMessages()
+        val store = ChatSessionStore(messageRepository = repository, now = { 42L })
+        val attachment = ChatLocationAttachment(
+            latitude = 31.2,
+            longitude = 121.5,
+            accuracyMeters = 8f,
+            capturedAtEpochMillis = 41L,
+            attachmentId = "virtual-location",
+        )
+
+        store.sendMessage("persona-gpt", "", listOf(attachment))
+
+        val saved = repository.messages("persona-gpt").single()
+        assertEquals("virtual-location", saved.attachments.single().attachmentId)
+        assertEquals(ChatAttachmentLifecycle.LOCAL, saved.attachments.single().lifecycle)
+        assertEquals(ChatAttachmentAvailability.AVAILABLE, saved.attachments.single().availability)
+    }
+
+    @Test
+    fun `provider switching only changes send eligibility and never attachment identity`() {
+        val attachment = ChatLocationAttachment(
+            latitude = 31.2,
+            longitude = 121.5,
+            accuracyMeters = 8f,
+            capturedAtEpochMillis = 41L,
+            attachmentId = "stable-location",
+        )
+        val draft = ChatAttachmentDraft().add(listOf(attachment))
+
+        assertNotNull(AttachmentCapabilities.Unsupported.rejectionReason("", draft.attachments))
+        assertNull(ClaudeRuntime.attachmentCapabilities.rejectionReason("", draft.attachments))
+        assertNull(fyi.b612.lovehouse.feature.chat.CodexRuntime.attachmentCapabilities.rejectionReason("", draft.attachments))
+        assertEquals("stable-location", draft.attachments.single().attachmentId)
+        assertEquals(ChatAttachmentLifecycle.LOCAL, draft.attachments.single().lifecycle)
+        assertEquals(ChatAttachmentAvailability.AVAILABLE, draft.attachments.single().availability)
     }
 
     @Test
@@ -115,30 +158,36 @@ class ChatContractTest {
         }
         val store = ChatSessionStore(client, repository)
 
-        assertTrue(store.sendClaudeMessage("continue") {}.isSuccess)
+        val attachment = ChatLocationAttachment(31.2, 121.5, 8f, 1_757_257_600_000L)
+        assertTrue(store.sendClaudeMessage("continue", listOf(attachment)) {}.isSuccess)
 
         assertEquals(ClaudeRuntime, observedConfig)
         assertEquals(2, repository.messages(ClaudeRuntime.threadId).size)
         assertEquals("Claude reply", repository.messages(ClaudeRuntime.threadId).last().content)
-        assertTrue(repository.messages(ClaudeRuntime.threadId).all { it.attachments.isEmpty() })
+        assertEquals(listOf(attachment), repository.messages(ClaudeRuntime.threadId).first().attachments)
     }
 
     @Test
-    fun `claude payload inherits fixed window and exposes neither tools nor attachments`() {
-        val payload = buildChatPayload(ClaudeRuntime, "hello", emptySet(), emptyList())
+    fun `claude payload inherits fixed window and exposes shared attachments without tools`() {
+        val payload = buildChatPayload(
+            ClaudeRuntime,
+            "hello",
+            emptySet(),
+            listOf(ChatLocationAttachment(31.2, 121.5, 8f, 1_757_257_600_000L)),
+        )
 
         assertTrue(payload.contains("\"persona_id\":\"claude\""))
         assertTrue(payload.contains("\"thread_id\":\"${ClaudeRuntime.threadId}\""))
         assertTrue(payload.contains("\"window_id\":\"${ClaudeRuntime.windowId}\""))
         assertFalse(payload.contains("allowed_tool_ids"))
-        assertFalse(payload.contains("attachments"))
+        assertTrue(payload.contains("attachments"))
     }
 
     @Test
-    fun `claude keeps composer actions visible but unavailable without changing codex`() {
+    fun `claude shares attachment actions while Tool Center stays unavailable`() {
         val claudeUnavailable = composerUnavailableActions(ClaudeRuntime)
 
-        assertEquals(setOf("相机", "照片", "文件", "定位", "工具"), claudeUnavailable.keys)
+        assertEquals(setOf("工具"), claudeUnavailable.keys)
         assertTrue(claudeUnavailable.values.all { it.contains("当前未启用") })
         assertTrue(composerUnavailableActions(fyi.b612.lovehouse.feature.chat.CodexRuntime).isEmpty())
     }
@@ -611,6 +660,8 @@ class ChatContractTest {
     @Test
     fun `merged forward creates an openable chat record card`() {
         val store = ChatSessionStore()
+        store.sendMessage("persona-gpt", "第一条")
+        store.sendMessage("persona-gpt", "第二条")
         val sourceIds = store.messages("persona-gpt").take(2).map { it.messageId }.toSet()
 
         store.forward("persona-gpt", sourceIds, "living-room", merged = true)
@@ -622,7 +673,10 @@ class ChatContractTest {
 
     @Test
     fun `workflow advance completes current node and activates the next node`() {
-        val store = ChatSessionStore()
+        val store = ChatSessionStore(
+            initialTasks = RemoteTaskMocks.scenarios,
+            initialThreads = MockChatRepository.mockThreads,
+        )
         val before = store.task("mock-running-001")!!
         val currentIndex = before.workflow.indexOfFirst { it.status.name == "Current" }
 
@@ -636,7 +690,7 @@ class ChatContractTest {
 
     @Test
     fun `workflow forward shares one compact task card without copying logs`() {
-        val store = ChatSessionStore()
+        val store = ChatSessionStore(initialTasks = RemoteTaskMocks.scenarios)
         val before = store.messages("living-room").size
 
         store.forwardWorkflow("mock-running-001", "living-room")

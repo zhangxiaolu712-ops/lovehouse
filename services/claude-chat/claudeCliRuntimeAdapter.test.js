@@ -67,6 +67,70 @@ test('Claude CLI implements the shared runtime contract without requiring MCP', 
   assert.equal(adapter.getQuota().status, 'unknown')
 })
 
+test('Claude consumer materializes every shared attachment and enables only Read for local files', async () => {
+  const calls = []
+  const received = []
+  let cleanupCalls = 0
+  const attachments = [
+    { type: 'photo', read_url: 'https://media.example/photo', name: 'one.jpg' },
+    { type: 'file', read_url: 'https://media.example/file', name: 'notes.txt' },
+    { type: 'location', latitude: 31.2, longitude: 121.5, captured_at: '2026-09-13T00:00:00Z' },
+  ]
+  const adapter = new ClaudeCliRuntimeAdapter({
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn(successEvents(), { calls }),
+    attachmentMaterializer: {
+      async materialize(input) {
+        received.push(input)
+        return {
+          items: [
+            { type: 'photo', name: 'one.jpg', mime_type: 'image/jpeg', size: 3, local_path: '/tmp/media/one.jpg' },
+            { type: 'file', name: 'notes.txt', mime_type: 'text/plain', size: 5, local_path: '/tmp/media/notes.txt' },
+            attachments[2],
+          ],
+          async cleanup() { cleanupCalls += 1 },
+        }
+      },
+    },
+  })
+
+  await adapter.streamEvents({
+    message: '一起看', attachments, history: [], onRuntimeBinding() {}, onText() {}, onEvent() {},
+  })
+
+  assert.deepEqual(received, [attachments])
+  assert.equal(cleanupCalls, 1)
+  const args = calls[0].args
+  const prompt = args[args.indexOf('-p') + 1]
+  assert.match(prompt, /\/tmp\/media\/one\.jpg/)
+  assert.match(prompt, /\/tmp\/media\/notes\.txt/)
+  assert.match(prompt, /latitude=31\.2, longitude=121\.5/)
+  assert.equal(args[args.indexOf('--tools') + 1], 'Read')
+  assert.equal(args[args.indexOf('--allowedTools') + 1], 'Read')
+})
+
+test('Claude consumer always cleans materialized attachments after runtime failure', async () => {
+  let cleanupCalls = 0
+  const adapter = new ClaudeCliRuntimeAdapter({
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn([], { code: 1, stderr: 'connection reset' }),
+    attachmentMaterializer: {
+      async materialize() {
+        return {
+          items: [{ type: 'file', name: 'x.txt', mime_type: 'text/plain', size: 1, local_path: '/tmp/media/x.txt' }],
+          async cleanup() { cleanupCalls += 1 },
+        }
+      },
+    },
+  })
+
+  await assert.rejects(adapter.streamEvents({
+    message: '读文件', attachments: [{ type: 'file' }], history: [],
+    onRuntimeBinding() {}, onText() {}, onEvent() {},
+  }), error => error.code === 'STREAM_INTERRUPTED')
+  assert.equal(cleanupCalls, 1)
+})
+
 test('model injection is explicit and configurable without relying on user settings', () => {
   const withModel = new ClaudeCliRuntimeAdapter({
     model: 'claude-opus-4-6', createSessionId: () => SESSION_ID,

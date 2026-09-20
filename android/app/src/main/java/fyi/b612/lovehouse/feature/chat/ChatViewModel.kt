@@ -11,7 +11,7 @@ class ChatViewModel(
     fun refresh() = repository.refresh()
 
     companion object {
-        fun factory(repository: ChatRepository = MockChatRepository()): ViewModelProvider.Factory =
+        fun factory(repository: ChatRepository = LoveHouseChatRepository()): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
