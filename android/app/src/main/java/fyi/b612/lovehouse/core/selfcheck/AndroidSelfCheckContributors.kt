@@ -45,22 +45,25 @@ class AndroidCapabilityReadinessProbe(
     private val appContext = context.applicationContext
 
     override fun readiness(id: LoveHouseCapabilityId): CapabilityReadiness? = when (id) {
-        LoveHouseCapabilityId.DevicePhotoPicker -> intentReadiness(photoPickerIntent(), "系统照片选择器可解析")
+        LoveHouseCapabilityId.DevicePhotoPicker -> intentReadiness(
+            photoPickerIntent(),
+            "Production 照片选择 contract 已接线",
+        )
         LoveHouseCapabilityId.DeviceFilePicker -> intentReadiness(
             Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),
-            "系统文件选择器可解析",
+            "Production picker contract 已接线（OPEN_DOCUMENT + OPENABLE + MIME）",
         )
         LoveHouseCapabilityId.DeviceCamera -> intentReadiness(
             Intent(MediaStore.ACTION_IMAGE_CAPTURE),
-            "系统相机 Intent 可解析",
+            "Production 相机 contract 已接线",
         )
         LoveHouseCapabilityId.DeviceShare -> intentReadiness(
             Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "LoveHouse"),
-            "系统分享 Intent 可解析",
+            "Production 系统分享 contract 已接线",
         )
         LoveHouseCapabilityId.DeviceDeepLink -> intentReadiness(
             Intent(Intent.ACTION_VIEW, Uri.parse("lovehouse://settings"), appContext, MainActivity::class.java),
-            "LoveHouse Deep Link handler 可解析",
+            "Production Deep Link contract 已接线",
         )
         LoveHouseCapabilityId.DeviceNotifications -> notificationReadiness()
         LoveHouseCapabilityId.DeviceContext -> runCatching { deviceContextProvider.getCurrentDeviceContext() }
@@ -78,11 +81,10 @@ class AndroidCapabilityReadinessProbe(
     }
 
     private fun intentReadiness(intent: Intent, readyReason: String): CapabilityReadiness =
-        if (intent.resolveActivity(appContext.packageManager) != null) {
-            CapabilityReadiness(SelfCheckStatus.PASS, readyReason)
-        } else {
-            CapabilityReadiness(SelfCheckStatus.FAIL, "Production intent 当前无法解析")
-        }
+        staticIntentReadiness(
+            isResolved = intent.resolveActivity(appContext.packageManager) != null,
+            readyReason = readyReason,
+        )
 
     private fun notificationReadiness(): CapabilityReadiness {
         if (!NotificationManagerCompat.from(appContext).areNotificationsEnabled()) {
@@ -95,6 +97,18 @@ class AndroidCapabilityReadinessProbe(
             CapabilityReadiness(SelfCheckStatus.PASS, "通知服务与当前授权状态可读取")
         }
     }
+}
+
+internal fun staticIntentReadiness(
+    isResolved: Boolean,
+    readyReason: String,
+): CapabilityReadiness = if (isResolved) {
+    CapabilityReadiness(SelfCheckStatus.PASS, "$readyReason；静态 handler probe 可解析")
+} else {
+    CapabilityReadiness(
+        status = SelfCheckStatus.WARN,
+        reason = "$readyReason；静态 handler probe 未解析，但不等同于运行时不可用",
+    )
 }
 
 class NativeCapabilitySelfCheckContributor(

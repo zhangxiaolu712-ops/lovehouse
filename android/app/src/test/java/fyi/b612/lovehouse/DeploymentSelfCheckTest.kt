@@ -21,6 +21,7 @@ import fyi.b612.lovehouse.core.selfcheck.SelfCheckGroup
 import fyi.b612.lovehouse.core.selfcheck.SelfCheckResult
 import fyi.b612.lovehouse.core.selfcheck.SelfCheckStatus
 import fyi.b612.lovehouse.core.selfcheck.sanitizeSelfCheckReport
+import fyi.b612.lovehouse.core.selfcheck.staticIntentReadiness
 import fyi.b612.lovehouse.core.selfcheck.summarizeSelfChecks
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -83,6 +84,40 @@ class DeploymentSelfCheckTest {
 
         assertEquals(SelfCheckStatus.WARN, results.single { it.id == "capability.device.location" }.status)
         assertEquals(SelfCheckStatus.WARN, results.single { it.id == "capability.attachment.location" }.status)
+    }
+
+    @Test
+    fun `unresolved static intent probe does not fail a registered production capability`() = runBlocking {
+        val staticProbe = staticIntentReadiness(
+            isResolved = false,
+            readyReason = "Production picker contract 已接线（OPEN_DOCUMENT + OPENABLE + MIME）",
+        )
+        val results = NativeCapabilitySelfCheckContributor(
+            registry = FixedCapabilityRegistry(completeState()),
+            readinessProbe = CapabilityReadinessProbe { id ->
+                if (id == LoveHouseCapabilityId.DeviceFilePicker) staticProbe else null
+            },
+        ).checks()
+
+        val filePicker = results.single { it.id == "capability.device.file_picker" }
+        assertEquals(SelfCheckStatus.WARN, filePicker.status)
+        assertFalse(filePicker.status == SelfCheckStatus.FAIL)
+        assertTrue(filePicker.reason.contains("静态 handler probe 未解析"))
+        assertTrue(filePicker.reason.contains("不等同于运行时不可用"))
+    }
+
+    @Test
+    fun `static intent probe remains informational for equivalent native capabilities`() {
+        listOf(
+            "Production 照片选择 contract 已接线",
+            "Production 相机 contract 已接线",
+            "Production 系统分享 contract 已接线",
+            "Production Deep Link contract 已接线",
+        ).forEach { reason ->
+            val readiness = staticIntentReadiness(isResolved = false, readyReason = reason)
+            assertEquals(SelfCheckStatus.WARN, readiness.status)
+            assertFalse(readiness.status == SelfCheckStatus.FAIL)
+        }
     }
 
     @Test
