@@ -68,7 +68,7 @@ import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
-import fyi.b612.lovehouse.feature.chat.ChatPersona
+import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
 
 private val Ink = LoveHouseGlass.Ink
 private val Muted = LoveHouseGlass.MutedInk
@@ -129,7 +129,7 @@ fun SettingsScreen(
     toolConnectionProbe: ToolConnectionProbe,
     appAccount: AppAccountRepository,
     mcpConnections: McpConnectionRepository,
-    personas: List<ChatPersona>,
+    personaRuntimeSource: PersonaRuntimeSource,
     selfCheck: DeploymentSelfCheckRunner,
     onOpenConnectionControl: () -> Unit,
     modifier: Modifier = Modifier,
@@ -160,7 +160,7 @@ fun SettingsScreen(
                 toolConnectionProbe = toolConnectionProbe,
                 appAccount = appAccount,
                 mcpConnections = mcpConnections,
-                personas = personas,
+                personaRuntimeSource = personaRuntimeSource,
                 selfCheck = selfCheck,
                 onBack = { selected = null },
                 modifier = modifier.statusBarsPadding().navigationBarsPadding(),
@@ -392,7 +392,7 @@ private fun SettingsDetail(
     toolConnectionProbe: ToolConnectionProbe,
     appAccount: AppAccountRepository,
     mcpConnections: McpConnectionRepository,
-    personas: List<ChatPersona>,
+    personaRuntimeSource: PersonaRuntimeSource,
     selfCheck: DeploymentSelfCheckRunner,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -433,7 +433,7 @@ private fun SettingsDetail(
                             connections = toolConnections,
                             probe = toolConnectionProbe,
                             mcpRepository = mcpConnections,
-                            personas = personas,
+                            personaRuntimeSource = personaRuntimeSource,
                         )
                     }
                 }

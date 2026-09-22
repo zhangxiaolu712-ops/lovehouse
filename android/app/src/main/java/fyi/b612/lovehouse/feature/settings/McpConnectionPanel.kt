@@ -3,7 +3,9 @@ package fyi.b612.lovehouse.feature.settings
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -36,7 +38,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
-import fyi.b612.lovehouse.feature.chat.ChatPersona
+import fyi.b612.lovehouse.feature.chat.PersonaProfile
+import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
 import kotlinx.coroutines.launch
 
 @Composable
@@ -45,11 +48,14 @@ internal fun McpConnectionsPanel(
     showAddForm: Boolean,
     initialConnectionId: String? = null,
     callbackStatus: String? = null,
-    personas: List<ChatPersona> = emptyList(),
+    personaRuntimeSource: PersonaRuntimeSource,
     onOpenAuthorization: (String) -> Unit,
 ) {
     var connections by remember { mutableStateOf<List<McpBackendConnection>>(emptyList()) }
+    var services by remember { mutableStateOf<List<McpToolService>>(emptyList()) }
+    var connectionsByService by remember { mutableStateOf<Map<String, List<McpBackendConnection>>>(emptyMap()) }
     var registry by remember { mutableStateOf<List<McpBackendConnection>>(emptyList()) }
+    var personas by remember { mutableStateOf<List<PersonaProfile>>(emptyList()) }
     var legacyConnections by remember { mutableStateOf<List<LegacyMcpConnection>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
@@ -59,6 +65,7 @@ internal fun McpConnectionsPanel(
     var pendingDelete by remember { mutableStateOf<McpBackendConnection?>(null) }
     var deletingId by remember { mutableStateOf<String?>(null) }
     var bindingTarget by remember { mutableStateOf<McpBackendConnection?>(null) }
+    var expandedServiceId by remember { mutableStateOf<String?>(null) }
     var pendingClaim by remember { mutableStateOf<LegacyMcpConnection?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -68,10 +75,20 @@ internal fun McpConnectionsPanel(
             val focused = initialConnectionId?.takeIf(String::isNotBlank)?.let { repository.connection(it) }
             val listed = repository.connections()
             val registered = repository.registry()
-            val legacy = runCatching { repository.legacyConnections() }.getOrElse { emptyList() }
             connections = mergeConnectionSources(listed + listOfNotNull(focused), registered)
             registry = registered
+            val loadedServices = repository.toolServices()
+            services = loadedServices
+            val grouped = loadedServices.associate { service ->
+                service.id to serviceConnectionCards(service.id, repository.serviceConnections(service.id), registered)
+            }
+            val loadedPersonas = runCatching { personaRuntimeSource.profiles() }
+                .getOrElse { message = "无法读取 App Backend Persona Profile：${it.message ?: "请检查 App Account"}"; emptyList() }
+            val legacy = runCatching { repository.legacyConnections() }.getOrElse { emptyList() }
+            connectionsByService = grouped
+            personas = loadedPersonas
             legacyConnections = legacy
+            if (expandedServiceId == null) expandedServiceId = loadedServices.firstOrNull()?.id
             if (callbackStatus == "connected") {
                 message = focused?.let { "${it.displayName()} 已连接 · ${it.toolCount} 个工具" }
                     ?: "OAuth 授权已完成，连接状态已刷新"
@@ -80,14 +97,14 @@ internal fun McpConnectionsPanel(
         loading = false
     }
 
-    ProductPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("已添加 MCP", color = LoveHouseGlass.Ink, fontSize = 13.sp)
         Text(
-            if (loading) "正在读取 App Backend…" else "${connections.size} 个连接 · ${registry.sumOf { it.toolCount }} 个已注册工具",
+            if (loading) "正在读取 App Backend…" else "${services.size} 个服务 · ${connections.size} 个连接 · ${registry.sumOf { it.toolCount }} 个已注册工具",
             color = LoveHouseGlass.MutedInk,
             fontSize = 9.sp,
         )
-        if (!loading && connections.isEmpty()) {
+        if (!loading && services.isEmpty() && connections.isEmpty()) {
             Text("还没有添加 MCP Server", color = LoveHouseGlass.MutedInk, fontSize = 9.sp, modifier = Modifier.padding(top = 8.dp))
         }
         if (legacyConnections.isNotEmpty()) {
@@ -103,41 +120,47 @@ internal fun McpConnectionsPanel(
                 }
             }
         }
-        connections.forEach { connection ->
-            McpConnectionRow(
-                connection = connection,
-                registered = connection.id in registry.mapTo(hashSetOf()) { it.id },
-                deleting = deletingId == connection.id,
-                onDelete = { pendingDelete = connection },
-            )
-            if (connection.status == McpBackendConnectionStatus.Connected) {
-                val boundNames = connection.boundIdentityIds.map { identityId ->
-                    personas.firstOrNull { it.personaId == identityId }?.name ?: identityId
-                }
-                Text(
-                    if (boundNames.isEmpty()) "尚未绑定身份" else "身份 · ${boundNames.joinToString(" · ")}",
-                    color = LoveHouseGlass.MutedInk,
-                    fontSize = 8.5.sp,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        enabled = personas.isNotEmpty() && !connection.toolServiceId.isNullOrBlank(),
-                        onClick = { bindingTarget = connection },
-                    ) { Text("绑定身份", fontSize = 9.sp) }
-                    connection.boundIdentityIds.firstOrNull()?.let { identityId ->
-                        TextButton(onClick = {
-                            val serviceId = connection.toolServiceId
-                            if (serviceId.isNullOrBlank()) {
-                                message = "App Backend 未返回 tool_service_id，无法解绑身份"
-                            } else {
-                                scope.launch {
-                                    runCatching { repository.unbindIdentity(serviceId, identityId) }
-                                        .onSuccess { message = "身份已解绑"; reload++ }
-                                        .onFailure { message = it.message ?: "身份解绑失败" }
-                                }
-                            }
-                        }) { Text("解绑", fontSize = 9.sp) }
+        services.forEach { service ->
+            McpServiceCard(
+                service = service,
+                connections = connectionsByService[service.id].orEmpty(),
+                personas = personas,
+                registeredIds = registry.mapTo(hashSetOf()) { it.id },
+                expanded = expandedServiceId == service.id,
+                onExpand = { expandedServiceId = if (expandedServiceId == service.id) null else service.id },
+                deletingId = deletingId,
+                onDelete = { pendingDelete = it },
+                onBind = { bindingTarget = it },
+                onUnbind = { connection, identityId ->
+                    scope.launch {
+                        runCatching { repository.unbindIdentity(service.id, identityId) }
+                            .onSuccess { message = "${connection.displayName()} 已解除身份绑定"; reload++ }
+                            .onFailure { message = it.message ?: "身份解绑失败" }
                     }
+                },
+            )
+        }
+        if (!loading && services.isEmpty() && connections.isNotEmpty()) {
+            Text("Tool Service 数据尚未返回；以下连接仍按原始记录展示", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
+            connections.forEach { connection ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp),
+                    color = LoveHouseGlass.Background, border = BorderStroke(1.dp, LoveHouseGlass.Border),
+                ) {
+                    McpConnectionRow(
+                        connection = connection, personas = personas,
+                        registered = registry.any { it.id == connection.id }, deleting = deletingId == connection.id,
+                        onDelete = { pendingDelete = connection }, onBind = { bindingTarget = connection },
+                        onUnbind = { personaId ->
+                            val serviceId = connection.toolServiceId
+                            if (serviceId == null) message = "App Backend 未返回 tool_service_id，无法解绑"
+                            else scope.launch {
+                                runCatching { repository.unbindIdentity(serviceId, personaId) }
+                                    .onSuccess { message = "身份已解绑"; reload++ }
+                                    .onFailure { message = it.message ?: "身份解绑失败" }
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -212,7 +235,10 @@ internal fun McpConnectionsPanel(
             title = { Text("绑定身份") },
             text = {
                 Column {
+                    if (personas.isEmpty()) Text("当前 App Account 尚无可绑定的 Persona Profile", color = LoveHouseGlass.MutedInk, fontSize = 10.sp)
                     personas.forEach { persona ->
+                        val assignedElsewhere = connectionsByService[connection.toolServiceId].orEmpty()
+                            .any { it.id != connection.id && persona.personaId in it.boundIdentityIds }
                         TextButton(
                             enabled = persona.personaId !in connection.boundIdentityIds,
                             onClick = {
@@ -223,12 +249,12 @@ internal fun McpConnectionsPanel(
                                 } else {
                                     scope.launch {
                                         runCatching { repository.bindIdentity(serviceId, persona.personaId, connection.id) }
-                                            .onSuccess { message = "已绑定 ${persona.name}"; reload++ }
+                                            .onSuccess { message = "已绑定 ${persona.displayName}"; reload++ }
                                             .onFailure { message = it.message ?: "身份绑定失败" }
                                     }
                                 }
                             },
-                        ) { Text("${persona.name} · ${persona.personaId}") }
+                        ) { Text("${persona.displayName} · ${persona.personaId}${if (assignedElsewhere) " · 更换到此连接" else ""}") }
                     }
                 }
             },
@@ -294,32 +320,99 @@ internal fun McpConnectionsPanel(
 }
 
 @Composable
+private fun McpServiceCard(
+    service: McpToolService,
+    connections: List<McpBackendConnection>,
+    personas: List<PersonaProfile>,
+    registeredIds: Set<String>,
+    expanded: Boolean,
+    onExpand: () -> Unit,
+    deletingId: String?,
+    onDelete: (McpBackendConnection) -> Unit,
+    onBind: (McpBackendConnection) -> Unit,
+    onUnbind: (McpBackendConnection, String) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = LoveHouseGlass.Background,
+        border = BorderStroke(1.dp, LoveHouseGlass.Border),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(Modifier.fillMaxWidth().clickable(onClick = onExpand)) {
+                Column(Modifier.weight(1f)) {
+                    Text(service.displayName ?: service.name ?: "MCP Tool Service", color = LoveHouseGlass.Ink, fontSize = 14.sp)
+                    Text("${service.connectionCount} 个账号 · ${service.connectedConnectionCount} 个已连接", color = LoveHouseGlass.MutedInk, fontSize = 11.sp)
+                }
+                Text(if (expanded) "⌃" else "⌄", color = LoveHouseGlass.MutedInk, fontSize = 12.sp)
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    connections.forEach { connection ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color.White.copy(alpha = .24f),
+                            border = BorderStroke(1.dp, LoveHouseGlass.Border.copy(alpha = .5f)),
+                        ) {
+                            McpConnectionRow(
+                                connection = connection,
+                                personas = personas,
+                                registered = connection.id in registeredIds,
+                                deleting = deletingId == connection.id,
+                                onDelete = { onDelete(connection) },
+                                onBind = { onBind(connection) },
+                                onUnbind = { onUnbind(connection, it) },
+                            )
+                        }
+                    }
+                    if (connections.isEmpty()) Text("此服务暂无账号连接", color = LoveHouseGlass.MutedInk, fontSize = 10.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun McpConnectionRow(
     connection: McpBackendConnection,
+    personas: List<PersonaProfile>,
     registered: Boolean,
     deleting: Boolean,
     onDelete: () -> Unit,
+    onBind: () -> Unit,
+    onUnbind: (String) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(connection.displayName(), color = LoveHouseGlass.Ink, fontSize = 11.sp)
             Text(connection.status.label(), color = connection.status.color(), fontSize = 9.sp)
         }
-        if (connection.serverUrl.isNotBlank()) Text(connection.serverUrl, color = LoveHouseGlass.MutedInk, fontSize = 8.5.sp, maxLines = 1)
+        Text(connection.displayUrl(), color = LoveHouseGlass.MutedInk, fontSize = 8.5.sp)
         Text(
-            "${connection.toolCount} 个工具${if (registered) " · 已进入 App Backend registry" else ""}",
+            "${connection.toolCount} 个工具${if (registered) " · 已进入 App Backend registry" else ""} · ${if (connection.enabled) "已开启" else "已停用"}",
             color = LoveHouseGlass.MutedInk,
             fontSize = 8.5.sp,
         )
+        if (connection.status == McpBackendConnectionStatus.Connected) {
+            if (connection.boundIdentityIds.isEmpty()) Text("尚未绑定 Persona", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
+            connection.boundIdentityIds.forEach { personaId ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    val name = personaDisplayName(personaId, personas)
+                    Text("Persona · $name", color = LoveHouseGlass.Ink, fontSize = 9.sp)
+                    Text("解绑", Modifier.clickable { onUnbind(personaId) }.padding(3.dp), color = Color(0xFF9B4F55), fontSize = 9.sp)
+                }
+            }
+            Text(
+                if (connection.boundIdentityIds.isEmpty()) "绑定 Persona" else "绑定 / 更换 Persona",
+                Modifier.clickable(enabled = personas.isNotEmpty() && !connection.toolServiceId.isNullOrBlank(), onClick = onBind).padding(3.dp),
+                color = LoveHouseGlass.Ink,
+                fontSize = 9.sp,
+            )
+        }
         connection.errorMessage?.let { Text(it, color = Color(0xFF9B4F55), fontSize = 8.5.sp) }
         if (connection.status.canDelete()) {
-            TextButton(
-                enabled = !deleting,
-                onClick = onDelete,
-                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-            ) {
-                Text(if (deleting) "删除中…" else "删除", color = Color(0xFF9B4F55), fontSize = 9.sp)
-            }
+            Text(if (deleting) "删除中…" else "删除", Modifier.clickable(enabled = !deleting, onClick = onDelete).padding(3.dp), color = Color(0xFF9B4F55), fontSize = 9.sp)
         }
     }
 }
@@ -327,6 +420,7 @@ private fun McpConnectionRow(
 @Composable
 fun McpOAuthResultScreen(
     repository: McpConnectionRepository,
+    personaRuntimeSource: PersonaRuntimeSource,
     connectionId: String,
     callbackStatus: String,
     onBack: () -> Unit,
@@ -350,6 +444,7 @@ fun McpOAuthResultScreen(
         item {
             McpConnectionsPanel(
                 repository = repository,
+                personaRuntimeSource = personaRuntimeSource,
                 showAddForm = true,
                 initialConnectionId = connectionId,
                 callbackStatus = callbackStatus,
@@ -383,7 +478,22 @@ internal fun mergeConnectionSources(
     return byId.values.toList()
 }
 
-private fun McpBackendConnection.displayName(): String = name?.takeIf(String::isNotBlank)
+internal fun serviceConnectionCards(
+    serviceId: String,
+    connections: List<McpBackendConnection>,
+    registry: List<McpBackendConnection>,
+): List<McpBackendConnection> = mergeConnectionSources(
+    connections.filter { it.toolServiceId == serviceId },
+    registry.filter { it.toolServiceId == serviceId },
+)
+
+internal fun personaDisplayName(personaId: String, profiles: List<PersonaProfile>): String =
+    profiles.firstOrNull { it.personaId == personaId }?.displayName ?: personaId
+
+internal fun McpBackendConnection.displayUrl(): String = serverUrl.ifBlank { "App Backend 未返回 MCP URL" }
+
+private fun McpBackendConnection.displayName(): String = displayName?.takeIf(String::isNotBlank)
+    ?: name?.takeIf(String::isNotBlank)
     ?: serverUrl.substringAfter("://").substringBefore('/').takeIf(String::isNotBlank)
     ?: "MCP Server"
 

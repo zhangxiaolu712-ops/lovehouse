@@ -154,7 +154,7 @@ private fun LoveHouseContent(
                 toolConnectionProbe = dependencies.toolConnectionProbe,
                 appAccount = dependencies.appAccount,
                 mcpConnections = dependencies.mcpConnections,
-                personas = chatStore.personas,
+                personaRuntimeSource = dependencies.personaRuntimeSource,
                 selfCheck = dependencies.selfCheck,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
             )
@@ -205,6 +205,7 @@ private fun LoveHouseContent(
         ) { entry ->
             McpOAuthResultScreen(
                 repository = dependencies.mcpConnections,
+                personaRuntimeSource = dependencies.personaRuntimeSource,
                 connectionId = entry.arguments?.getString("connectionId").orEmpty(),
                 callbackStatus = entry.arguments?.getString("status").orEmpty(),
                 onBack = { navController.popBackStack() },

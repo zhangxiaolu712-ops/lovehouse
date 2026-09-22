@@ -1,6 +1,7 @@
 package fyi.b612.lovehouse.feature.settings
 
 import fyi.b612.lovehouse.core.navigation.AppDestination
+import fyi.b612.lovehouse.feature.chat.PersonaProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,6 +14,7 @@ class McpConnectionContractTest {
 
         assertEquals("https://app.b612.fyi/api/mcp/connections", appBackendMcpEndpoint(base, "connections"))
         assertEquals("https://app.b612.fyi/api/mcp/registry", appBackendMcpEndpoint(base, "/registry"))
+        assertEquals("https://app.b612.fyi/api/mcp/tool-services", appBackendMcpEndpoint(base, "tool-services"))
         assertEquals(
             "https://app.b612.fyi/api/mcp/connections/connection%2Fpending",
             mcpConnectionEndpoint(base, "connection/pending"),
@@ -112,5 +114,25 @@ class McpConnectionContractTest {
         assertEquals(1, merged.size)
         assertEquals("LoveHouse Memory", merged.single().name)
         assertEquals(7, merged.single().toolCount)
+    }
+
+    @Test
+    fun `service cards keep connection url tools and persona ownership separate`() {
+        val url = "https://memory.example/owner/mcp?space=shared"
+        val first = McpBackendConnection(
+            id = "connection-a", serverUrl = url, name = "Memory", description = null,
+            status = McpBackendConnectionStatus.Connected, toolCount = 0,
+            toolServiceId = "service-a", boundIdentityIds = listOf("stable-persona"),
+        )
+        val other = first.copy(id = "connection-b", serverUrl = "https://other.example/mcp", toolServiceId = "service-b")
+        val cards = serviceConnectionCards("service-a", listOf(first, other), listOf(first.copy(toolCount = 8), other))
+        val profile = PersonaProfile("stable-persona", "真实人格", null, "", "", 1, false)
+
+        assertEquals(1, cards.size)
+        assertEquals("connection-a", cards.single().id)
+        assertEquals(url, cards.single().displayUrl())
+        assertEquals(8, cards.single().toolCount)
+        assertEquals("真实人格", personaDisplayName(cards.single().boundIdentityIds.single(), listOf(profile)))
+        assertEquals("unknown-persona", personaDisplayName("unknown-persona", listOf(profile)))
     }
 }

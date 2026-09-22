@@ -35,7 +35,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
-import fyi.b612.lovehouse.feature.chat.ChatPersona
+import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,7 +46,7 @@ internal fun SettingsToolCenter(
     connections: ToolConnectionStore,
     probe: ToolConnectionProbe,
     mcpRepository: McpConnectionRepository,
-    personas: List<ChatPersona>,
+    personaRuntimeSource: PersonaRuntimeSource,
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var testResults by remember { mutableStateOf<Map<String, ToolTestResult>>(emptyMap()) }
@@ -145,7 +145,7 @@ internal fun SettingsToolCenter(
             McpConnectionsPanel(
                 repository = mcpRepository,
                 showAddForm = false,
-                personas = personas,
+                personaRuntimeSource = personaRuntimeSource,
                 onOpenAuthorization = { openMcpAuthorization(context, it) },
             )
         }
@@ -153,7 +153,7 @@ internal fun SettingsToolCenter(
         else -> McpConnectionsPanel(
             repository = mcpRepository,
             showAddForm = true,
-            personas = personas,
+            personaRuntimeSource = personaRuntimeSource,
             onOpenAuthorization = { openMcpAuthorization(context, it) },
         )
     }

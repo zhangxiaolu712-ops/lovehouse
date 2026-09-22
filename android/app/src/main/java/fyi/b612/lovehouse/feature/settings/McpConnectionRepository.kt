@@ -29,6 +29,15 @@ data class McpBackendConnection(
     val enabled: Boolean = true,
     val boundIdentityIds: List<String> = emptyList(),
     val tools: List<McpDiscoveredTool> = emptyList(),
+    val displayName: String? = null,
+)
+
+data class McpToolService(
+    val id: String,
+    val name: String?,
+    val displayName: String?,
+    val connectionCount: Int,
+    val connectedConnectionCount: Int,
 )
 
 data class McpDiscoveredTool(
@@ -77,6 +86,8 @@ interface McpConnectionRepository {
     suspend fun connections(): List<McpBackendConnection>
     suspend fun connection(id: String): McpBackendConnection
     suspend fun registry(): List<McpBackendConnection>
+    suspend fun toolServices(): List<McpToolService> = emptyList()
+    suspend fun serviceConnections(toolServiceId: String): List<McpBackendConnection> = emptyList()
     suspend fun connect(serverUrl: String): McpConnectionStart
     suspend fun delete(connectionId: String): McpConnectionDeleteResult
     suspend fun bindIdentity(toolServiceId: String, identityId: String, connectionId: String)
@@ -164,6 +175,28 @@ class AppBackendMcpConnectionRepository(
     override suspend fun registry(): List<McpBackendConnection> =
         request("GET", appBackendMcpEndpoint(baseUrl, "registry"))
             .optJSONArray("servers")
+            .toConnections()
+
+    override suspend fun toolServices(): List<McpToolService> {
+        val values = request("GET", appBackendMcpEndpoint(baseUrl, "tool-services"))
+            .optJSONArray("tool_services") ?: return emptyList()
+        return buildList {
+            for (index in 0 until values.length()) values.optJSONObject(index)?.let { service ->
+                val id = service.firstString("id", "tool_service_id") ?: return@let
+                add(McpToolService(
+                    id = id,
+                    name = service.firstString("name"),
+                    displayName = service.firstString("display_name"),
+                    connectionCount = service.firstInt("connections") ?: 0,
+                    connectedConnectionCount = service.firstInt("connected_connections") ?: 0,
+                ))
+            }
+        }
+    }
+
+    override suspend fun serviceConnections(toolServiceId: String): List<McpBackendConnection> =
+        request("GET", appBackendMcpEndpoint(baseUrl, "tool-services/${encodePathSegment(toolServiceId)}/connections"))
+            .optJSONArray("connections")
             .toConnections()
 
     override suspend fun connect(serverUrl: String): McpConnectionStart {
@@ -298,6 +331,7 @@ private fun JSONObject.toConnection(): McpBackendConnection {
         enabled = if (has("enabled")) optBoolean("enabled") else true,
         boundIdentityIds = optJSONArray("bound_identities").toStringList(),
         tools = tools.toTools(),
+        displayName = firstString("display_name"),
     )
 }
 
