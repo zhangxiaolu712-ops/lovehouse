@@ -344,7 +344,7 @@ function createCliSidecarAdapter({ baseUrl, fetchImpl, healthTimeoutMs, profile 
         clearTimeout(timeout)
       }
     },
-    async chat({ threadId, text, attachments = [], allowedToolIds = [], onText, onEvent, signal }) {
+    async chat({ threadId, text, attachments = [], allowedToolIds = [], personaRuntime = null, onText, onEvent, signal }) {
       let response
       try {
         response = await fetchImpl(`${normalizedBase}/chat`, {
@@ -355,6 +355,7 @@ function createCliSidecarAdapter({ baseUrl, fetchImpl, healthTimeoutMs, profile 
           body: JSON.stringify({
             thread_id: threadId, window_id: threadId, message: text,
             allowed_tool_ids: allowedToolIds,
+            ...(personaRuntime ? { persona_runtime: personaRuntime } : {}),
             ...(attachments.length ? { attachments } : {}),
           }),
           signal,

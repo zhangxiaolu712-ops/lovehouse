@@ -134,6 +134,33 @@ test('Tool Center validation does not affect Claude or legacy requests without t
   assert.deepEqual(adapterCalls.map(call => call.allowedToolIds), [[], []])
 })
 
+test('one stable Persona runtime reaches Claude and Codex without changing provider routing', async t => {
+  const calls = []
+  const adapters = Object.fromEntries(['claude', 'codex'].map(provider => [provider,
+    fakeAdapter(provider, { async chat(input) {
+      calls.push({ provider, ...input })
+      input.onText?.(`${provider} reply`)
+      return { usage: null }
+    } }),
+  ]))
+  const base = await startHarness(t, { adapters })
+  const personaRuntime = { persona_id: 'housemate', persona_version: 4,
+    instructions: 'Use the harmless marker LANTERN.', background: 'Background for housemate.',
+    connection_ids: ['connection-a'], reanchor_intent: false,
+    execution_ticket: 'opaque-test-ticket' }
+  for (const provider of ['claude', 'codex']) {
+    const response = await fetch(`${base}/v1/chat`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify(chatBody({ persona_id: provider, persona_runtime: personaRuntime })),
+    })
+    assert.equal(response.status, 200)
+    await response.text()
+  }
+  assert.deepEqual(calls.map(call => call.provider), ['claude', 'codex'])
+  assert.deepEqual(calls.map(call => call.personaRuntime), [personaRuntime, personaRuntime])
+  assert.deepEqual(calls.map(call => call.allowedToolIds), [[], []])
+})
+
 test('one chat turn forwards verified media and location attachments without converting them to text', async t => {
   const adapterCalls = []
   const mediaCalls = []

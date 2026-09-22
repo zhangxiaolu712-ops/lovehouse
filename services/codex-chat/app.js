@@ -50,12 +50,17 @@ function normalizeBody(body) {
       stage: 'validation', status: 400,
     })
   }
+  const connections = body.persona_runtime?.connection_ids || []
+  if (connections.length && (typeof body.persona_runtime?.execution_ticket !== 'string' || !body.persona_runtime.execution_ticket)) {
+    throw new ChatRuntimeError('STREAM_INTERRUPTED', 'MCP connection grant is required', { stage: 'validation', status: 403 })
+  }
   return {
     threadId: body.thread_id || body.window_id,
     message,
     attachments,
     recentHistory: body.recent_history,
     allowedToolIds: normalizeToolPreferenceIds(body.allowed_tool_ids),
+    personaRuntime: body.persona_runtime || null,
   }
 }
 
@@ -145,7 +150,10 @@ export function createCodexChatHandler({
       }
       owner = { userId: chatUserId }
       input = normalizeBody(await readJson(req))
-      if (isProxyChat) input.allowedToolIds = []
+      if (isProxyChat) {
+        input.allowedToolIds = []
+        input.personaRuntime = null
+      }
       persisted = await threadBindings.get({
         ownerUserId: owner.userId,
         threadId: input.threadId,
@@ -205,6 +213,7 @@ export function createCodexChatHandler({
         signal: controller.signal,
         getContinuationContext: async () => session.history,
         allowedToolIds: input.allowedToolIds,
+        personaRuntime: input.personaRuntime,
         authorization: null,
         threadId: input.threadId,
         onRuntimeBinding: value => {

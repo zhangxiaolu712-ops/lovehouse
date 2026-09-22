@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import { existsSync, readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -65,6 +66,40 @@ test('Claude CLI implements the shared runtime contract without requiring MCP', 
     },
   })
   assert.equal(adapter.getQuota().status, 'unknown')
+})
+
+test('Claude consumes Persona instructions and a scoped MCP ticket without retaining its config', async () => {
+  const calls = []
+  let configPath
+  let config
+  const spawnImpl = (executable, args, options) => {
+    configPath = args[args.indexOf('--mcp-config') + 1]
+    config = JSON.parse(readFileSync(configPath, 'utf8'))
+    return fakeSpawn(successEvents(), { calls })(executable, args, options)
+  }
+  const adapter = new ClaudeCliRuntimeAdapter({ createSessionId: () => SESSION_ID,
+    appBackendMcpUrl: 'https://app.b612.fyi/api/mcp/runtime', spawnImpl })
+  await adapter.streamEvents({ message: 'read', history: [], personaRuntime: {
+    persona_id: 'housemate', persona_version: 4, instructions: 'Use marker LANTERN.',
+    background: 'This is the housemate context.', connection_ids: ['connection-a'],
+    execution_ticket: 'scoped-ticket-for-test', reanchor_intent: false,
+  } })
+  assert.equal(config.mcpServers.lovehouse.url, 'https://app.b612.fyi/api/mcp/runtime')
+  assert.equal(config.mcpServers.lovehouse.headers['X-LoveHouse-Execution-Ticket'], 'scoped-ticket-for-test')
+  assert.equal(calls[0].args.join(' ').includes('scoped-ticket-for-test'), false)
+  assert.equal(calls[0].args[calls[0].args.indexOf('--append-system-prompt') + 1],
+    'Use marker LANTERN.\n\nThis is the housemate context.')
+  assert.match(calls[0].args.join(' '), /mcp__lovehouse__\*/)
+  assert.equal(calls[0].args.includes('--safe-mode'), false)
+  assert.ok(calls[0].args.includes('--strict-mcp-config'))
+  assert.equal(calls[0].args[calls[0].args.indexOf('--setting-sources') + 1], '')
+  assert.equal(existsSync(configPath), false)
+})
+
+test('Claude refuses a controlled MCP ticket at an arbitrary endpoint', () => {
+  assert.throws(() => new ClaudeCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://external.example/api/mcp/runtime',
+  }), /Controlled App Backend MCP URL is invalid/)
 })
 
 test('Claude consumer materializes every shared attachment and enables only Read for local files', async () => {
