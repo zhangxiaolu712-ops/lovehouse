@@ -7,6 +7,7 @@ import { estimateTokens } from './contextBreakdown.js'
 import { ChatRuntimeError } from './errors.js'
 import { unknownQuota } from './runtimeContract.js'
 import { normalizeToolPreferenceIds, toolById } from '../../bridge/tool-center/catalog.js'
+import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -72,6 +73,15 @@ function mcpConfigArgs(toolContext) {
   ]
 }
 
+function controlledMcpArgs(context) {
+  if (!context) return []
+  return [
+    '-c', 'approval_policy="never"',
+    '-c', `mcp_servers.lovehouse_account.url=${JSON.stringify(context.url)}`,
+    '-c', 'mcp_servers.lovehouse_account.env_http_headers={"X-LoveHouse-Execution-Ticket"="LOVEHOUSE_EXECUTION_TICKET"}',
+  ]
+}
+
 const DEFAULT_INTERNAL_TOOL_MCP_URL = 'http://127.0.0.1:3000/v1/tools/mcp'
 const INTERNAL_TOOL_MCP_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
@@ -96,12 +106,15 @@ function normalizeInternalToolMcpUrl(value) {
   return parsed.toString()
 }
 
-function newSessionArgs(toolContext = null) {
+function newSessionArgs(toolContext = null, controlledMcp = null, personaInstructions = '') {
   return [
     'exec',
     '--json',
     ...REASONING_CONFIG,
     ...mcpConfigArgs(toolContext),
+    ...(!toolContext && controlledMcp ? ['--disable', 'apps'] : []),
+    ...controlledMcpArgs(controlledMcp),
+    ...(personaInstructions ? ['-c', `developer_instructions=${JSON.stringify(personaInstructions)}`] : []),
     '--sandbox', 'read-only',
     '--ignore-user-config',
     '--ignore-rules',
@@ -110,12 +123,15 @@ function newSessionArgs(toolContext = null) {
   ]
 }
 
-function resumeArgs(sessionId, toolContext = null) {
+function resumeArgs(sessionId, toolContext = null, controlledMcp = null, personaInstructions = '') {
   return [
     'exec', 'resume', sessionId,
     '--json',
     ...REASONING_CONFIG,
     ...mcpConfigArgs(toolContext),
+    ...(!toolContext && controlledMcp ? ['--disable', 'apps'] : []),
+    ...controlledMcpArgs(controlledMcp),
+    ...(personaInstructions ? ['-c', `developer_instructions=${JSON.stringify(personaInstructions)}`] : []),
     '--ignore-user-config',
     '--ignore-rules',
     '--skip-git-repo-check',
@@ -245,6 +261,7 @@ export class CodexCliRuntimeAdapter {
   constructor({
     executable = '/usr/bin/codex', spawnImpl = spawn, cwd = '/tmp', env = process.env,
     toolMcpUrl = DEFAULT_INTERNAL_TOOL_MCP_URL,
+    appBackendMcpUrl = env.LOVEHOUSE_APP_BACKEND_MCP_URL || null,
     fetchImpl = globalThis.fetch,
   } = {}) {
     this.executable = executable
@@ -252,6 +269,7 @@ export class CodexCliRuntimeAdapter {
     this.cwd = cwd
     this.env = narrowRuntimeEnv(env)
     this.toolMcpUrl = normalizeInternalToolMcpUrl(toolMcpUrl)
+    this.appBackendMcpUrl = normalizeControlledMcpUrl(appBackendMcpUrl)
     this.fetchImpl = fetchImpl
   }
 
@@ -317,11 +335,12 @@ export class CodexCliRuntimeAdapter {
     }
   }
 
-  startOrResume({ sessionId = null, toolContext = null } = {}) {
+  startOrResume({ sessionId = null, toolContext = null, controlledMcp = null, personaInstructions = '' } = {}) {
     return {
       session_id: sessionId,
       resumed: Boolean(sessionId),
-      args: sessionId ? resumeArgs(sessionId, toolContext) : newSessionArgs(toolContext),
+      args: sessionId ? resumeArgs(sessionId, toolContext, controlledMcp, personaInstructions)
+        : newSessionArgs(toolContext, controlledMcp, personaInstructions),
     }
   }
 
@@ -418,7 +437,8 @@ export class CodexCliRuntimeAdapter {
       }
       const child = this.spawnImpl(this.executable, command.args, {
         cwd: this.cwd,
-        env: { ...this.env, ...(command.ownerToken ? { LOVEHOUSE_OWNER_TOKEN: command.ownerToken } : {}) },
+        env: { ...this.env, ...(command.ownerToken ? { LOVEHOUSE_OWNER_TOKEN: command.ownerToken } : {}),
+          ...(command.executionTicket ? { LOVEHOUSE_EXECUTION_TICKET: command.executionTicket } : {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       const finish = callback => value => {
@@ -474,7 +494,7 @@ export class CodexCliRuntimeAdapter {
 
   async #run({
     message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
-    allowedToolIds = [], authorization = null, threadId = null, attachments = [],
+    allowedToolIds = [], authorization = null, threadId = null, attachments = [], personaRuntime = null,
   }) {
     const normalizedToolIds = normalizeToolPreferenceIds(allowedToolIds)
     const ownerToken = typeof authorization === 'string' && authorization.startsWith('Bearer ')
@@ -486,10 +506,20 @@ export class CodexCliRuntimeAdapter {
           url: `${this.toolMcpUrl}?persona_id=codex&thread_id=${encodeURIComponent(threadId)}&allowed_tool_ids=${encodeURIComponent(normalizedToolIds.join(','))}`,
         }
       : null
+    const connectionIds = personaRuntime?.connection_ids || []
+    if (connectionIds.length && (!this.appBackendMcpUrl || !personaRuntime?.execution_ticket)) {
+      throw new ChatRuntimeError('TOOL_FAILED', 'Controlled MCP connection is unavailable', {
+        stage: 'tool', status: 503,
+      })
+    }
+    const controlledMcp = connectionIds.length ? { url: this.appBackendMcpUrl } : null
+    const personaInstructions = personaRuntime
+      ? [personaRuntime.instructions, personaRuntime.background].filter(Boolean).join('\n\n') : ''
     const materialized = await this.materializeAttachments(attachments, signal)
-    const command = this.startOrResume({ sessionId, toolContext })
+    const command = this.startOrResume({ sessionId, toolContext, controlledMcp, personaInstructions })
     command.args = withImages(command.args, materialized.imagePaths)
     command.ownerToken = toolContext ? ownerToken : null
+    command.executionTicket = controlledMcp ? personaRuntime.execution_ticket : null
     const prompt = buildPrompt(sessionId ? [] : history, message, materialized.items)
     const estimatedInputTokens = estimateTokens(prompt)
     const startedTools = new Set()
@@ -615,11 +645,12 @@ export class CodexCliRuntimeAdapter {
     allowedToolIds = [],
     authorization = null,
     threadId = null,
+    personaRuntime = null,
   }) {
     try {
       return await this.#run({
         message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
-        allowedToolIds, authorization, threadId, attachments,
+        allowedToolIds, authorization, threadId, attachments, personaRuntime,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -644,6 +675,7 @@ export class CodexCliRuntimeAdapter {
         authorization,
         threadId,
         attachments,
+        personaRuntime,
       })
     }
   }

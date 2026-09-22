@@ -1,9 +1,13 @@
 import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 import { estimateTokens } from '../codex-chat/contextBreakdown.js'
 import { ChatRuntimeError } from '../codex-chat/errors.js'
 import { unknownQuota } from '../codex-chat/runtimeContract.js'
+import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -82,7 +86,8 @@ export function createStreamParser(callbacks = {}) {
 
 const VALID_THINKING_DISPLAY = new Set(['summarized', 'omitted'])
 
-function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay }) {
+function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay,
+  mcpConfigPath = null, allowMcpServer = false, personaInstructions = '' }) {
   return [
     '-p', prompt,
     ...(model ? ['--model', model] : []),
@@ -91,14 +96,16 @@ function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay }) {
     '--include-partial-messages',
     '--verbose',
     '--system-prompt', CHAT_GUARDRAIL,
+    ...(personaInstructions ? ['--append-system-prompt', personaInstructions] : []),
     '--tools', '',
+    ...(allowMcpServer ? ['--allowedTools', 'mcp__lovehouse__*'] : []),
     '--permission-mode', 'dontAsk',
     '--disable-slash-commands',
     '--setting-sources', '',
     '--settings', '{}',
     '--strict-mcp-config',
-    '--mcp-config', '{"mcpServers":{}}',
-    '--safe-mode',
+    '--mcp-config', mcpConfigPath || '{"mcpServers":{}}',
+    ...(!allowMcpServer ? ['--safe-mode'] : []),
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
   ]
 }
@@ -163,6 +170,7 @@ export class ClaudeCliRuntimeAdapter {
   constructor({
     executable = '/usr/bin/claude', spawnImpl = spawn, cwd = '/tmp', env = process.env,
     model = null, thinkingDisplay = null, createSessionId = () => crypto.randomUUID(),
+    appBackendMcpUrl = env.LOVEHOUSE_APP_BACKEND_MCP_URL || null,
   } = {}) {
     this.executable = executable
     this.spawnImpl = spawnImpl
@@ -172,6 +180,7 @@ export class ClaudeCliRuntimeAdapter {
     this.thinkingDisplay = typeof thinkingDisplay === 'string' && VALID_THINKING_DISPLAY.has(thinkingDisplay)
       ? thinkingDisplay : null
     this.createSessionId = createSessionId
+    this.appBackendMcpUrl = normalizeControlledMcpUrl(appBackendMcpUrl)
   }
 
   getCapabilities() {
@@ -191,7 +200,8 @@ export class ClaudeCliRuntimeAdapter {
     }
   }
 
-  startOrResume({ sessionId = null, prompt = '' } = {}) {
+  startOrResume({ sessionId = null, prompt = '', mcpConfigPath = null,
+    allowMcpServer = false, personaInstructions = '' } = {}) {
     const runtimeSessionId = sessionId || this.createSessionId()
     return {
       session_id: runtimeSessionId,
@@ -199,6 +209,7 @@ export class ClaudeCliRuntimeAdapter {
       args: runtimeArgs({
         prompt, sessionId: runtimeSessionId, resume: Boolean(sessionId),
         model: this.model, thinkingDisplay: this.thinkingDisplay,
+        mcpConfigPath, allowMcpServer, personaInstructions,
       }),
     }
   }
@@ -303,10 +314,44 @@ export class ClaudeCliRuntimeAdapter {
     })
   }
 
-  async #run({ message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent }) {
+  async #run(input) {
+    const controlledMcp = await this.#controlledMcpConfig(input.personaRuntime)
+    try {
+      return await this.#runConfigured(input, controlledMcp)
+    } finally {
+      await controlledMcp?.cleanup()
+    }
+  }
+
+  async #controlledMcpConfig(personaRuntime) {
+    if (!personaRuntime?.connection_ids?.length) return null
+    if (!personaRuntime.execution_ticket || !this.appBackendMcpUrl) {
+      throw new ChatRuntimeError('TOOL_FAILED', 'Controlled MCP executor is unavailable', {
+        stage: 'tool', status: 503,
+      })
+    }
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-mcp-'))
+    const configPath = path.join(directory, 'config.json')
+    try {
+      await writeFile(configPath, JSON.stringify({ mcpServers: { lovehouse: {
+        type: 'http', url: this.appBackendMcpUrl,
+        headers: { 'X-LoveHouse-Execution-Ticket': personaRuntime.execution_ticket },
+      } } }), { mode: 0o600 })
+      return { path: configPath, cleanup: () => rm(directory, { recursive: true, force: true }) }
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true })
+      throw error
+    }
+  }
+
+  async #runConfigured({ message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
+    personaRuntime }, controlledMcp) {
     const prompt = buildPrompt(sessionId ? [] : history, message)
     const estimatedInputTokens = estimateTokens(prompt)
-    const command = this.startOrResume({ sessionId, prompt })
+    const personaInstructions = personaRuntime
+      ? [personaRuntime.instructions, personaRuntime.background].filter(Boolean).join('\n\n') : ''
+    const command = this.startOrResume({ sessionId, prompt, mcpConfigPath: controlledMcp?.path || null,
+      allowMcpServer: controlledMcp != null, personaInstructions })
     const tools = new Map()
     let reportedSessionId = ''
     let reportedModel = ''
@@ -442,11 +487,11 @@ export class ClaudeCliRuntimeAdapter {
   async streamEvents({
     message, history = [], sessionId = null, signal,
     onRuntimeBinding = () => {}, onText = () => {}, onThinking = () => {}, onEvent = () => {},
-    getContinuationContext,
+    getContinuationContext, personaRuntime = null,
   }) {
     try {
       return await this.#run({
-        message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
+        message, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent, personaRuntime,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -458,7 +503,7 @@ export class ClaudeCliRuntimeAdapter {
       })
       return this.#run({
         message, history: fallbackHistory, sessionId: null, signal,
-        onRuntimeBinding, onText, onThinking, onEvent,
+        onRuntimeBinding, onText, onThinking, onEvent, personaRuntime,
       })
     }
   }

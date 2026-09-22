@@ -86,6 +86,35 @@ test('external Tool MCP URLs are rejected before a runtime session starts', () =
   )
 })
 
+test('Codex consumes the same Persona snapshot through developer instructions and connection-scoped MCP', async () => {
+  const calls = []
+  const adapter = new CodexCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://app.b612.fyi/api/mcp/runtime',
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'ok' } },
+      { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 1 } },
+    ], { calls }),
+  })
+  await adapter.streamEvents({ message: 'read', personaRuntime: {
+    persona_id: 'housemate', persona_version: 4, instructions: 'Use marker LANTERN.',
+    background: 'This is the housemate context.', connection_ids: ['connection-a'],
+    execution_ticket: 'scoped-ticket-for-test', reanchor_intent: false,
+  } })
+  const args = calls[0].args.join(' ')
+  assert.match(args, /mcp_servers\.lovehouse_account\.url="https:\/\/app\.b612\.fyi\/api\/mcp\/runtime"/)
+  assert.equal(args.includes('enabled_tools'), false)
+  assert.equal(args.includes('scoped-ticket-for-test'), false)
+  assert.equal(calls[0].options.env.LOVEHOUSE_EXECUTION_TICKET, 'scoped-ticket-for-test')
+  assert.ok(calls[0].args.includes('developer_instructions="Use marker LANTERN.\\n\\nThis is the housemate context."'))
+})
+
+test('Codex refuses a controlled MCP ticket at an arbitrary endpoint', () => {
+  assert.throws(() => new CodexCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://external.example/api/mcp/runtime',
+  }), /Controlled App Backend MCP URL is invalid/)
+})
+
 test('verified photos are materialized privately, passed with --image, and removed after the turn', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lovehouse-media-runtime-test-'))
   t.after(() => fs.rm(directory, { recursive: true, force: true }))

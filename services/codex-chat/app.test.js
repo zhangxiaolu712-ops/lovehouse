@@ -33,6 +33,7 @@ function runtime({ observed = [], sessionId = SESSION_ID } = {}) {
         previousUsage: input.previousUsage,
         attachments: input.attachments,
         allowedToolIds: input.allowedToolIds,
+        personaRuntime: input.personaRuntime,
         authorization: input.authorization,
       })
       input.onRuntimeBinding(input.sessionId || sessionId)
@@ -105,11 +106,13 @@ test('existing proxy compatibility route remains isolated from Login auth and MC
     headers: { 'Content-Type': 'application/json', 'X-LoveHouse-Chat-Key': 'gateway-key' },
     body: JSON.stringify({
       thread_id: THREAD_ID, message: 'hello', allowed_tool_ids: ['builtin.engineering.read_current'],
+      persona_runtime: { connection_ids: ['connection-a'], execution_ticket: 'scoped-ticket-for-test' },
     }),
   })
   assert.equal(response.status, 200)
   await response.text()
   assert.deepEqual(observed[0].allowedToolIds, [])
+  assert.equal(observed[0].personaRuntime, null)
   assert.equal(observed[0].authorization, null)
 })
 
@@ -162,6 +165,23 @@ test('sidecar forwards bounded attachment inputs to the runtime in the same turn
   assert.deepEqual(observed[0].attachments, [
     { type: 'location', latitude: 31.2, longitude: 121.5, captured_at: '2026-09-08T00:00:00Z' },
   ])
+})
+
+test('sidecar forwards the shared Persona snapshot on the normal Chat route', async t => {
+  const observed = []
+  const base = await start(t, { runtimeAdapter: runtime({ observed }) })
+  const personaRuntime = {
+    persona_id: 'housemate', persona_version: 4,
+    instructions: 'Use marker LANTERN.', background: 'The housemate knows the garden.',
+    connection_ids: ['connection-a'], execution_ticket: 'scoped-ticket-for-test',
+    reanchor_intent: false,
+  }
+  const response = await chat(base, {
+    thread_id: THREAD_ID, message: 'read', persona_runtime: personaRuntime,
+  })
+  assert.equal(response.status, 200)
+  assert.equal(parseSse(await response.text()).at(-1).data.ok, true)
+  assert.deepEqual(observed[0].personaRuntime, personaRuntime)
 })
 
 test('owner can read a transient task thread and approve the same task', async t => {
