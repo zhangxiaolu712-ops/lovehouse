@@ -184,11 +184,10 @@ class ChatContractTest {
     }
 
     @Test
-    fun `claude shares attachment actions while Tool Center stays unavailable`() {
+    fun `claude shares attachment actions and exposes provider neutral Tool Center entry`() {
         val claudeUnavailable = composerUnavailableActions(ClaudeRuntime)
 
-        assertEquals(setOf("工具"), claudeUnavailable.keys)
-        assertTrue(claudeUnavailable.values.all { it.contains("当前未启用") })
+        assertFalse(claudeUnavailable.containsKey("工具"))
         assertTrue(composerUnavailableActions(fyi.b612.lovehouse.feature.chat.CodexRuntime).isEmpty())
     }
 

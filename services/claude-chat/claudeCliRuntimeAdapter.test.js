@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import { existsSync, readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -65,6 +66,37 @@ test('Claude CLI implements the shared runtime contract without requiring MCP', 
     },
   })
   assert.equal(adapter.getQuota().status, 'unknown')
+})
+
+test('Claude MCP uses only a scoped App Backend ticket in a temporary config and cleans it', async () => {
+  const calls = []
+  let configPath = null
+  let config = null
+  const spawnImpl = (executable, args, options) => {
+    configPath = args[args.indexOf('--mcp-config') + 1]
+    config = JSON.parse(readFileSync(configPath, 'utf8'))
+    return fakeSpawn(successEvents(), { calls })(executable, args, options)
+  }
+  const adapter = new ClaudeCliRuntimeAdapter({
+    createSessionId: () => SESSION_ID,
+    appBackendMcpUrl: 'https://app.b612.fyi/api/mcp/runtime',
+    spawnImpl,
+  })
+  await adapter.streamEvents({ message: 'read', history: [], allowedToolIds: [],
+    personaRuntime: { persona_id: 'claude', persona_version: 2, instructions: 'persona instruction',
+      background: 'background', connection_ids: ['connection-a'], execution_ticket: 'scoped-ticket-for-test' } })
+  assert.equal(config.mcpServers.lovehouse.url, 'https://app.b612.fyi/api/mcp/runtime')
+  assert.equal(config.mcpServers.lovehouse.headers['X-LoveHouse-Execution-Ticket'], 'scoped-ticket-for-test')
+  assert.equal(calls[0].args.join(' ').includes('scoped-ticket-for-test'), false)
+  assert.match(calls[0].args.join(' '), /mcp__lovehouse__\*/)
+  assert.match(calls[0].args.join(' '), /--append-system-prompt persona instruction/)
+  assert.equal(existsSync(configPath), false)
+})
+
+test('Claude cannot forward a runtime grant to an arbitrary MCP endpoint', () => {
+  assert.throws(() => new ClaudeCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://external.example/api/mcp/runtime',
+  }), /Controlled App Backend MCP URL is invalid/)
 })
 
 test('Claude consumer materializes every shared attachment and enables only Read for local files', async () => {

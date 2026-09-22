@@ -247,6 +247,28 @@ export function resolveAllowedToolIdsForChat({
   return toolCenterService.validateRequest({ personaId, threadId, requestedIds })
 }
 
+function normalizePersonaRuntime(value) {
+  if (value === undefined || value === null) return null
+  const validText = (text, limit) => typeof text === 'string' && text.length <= limit
+  const connectionIds = value?.connection_ids
+  if (typeof value !== 'object' || Array.isArray(value) ||
+    !validText(value.persona_id, 64) || !/^[a-z][a-z0-9_-]{0,63}$/i.test(value.persona_id) ||
+    !Number.isInteger(value.persona_version) || value.persona_version < 1 ||
+    !validText(value.instructions, 20_000) || !validText(value.background, 20_000) ||
+    typeof value.reanchor_intent !== 'boolean' ||
+    !Array.isArray(connectionIds) || connectionIds.length > 16 ||
+    connectionIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) ||
+    (value.execution_ticket !== undefined && !validText(value.execution_ticket, 8_192)) ||
+    (connectionIds.length > 0 && !value.execution_ticket)) {
+    throw new ClientApiError('INVALID_PERSONA_RUNTIME', 'Persona runtime contract is invalid', { stage: 'validation', status: 400 })
+  }
+  return { persona_id: value.persona_id, persona_version: value.persona_version,
+    instructions: value.instructions, background: value.background,
+    connection_ids: [...new Set(connectionIds)],
+    reanchor_intent: value.reanchor_intent,
+    ...(value.execution_ticket ? { execution_ticket: value.execution_ticket } : {}) }
+}
+
 function normalizeThread(body, { requireThread = false } = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new ClientApiError('INVALID_REQUEST', 'JSON request object required', {
@@ -283,15 +305,22 @@ function normalizeThread(body, { requireThread = false } = {}) {
       stage: 'validation', status: 400,
     })
   }
+  const requestedTools = body.persona_id === 'codex'
+    ? normalizeAllowedToolIds(body.allowed_tool_ids) : []
+  const personaRuntime = normalizePersonaRuntime(body.persona_runtime)
+  if (personaRuntime && personaRuntime.persona_id !== body.persona_id) {
+    throw new ClientApiError('INVALID_PERSONA_RUNTIME', 'Persona runtime does not match this conversation', {
+      stage: 'validation', status: 400,
+    })
+  }
   return {
     personaId: body.persona_id,
     threadId: body.thread_id || crypto.randomUUID(),
     windowId: body.window_id || null,
     requestedScene: body.scene || null,
     source: normalizeArchiveSource(body),
-    allowedToolIds: body.persona_id === 'codex'
-      ? normalizeAllowedToolIds(body.allowed_tool_ids)
-      : [],
+    allowedToolIds: requestedTools,
+    personaRuntime,
   }
 }
 
@@ -662,6 +691,7 @@ export function installClientApi(app, {
         threadSource: normalized.source,
         signal: controller.signal,
         allowedToolIds: normalized.allowedToolIds,
+        personaRuntime: normalized.personaRuntime,
         onText(delta) {
           if (!ended) emitSse(res, 'text_delta', { ...base, delta })
         },

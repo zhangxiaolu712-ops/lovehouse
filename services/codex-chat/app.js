@@ -50,12 +50,19 @@ function normalizeBody(body) {
       stage: 'validation', status: 400,
     })
   }
+  const requested = body.allowed_tool_ids || []
+  if (!Array.isArray(requested) || requested.length > 32) throw new ChatRuntimeError('STREAM_INTERRUPTED', 'tool allowlist is invalid', { stage: 'validation', status: 400 })
+  const connections = body.persona_runtime?.connection_ids || []
+  if ((connections.length && (typeof body.persona_runtime?.execution_ticket !== 'string' || !body.persona_runtime.execution_ticket))) {
+    throw new ChatRuntimeError('STREAM_INTERRUPTED', 'MCP connection grant is required', { stage: 'validation', status: 403 })
+  }
   return {
     threadId: body.thread_id || body.window_id,
     message,
     attachments,
     recentHistory: body.recent_history,
-    allowedToolIds: normalizeToolPreferenceIds(body.allowed_tool_ids),
+    allowedToolIds: normalizeToolPreferenceIds(requested),
+    personaRuntime: body.persona_runtime || null,
   }
 }
 
@@ -194,6 +201,7 @@ export function createCodexChatHandler({
         signal: controller.signal,
         getContinuationContext: async () => session.history,
         allowedToolIds: input.allowedToolIds,
+        personaRuntime: input.personaRuntime,
         authorization: null,
         threadId: input.threadId,
         onRuntimeBinding: value => {

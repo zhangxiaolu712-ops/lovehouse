@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
+import fyi.b612.lovehouse.feature.chat.ChatPersona
 import kotlinx.coroutines.launch
 
 @Composable
@@ -44,10 +45,12 @@ internal fun McpConnectionsPanel(
     showAddForm: Boolean,
     initialConnectionId: String? = null,
     callbackStatus: String? = null,
+    personas: List<ChatPersona> = emptyList(),
     onOpenAuthorization: (String) -> Unit,
 ) {
     var connections by remember { mutableStateOf<List<McpBackendConnection>>(emptyList()) }
     var registry by remember { mutableStateOf<List<McpBackendConnection>>(emptyList()) }
+    var legacyConnections by remember { mutableStateOf<List<LegacyMcpConnection>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
     var serverUrl by remember { mutableStateOf("") }
@@ -55,6 +58,8 @@ internal fun McpConnectionsPanel(
     var reload by remember { mutableIntStateOf(0) }
     var pendingDelete by remember { mutableStateOf<McpBackendConnection?>(null) }
     var deletingId by remember { mutableStateOf<String?>(null) }
+    var bindingTarget by remember { mutableStateOf<McpBackendConnection?>(null) }
+    var pendingClaim by remember { mutableStateOf<LegacyMcpConnection?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(repository, initialConnectionId, callbackStatus, reload) {
@@ -63,8 +68,10 @@ internal fun McpConnectionsPanel(
             val focused = initialConnectionId?.takeIf(String::isNotBlank)?.let { repository.connection(it) }
             val listed = repository.connections()
             val registered = repository.registry()
+            val legacy = runCatching { repository.legacyConnections() }.getOrElse { emptyList() }
             connections = mergeConnectionSources(listed + listOfNotNull(focused), registered)
             registry = registered
+            legacyConnections = legacy
             if (callbackStatus == "connected") {
                 message = focused?.let { "${it.displayName()} 已连接 · ${it.toolCount} 个工具" }
                     ?: "OAuth 授权已完成，连接状态已刷新"
@@ -83,6 +90,19 @@ internal fun McpConnectionsPanel(
         if (!loading && connections.isEmpty()) {
             Text("还没有添加 MCP Server", color = LoveHouseGlass.MutedInk, fontSize = 9.sp, modifier = Modifier.padding(top = 8.dp))
         }
+        if (legacyConnections.isNotEmpty()) {
+            Text("待认领旧连接", color = LoveHouseGlass.Ink, fontSize = 10.sp)
+            legacyConnections.forEach { legacy ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(legacy.name ?: "未命名 MCP", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
+                    if (legacy.claimMethod == "oauth_reauthorization") {
+                        TextButton(onClick = { pendingClaim = legacy }) { Text("认领", fontSize = 9.sp) }
+                    } else {
+                        Text("需安全迁移证明", color = LoveHouseGlass.MutedInk, fontSize = 8.sp)
+                    }
+                }
+            }
+        }
         connections.forEach { connection ->
             McpConnectionRow(
                 connection = connection,
@@ -90,6 +110,36 @@ internal fun McpConnectionsPanel(
                 deleting = deletingId == connection.id,
                 onDelete = { pendingDelete = connection },
             )
+            if (connection.status == McpBackendConnectionStatus.Connected) {
+                val boundNames = connection.boundIdentityIds.map { identityId ->
+                    personas.firstOrNull { it.personaId == identityId }?.name ?: identityId
+                }
+                Text(
+                    if (boundNames.isEmpty()) "尚未绑定身份" else "身份 · ${boundNames.joinToString(" · ")}",
+                    color = LoveHouseGlass.MutedInk,
+                    fontSize = 8.5.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = personas.isNotEmpty() && !connection.toolServiceId.isNullOrBlank(),
+                        onClick = { bindingTarget = connection },
+                    ) { Text("绑定身份", fontSize = 9.sp) }
+                    connection.boundIdentityIds.firstOrNull()?.let { identityId ->
+                        TextButton(onClick = {
+                            val serviceId = connection.toolServiceId
+                            if (serviceId.isNullOrBlank()) {
+                                message = "App Backend 未返回 tool_service_id，无法解绑身份"
+                            } else {
+                                scope.launch {
+                                    runCatching { repository.unbindIdentity(serviceId, identityId) }
+                                        .onSuccess { message = "身份已解绑"; reload++ }
+                                        .onFailure { message = it.message ?: "身份解绑失败" }
+                                }
+                            }
+                        }) { Text("解绑", fontSize = 9.sp) }
+                    }
+                }
+            }
         }
         message?.let {
             Text(it, color = if (it.contains("失败") || it.contains("无法") || it.contains("错误")) Color(0xFF9B4F55) else Color(0xFF466F63), fontSize = 9.sp)
@@ -127,6 +177,63 @@ internal fun McpConnectionsPanel(
                     onClick = { pendingDelete = null },
                 ) { Text("取消") }
             },
+            containerColor = Color.White.copy(alpha = .90f),
+        )
+    }
+
+    pendingClaim?.let { legacy ->
+        AlertDialog(
+            onDismissRequest = { if (!busy) pendingClaim = null },
+            title = { Text("认领旧 MCP 连接？") },
+            text = { Text("将以当前 App Account 重新完成该 MCP 的官方授权。成功后连接归属此账号，其他账号不能认领；不会沿用旧凭证。") },
+            confirmButton = {
+                TextButton(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        runCatching { repository.beginLegacyClaim(legacy.id) }
+                            .onSuccess { url ->
+                                pendingClaim = null
+                                message = "请在 MCP 官方页面完成授权"
+                                onOpenAuthorization(url)
+                            }
+                            .onFailure { message = it.message ?: "旧连接认领失败" }
+                        busy = false
+                    }
+                }) { Text("继续授权") }
+            },
+            dismissButton = { TextButton(enabled = !busy, onClick = { pendingClaim = null }) { Text("取消") } },
+            containerColor = Color.White.copy(alpha = .90f),
+        )
+    }
+
+    bindingTarget?.let { connection ->
+        AlertDialog(
+            onDismissRequest = { bindingTarget = null },
+            title = { Text("绑定身份") },
+            text = {
+                Column {
+                    personas.forEach { persona ->
+                        TextButton(
+                            enabled = persona.personaId !in connection.boundIdentityIds,
+                            onClick = {
+                                val serviceId = connection.toolServiceId
+                                bindingTarget = null
+                                if (serviceId.isNullOrBlank()) {
+                                    message = "App Backend 未返回 tool_service_id，无法绑定身份"
+                                } else {
+                                    scope.launch {
+                                        runCatching { repository.bindIdentity(serviceId, persona.personaId, connection.id) }
+                                            .onSuccess { message = "已绑定 ${persona.name}"; reload++ }
+                                            .onFailure { message = it.message ?: "身份绑定失败" }
+                                    }
+                                }
+                            },
+                        ) { Text("${persona.name} · ${persona.personaId}") }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { bindingTarget = null }) { Text("取消") } },
             containerColor = Color.White.copy(alpha = .90f),
         )
     }

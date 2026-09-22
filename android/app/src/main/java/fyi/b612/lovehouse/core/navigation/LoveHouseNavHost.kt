@@ -63,9 +63,11 @@ private fun LoveHouseContent(
     val chatStore = remember(dependencies.chatMessages, dependencies.capabilityRegistry, dependencies.claudeWebHistoryImporter) {
         ChatSessionStore(
             codexClient = HttpCodexChatClient(
-                allowedToolIdsFor = { dependencies.capabilityRegistry.requestedToolIds() },
+                allowedToolIdsFor = dependencies.effectiveTools::cachedAllowedToolIds,
             ),
             messageRepository = dependencies.chatMessages,
+            conversationPersonas = dependencies.conversationPersonas,
+            personaRuntimeSource = dependencies.personaRuntimeSource,
             claudeWebHistoryImporter = dependencies.claudeWebHistoryImporter,
         )
     }
@@ -105,7 +107,7 @@ private fun LoveHouseContent(
                 threadId = threadId,
                 store = chatStore,
                 localStorage = dependencies.localStorage,
-                capabilityRegistry = dependencies.capabilityRegistry,
+                effectiveToolResolver = dependencies.effectiveTools,
                 baseCapabilities = dependencies.baseCapabilities,
                 mediaAttachments = dependencies.mediaAttachments,
                 chatConnections = dependencies.chatConnections,
@@ -152,6 +154,7 @@ private fun LoveHouseContent(
                 toolConnectionProbe = dependencies.toolConnectionProbe,
                 appAccount = dependencies.appAccount,
                 mcpConnections = dependencies.mcpConnections,
+                personas = chatStore.personas,
                 selfCheck = dependencies.selfCheck,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
             )

@@ -55,10 +55,16 @@ interface SelfCheckContributor {
     suspend fun checks(): List<SelfCheckResult>
 }
 
-class SelfCheckRegistry(contributors: Collection<SelfCheckContributor>) {
+class SelfCheckRegistry(
+    contributors: Collection<SelfCheckContributor>,
+    requiredContributorIds: Set<String> = emptySet(),
+) {
     private val contributors = contributors.toList().also { values ->
         require(values.map { it.contributorId }.distinct().size == values.size) {
             "Self-Check contributor id must be unique"
+        }
+        require(values.map(SelfCheckContributor::contributorId).toSet().containsAll(requiredContributorIds)) {
+            "Production Self-Check contributor registration is missing"
         }
     }
 

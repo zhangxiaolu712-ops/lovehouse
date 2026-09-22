@@ -88,6 +88,36 @@ test('external Tool MCP URLs are rejected before a runtime session starts', () =
   )
 })
 
+test('connection-level runtime grant exposes the complete controlled MCP server without tool filtering', async () => {
+  const calls = []
+  const adapter = new CodexCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://app.b612.fyi/api/mcp/runtime',
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'ok' } },
+      { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 1 } },
+    ], { calls }),
+  })
+  await adapter.streamEvents({
+    message: 'use my connection',
+    personaRuntime: { persona_id: 'persona-a', persona_version: 2,
+      connection_ids: ['connection-a'], execution_ticket: 'short-lived-ticket' },
+    onRuntimeBinding() {}, onText() {}, onEvent() {},
+  })
+  const args = calls[0].args.join(' ')
+  assert.match(args, /mcp_servers\.lovehouse_account\.url="https:\/\/app\.b612\.fyi\/api\/mcp\/runtime"/)
+  assert.match(args, /mcp_servers\.lovehouse_account\.env_http_headers=/)
+  assert.equal(args.includes('enabled_tools'), false)
+  assert.equal(args.includes('short-lived-ticket'), false)
+  assert.equal(calls[0].options.env.LOVEHOUSE_EXECUTION_TICKET, 'short-lived-ticket')
+})
+
+test('controlled MCP ticket cannot be sent to an arbitrary HTTPS endpoint', () => {
+  assert.throws(() => new CodexCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://external.example/api/mcp/runtime',
+  }), /Controlled App Backend MCP URL is invalid/)
+})
+
 test('verified photos are materialized privately, passed with --image, and removed after the turn', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lovehouse-media-runtime-test-'))
   t.after(() => fs.rm(directory, { recursive: true, force: true }))

@@ -1,10 +1,14 @@
 import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 import { estimateTokens } from '../codex-chat/contextBreakdown.js'
 import { ChatRuntimeError } from '../codex-chat/errors.js'
 import { unknownQuota } from '../codex-chat/runtimeContract.js'
 import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
+import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -91,7 +95,9 @@ export function createStreamParser(callbacks = {}) {
 
 const VALID_THINKING_DISPLAY = new Set(['summarized', 'omitted'])
 
-function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay, allowAttachmentRead }) {
+function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay, allowAttachmentRead,
+  mcpConfigPath = null, allowMcpServer = false, personaInstructions = '' }) {
+  const availableTools = allowAttachmentRead ? ['Read'] : []
   return [
     '-p', prompt,
     ...(model ? ['--model', model] : []),
@@ -100,14 +106,16 @@ function runtimeArgs({ prompt, sessionId, resume, model, thinkingDisplay, allowA
     '--include-partial-messages',
     '--verbose',
     '--system-prompt', CHAT_GUARDRAIL,
-    '--tools', allowAttachmentRead ? 'Read' : '',
-    ...(allowAttachmentRead ? ['--allowedTools', 'Read'] : []),
+    ...(personaInstructions ? ['--append-system-prompt', personaInstructions] : []),
+    '--tools', availableTools.join(','),
+    ...(availableTools.length || allowMcpServer ? ['--allowedTools', ...availableTools,
+      ...(allowMcpServer ? ['mcp__lovehouse__*'] : [])] : []),
     '--permission-mode', 'dontAsk',
     '--disable-slash-commands',
     '--setting-sources', '',
     '--settings', '{}',
     '--strict-mcp-config',
-    '--mcp-config', '{"mcpServers":{}}',
+    '--mcp-config', mcpConfigPath || '{"mcpServers":{}}',
     '--safe-mode',
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
   ]
@@ -174,6 +182,7 @@ export class ClaudeCliRuntimeAdapter {
     executable = '/usr/bin/claude', spawnImpl = spawn, cwd = '/tmp', env = process.env,
     model = null, thinkingDisplay = null, createSessionId = () => crypto.randomUUID(),
     fetchImpl = globalThis.fetch, attachmentMaterializer = null,
+    appBackendMcpUrl = env.LOVEHOUSE_APP_BACKEND_MCP_URL || null,
   } = {}) {
     this.executable = executable
     this.spawnImpl = spawnImpl
@@ -183,6 +192,7 @@ export class ClaudeCliRuntimeAdapter {
     this.thinkingDisplay = typeof thinkingDisplay === 'string' && VALID_THINKING_DISPLAY.has(thinkingDisplay)
       ? thinkingDisplay : null
     this.createSessionId = createSessionId
+    this.appBackendMcpUrl = normalizeControlledMcpUrl(appBackendMcpUrl)
     this.attachmentMaterializer = attachmentMaterializer || new SecureAttachmentMaterializer({
       cwd: this.cwd,
       fetchImpl,
@@ -207,7 +217,8 @@ export class ClaudeCliRuntimeAdapter {
     }
   }
 
-  startOrResume({ sessionId = null, prompt = '', attachmentItems = [] } = {}) {
+  startOrResume({ sessionId = null, prompt = '', attachmentItems = [],
+    mcpConfigPath = null, allowMcpServer = false, personaInstructions = '' } = {}) {
     const runtimeSessionId = sessionId || this.createSessionId()
     return {
       session_id: runtimeSessionId,
@@ -216,6 +227,7 @@ export class ClaudeCliRuntimeAdapter {
         prompt, sessionId: runtimeSessionId, resume: Boolean(sessionId),
         model: this.model, thinkingDisplay: this.thinkingDisplay,
         allowAttachmentRead: attachmentItems.some(item => item.type === 'photo' || item.type === 'file'),
+        mcpConfigPath, allowMcpServer, personaInstructions,
       }),
     }
   }
@@ -322,17 +334,49 @@ export class ClaudeCliRuntimeAdapter {
 
   async #run(input) {
     const materialized = await this.attachmentMaterializer.materialize(input.attachments || [], input.signal)
+    let controlledMcp = null
     try {
-      return await this.#runMaterialized({ ...input, attachments: materialized.items })
+      controlledMcp = await this.#controlledMcpConfig(input)
+      return await this.#runMaterialized({ ...input, attachments: materialized.items,
+        mcpConfigPath: controlledMcp?.path || null,
+        allowMcpServer: controlledMcp != null })
     } finally {
+      await controlledMcp?.cleanup()
       await materialized.cleanup()
     }
   }
 
-  async #runMaterialized({ message, attachments, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent }) {
+  async #controlledMcpConfig(input) {
+    const connectionIds = input.personaRuntime?.connection_ids || []
+    if (!connectionIds.length) return null
+    const ticket = input.personaRuntime?.execution_ticket
+    if (!ticket || !this.appBackendMcpUrl) {
+      throw new ChatRuntimeError('TOOL_FAILED', 'Controlled MCP executor is unavailable', {
+        stage: 'tool', status: 503,
+      })
+    }
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-mcp-'))
+    const configPath = path.join(directory, 'config.json')
+    try {
+      await writeFile(configPath, JSON.stringify({ mcpServers: { lovehouse: {
+        type: 'http', url: this.appBackendMcpUrl,
+        headers: { 'X-LoveHouse-Execution-Ticket': ticket },
+      } } }), { mode: 0o600 })
+      return { path: configPath, cleanup: () => rm(directory, { recursive: true, force: true }) }
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true })
+      throw error
+    }
+  }
+
+  async #runMaterialized({ message, attachments, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
+    mcpConfigPath, allowMcpServer, personaRuntime }) {
     const prompt = buildPrompt(sessionId ? [] : history, message, attachments)
     const estimatedInputTokens = estimateTokens(prompt)
-    const command = this.startOrResume({ sessionId, prompt, attachmentItems: attachments })
+    const personaInstructions = personaRuntime
+      ? [personaRuntime.instructions, personaRuntime.background].filter(Boolean).join('\n\n') : ''
+    const command = this.startOrResume({ sessionId, prompt, attachmentItems: attachments,
+      mcpConfigPath, allowMcpServer, personaInstructions })
     const tools = new Map()
     let reportedSessionId = ''
     let reportedModel = ''
@@ -469,10 +513,12 @@ export class ClaudeCliRuntimeAdapter {
     message, attachments = [], history = [], sessionId = null, signal,
     onRuntimeBinding = () => {}, onText = () => {}, onThinking = () => {}, onEvent = () => {},
     getContinuationContext,
+    allowedToolIds = [], personaRuntime = null,
   }) {
     try {
       return await this.#run({
         message, attachments, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
+        allowedToolIds, personaRuntime,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -484,7 +530,7 @@ export class ClaudeCliRuntimeAdapter {
       })
       return this.#run({
         message, attachments, history: fallbackHistory, sessionId: null, signal,
-        onRuntimeBinding, onText, onThinking, onEvent,
+        onRuntimeBinding, onText, onThinking, onEvent, allowedToolIds, personaRuntime,
       })
     }
   }

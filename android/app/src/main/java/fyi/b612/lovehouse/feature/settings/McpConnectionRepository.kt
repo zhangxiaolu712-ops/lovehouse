@@ -25,6 +25,28 @@ data class McpBackendConnection(
     val status: McpBackendConnectionStatus,
     val toolCount: Int,
     val errorMessage: String? = null,
+    val toolServiceId: String? = null,
+    val enabled: Boolean = true,
+    val boundIdentityIds: List<String> = emptyList(),
+    val tools: List<McpDiscoveredTool> = emptyList(),
+)
+
+data class McpDiscoveredTool(
+    val name: String,
+    val description: String? = null,
+)
+
+data class McpEffectiveConnection(
+    val connectionId: String,
+    val toolServiceId: String,
+    val name: String?,
+    val toolCount: Int,
+)
+
+data class LegacyMcpConnection(
+    val id: String,
+    val name: String?,
+    val claimMethod: String,
 )
 
 data class McpConnectionStart(
@@ -50,11 +72,17 @@ internal fun McpConnectionStart.nextAction(): McpConnectionNextAction = when {
 }
 
 interface McpConnectionRepository {
+    /** Null means this repository has no authoritative Persona runtime endpoint. */
+    suspend fun effectiveConnections(personaId: String): List<McpEffectiveConnection>? = null
     suspend fun connections(): List<McpBackendConnection>
     suspend fun connection(id: String): McpBackendConnection
     suspend fun registry(): List<McpBackendConnection>
     suspend fun connect(serverUrl: String): McpConnectionStart
     suspend fun delete(connectionId: String): McpConnectionDeleteResult
+    suspend fun bindIdentity(toolServiceId: String, identityId: String, connectionId: String)
+    suspend fun unbindIdentity(toolServiceId: String, identityId: String)
+    suspend fun legacyConnections(): List<LegacyMcpConnection> = emptyList()
+    suspend fun beginLegacyClaim(connectionId: String): String = error("旧连接认领尚未接入")
 }
 
 internal fun appBackendMcpEndpoint(baseUrl: String, path: String): String =
@@ -84,7 +112,45 @@ internal fun isSafeMcpAuthorizationUrl(value: String): Boolean = runCatching {
 
 class AppBackendMcpConnectionRepository(
     private val baseUrl: String,
+    private val sessionCookie: () -> String? = { null },
 ) : McpConnectionRepository {
+    override suspend fun effectiveConnections(personaId: String): List<McpEffectiveConnection> {
+        val endpoint = "${baseUrl.trimEnd('/')}/api/personas/${encodePathSegment(personaId)}/runtime"
+        val payload = try { request("GET", endpoint) } catch (error: McpHttpException) {
+            if (error.status == 404) return emptyList() else throw error
+        }
+        val values = payload.optJSONArray("effective_connections") ?: return emptyList()
+        return buildList {
+            for (index in 0 until values.length()) values.optJSONObject(index)?.let { item ->
+                val connectionId = item.optString("connection_id")
+                val serviceId = item.optString("tool_service_id")
+                if (connectionId.isNotBlank() && serviceId.isNotBlank()) {
+                    add(McpEffectiveConnection(connectionId, serviceId,
+                        item.optString("name").takeIf(String::isNotBlank), item.optInt("tool_count")))
+                }
+            }
+        }
+    }
+    override suspend fun legacyConnections(): List<LegacyMcpConnection> {
+        val array = request("GET", appBackendMcpEndpoint(baseUrl, "legacy-connections")).optJSONArray("connections")
+            ?: return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                array.optJSONObject(index)?.let { item ->
+                    item.optString("connection_id").takeIf(String::isNotBlank)?.let { id ->
+                        add(LegacyMcpConnection(id, item.optString("name").takeIf(String::isNotBlank), item.optString("claim_method")))
+                    }
+                }
+            }
+        }
+    }
+
+    override suspend fun beginLegacyClaim(connectionId: String): String {
+        val result = request("POST", appBackendMcpEndpoint(baseUrl, "connections/${encodePathSegment(connectionId)}/claim"))
+        check(result.optString("status") == "authorization_required") { "该旧连接尚不能安全认领" }
+        return result.optString("authorization_url").takeIf(::isSafeMcpAuthorizationUrl)
+            ?: error("App Backend 未返回安全的授权地址")
+    }
     override suspend fun connections(): List<McpBackendConnection> =
         request("GET", appBackendMcpEndpoint(baseUrl, "connections"))
             .optJSONArray("connections")
@@ -136,12 +202,34 @@ class AppBackendMcpConnectionRepository(
         mcpDeleteResult(error.status, error.errorCode)
     }
 
+    override suspend fun bindIdentity(toolServiceId: String, identityId: String, connectionId: String) {
+        request(
+            method = "PUT",
+            endpoint = appBackendMcpEndpoint(
+                baseUrl,
+                "tool-services/${encodePathSegment(toolServiceId)}/bindings/${encodePathSegment(identityId)}",
+            ),
+            body = JSONObject(mapOf("connection_id" to connectionId)).toString(),
+        )
+    }
+
+    override suspend fun unbindIdentity(toolServiceId: String, identityId: String) {
+        request(
+            method = "DELETE",
+            endpoint = appBackendMcpEndpoint(
+                baseUrl,
+                "tool-services/${encodePathSegment(toolServiceId)}/bindings/${encodePathSegment(identityId)}",
+            ),
+        )
+    }
+
     private suspend fun request(method: String, endpoint: String, body: String? = null): JSONObject = withContext(Dispatchers.IO) {
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             setRequestProperty("Accept", "application/json")
+            sessionCookie()?.let { setRequestProperty("Cookie", it) }
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -206,8 +294,32 @@ private fun JSONObject.toConnection(): McpBackendConnection {
         status = parseStatus(firstString("status")),
         toolCount = firstInt("tool_count", "tools_count") ?: tools?.length() ?: 0,
         errorMessage = firstString("error_message", "last_error"),
+        toolServiceId = firstString("tool_service_id"),
+        enabled = if (has("enabled")) optBoolean("enabled") else true,
+        boundIdentityIds = optJSONArray("bound_identities").toStringList(),
+        tools = tools.toTools(),
     )
 }
+
+private fun JSONArray?.toTools(): List<McpDiscoveredTool> = this?.let { array ->
+    buildList {
+        for (index in 0 until array.length()) {
+            array.optJSONObject(index)?.let { tool ->
+                tool.optString("name").takeIf(String::isNotBlank)?.let { name ->
+                    add(McpDiscoveredTool(name, tool.optString("description").takeIf(String::isNotBlank)))
+                }
+            }
+        }
+    }
+}.orEmpty()
+
+private fun JSONArray?.toStringList(): List<String> = this?.let { array ->
+    buildList {
+        for (index in 0 until array.length()) {
+            array.optString(index).takeIf(String::isNotBlank)?.let(::add)
+        }
+    }
+}.orEmpty()
 
 private fun parseStatus(value: String?): McpBackendConnectionStatus = when (value?.lowercase()) {
     "connecting", "pending" -> McpBackendConnectionStatus.Connecting

@@ -17,6 +17,8 @@ import fyi.b612.lovehouse.core.selfcheck.CapabilityReadinessProbe
 import fyi.b612.lovehouse.core.selfcheck.NativeCapabilitySelfCheckContributor
 import fyi.b612.lovehouse.core.selfcheck.ProductionWiringSelfCheckContributor
 import fyi.b612.lovehouse.core.selfcheck.ProductionWiringSnapshot
+import fyi.b612.lovehouse.core.selfcheck.PersonaRuntimeSelfCheckContributor
+import fyi.b612.lovehouse.core.selfcheck.SelfCheckRegistry
 import fyi.b612.lovehouse.core.selfcheck.SelfCheckGroup
 import fyi.b612.lovehouse.core.selfcheck.SelfCheckResult
 import fyi.b612.lovehouse.core.selfcheck.SelfCheckStatus
@@ -32,6 +34,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DeploymentSelfCheckTest {
+    @Test
+    fun `missing production Persona Runtime contributor fails registration`() {
+        val missing = runCatching {
+            SelfCheckRegistry(emptyList(), requiredContributorIds = setOf(PersonaRuntimeSelfCheckContributor.CONTRIBUTOR_ID))
+        }
+        assertTrue(missing.isFailure)
+        val registered = SelfCheckRegistry(listOf(PersonaRuntimeSelfCheckContributor(true, true, true, true, true)),
+            requiredContributorIds = setOf(PersonaRuntimeSelfCheckContributor.CONTRIBUTOR_ID))
+        assertTrue(runBlocking { registered.run() }.isNotEmpty())
+    }
     @Test
     fun `summary aggregation follows deployment severity`() {
         val results = listOf(

@@ -134,6 +134,64 @@ test('Tool Center validation does not affect Claude or legacy requests without t
   assert.deepEqual(adapterCalls.map(call => call.allowedToolIds), [[], []])
 })
 
+test('Claude forwards bound MCP connections and Persona runtime without Codex builtin validation', async t => {
+  const calls = []
+  const validations = []
+  const base = await startHarness(t, {
+    toolCenterService: { capabilities() { return [] }, async test() { return { ok: false } },
+      validateRequest(input) { validations.push(input); return [] } },
+    adapters: {
+      claude: fakeAdapter('claude', { async chat(input) { calls.push(input); input.onText?.('reply'); return {} } }),
+      codex: fakeAdapter('codex'),
+    },
+  })
+  const personaRuntime = { persona_id: 'claude', persona_version: 2, instructions: 'profile',
+    background: 'context', connection_ids: ['connection-a'], reanchor_intent: true,
+    execution_ticket: 'opaque-test-ticket' }
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chatBody({ persona_runtime: personaRuntime })),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.deepEqual(validations, [])
+  assert.deepEqual(calls[0].allowedToolIds, [])
+  assert.deepEqual(calls[0].personaRuntime, personaRuntime)
+  const missingGrant = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chatBody({ allowed_tool_ids: ['mcp:connection-a:recall'] })),
+  })
+  // Legacy Claude tool preferences are ignored until a scoped Persona runtime is supplied.
+  assert.equal(missingGrant.status, 200)
+  await missingGrant.text()
+  assert.deepEqual(calls[1].allowedToolIds, [])
+  const mismatchedPersona = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chatBody({ persona_runtime: { ...personaRuntime, persona_id: 'codex' } })),
+  })
+  assert.equal(mismatchedPersona.status, 400)
+  assert.equal(calls.length, 2)
+})
+
+test('Codex consumes the same connection grant schema independently of builtin tool preferences', async t => {
+  const calls = []
+  const base = await startHarness(t, { adapters: {
+    claude: fakeAdapter('claude'),
+    codex: fakeAdapter('codex', { async chat(input) { calls.push(input); input.onText?.('reply'); return {} } }),
+  } })
+  const personaRuntime = { persona_id: 'codex', persona_version: 3, instructions: 'profile',
+    background: 'context', connection_ids: ['connection-a'], reanchor_intent: false,
+    execution_ticket: 'opaque-test-ticket' }
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(chatBody({ persona_id: 'codex', persona_runtime: personaRuntime })),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.deepEqual(calls[0].allowedToolIds, [])
+  assert.deepEqual(calls[0].personaRuntime, personaRuntime)
+})
+
 test('one chat turn forwards verified media and location attachments without converting them to text', async t => {
   const adapterCalls = []
   const mediaCalls = []
@@ -954,4 +1012,20 @@ test('Claude CLI adapter uses the same safe stream contract without exposing its
   assert.equal(events[7].data.thinking, '先检查当前状态。')
   assert.equal(JSON.stringify(events).includes('must-not-pass'), false)
   assert.equal(JSON.stringify(events).includes('session_id'), false)
+})
+
+test('Claude sidecar receives only scoped Persona runtime and connection identity', async () => {
+  let sent
+  const adapter = createClaudeCliAdapter({ fetchImpl: async (_url, options) => {
+    sent = { headers: options.headers, body: JSON.parse(options.body) }
+    return new Response('event: done\ndata: {"ok":true}\n\n', { status: 200,
+      headers: { 'Content-Type': 'text/event-stream' } })
+  } })
+  await adapter.chat({ threadId: THREAD_ID, text: 'read', allowedToolIds: [],
+    personaRuntime: { persona_id: 'claude', persona_version: 2, instructions: 'prompt',
+      background: 'context', connection_ids: ['connection-a'], reanchor_intent: true,
+      execution_ticket: 'opaque-test-ticket' } })
+  assert.deepEqual(sent.body.allowed_tool_ids, [])
+  assert.equal(sent.body.persona_runtime.execution_ticket, 'opaque-test-ticket')
+  assert.equal(sent.headers.Authorization, undefined)
 })
