@@ -2,7 +2,10 @@ package fyi.b612.lovehouse.feature.settings
 
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.IOException
 import android.util.Log
+import fyi.b612.lovehouse.feature.chat.personaRuntimeHttpFailure
+import fyi.b612.lovehouse.feature.chat.personaRuntimeIoFailure
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -127,8 +130,12 @@ class AppBackendMcpConnectionRepository(
 ) : McpConnectionRepository {
     override suspend fun effectiveConnections(personaId: String): List<McpEffectiveConnection> {
         val endpoint = "${baseUrl.trimEnd('/')}/api/personas/${encodePathSegment(personaId)}/runtime"
-        val payload = try { request("GET", endpoint) } catch (error: McpHttpException) {
-            if (error.status == 404) return emptyList() else throw error
+        val payload = try {
+            request("GET", endpoint)
+        } catch (error: McpHttpException) {
+            throw personaRuntimeHttpFailure(error.status, error.message.orEmpty())
+        } catch (error: IOException) {
+            throw personaRuntimeIoFailure(error)
         }
         val values = payload.optJSONArray("effective_connections") ?: return emptyList()
         return buildList {

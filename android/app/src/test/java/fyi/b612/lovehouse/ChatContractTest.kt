@@ -3,6 +3,7 @@ package fyi.b612.lovehouse
 import fyi.b612.lovehouse.feature.chat.ChatListState
 import fyi.b612.lovehouse.feature.chat.ChatRuntimeConfig
 import fyi.b612.lovehouse.feature.chat.ChatMessageKind
+import fyi.b612.lovehouse.feature.chat.ChatPersona
 import fyi.b612.lovehouse.feature.chat.ChatSessionStore
 import fyi.b612.lovehouse.feature.chat.ClaudeRuntime
 import fyi.b612.lovehouse.feature.chat.ChatThreadKind
@@ -634,7 +635,7 @@ class ChatContractTest {
     @Test
     fun `window creation preserves persona and chooses only thread lifetime`() {
         val store = ChatSessionStore()
-        val persona = store.personas.first()
+        val persona = ChatPersona("persona-test", "测试人格", "测", "test")
 
         val long = store.createThread(persona, temporary = false)
         val temporary = store.createThread(persona, temporary = true)
@@ -648,7 +649,7 @@ class ChatContractTest {
     @Test
     fun `living room member is added only once`() {
         val store = ChatSessionStore()
-        val persona = store.personas.first { candidate -> candidate.personaId == "gemini" }
+        val persona = ChatPersona("persona-member", "测试成员", "测", "test")
 
         store.addMember("living-room", persona)
         store.addMember("living-room", persona)

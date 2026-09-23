@@ -10,6 +10,10 @@ import fyi.b612.lovehouse.feature.chat.InMemoryConversationPersonaStore
 import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
 import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSnapshot
 import fyi.b612.lovehouse.feature.chat.PersonaProfile
+import fyi.b612.lovehouse.feature.chat.PersonaRuntimeException
+import fyi.b612.lovehouse.feature.chat.PersonaRuntimeFailure
+import fyi.b612.lovehouse.feature.chat.personaRuntimeHttpFailure
+import fyi.b612.lovehouse.feature.chat.personaRuntimeIoFailure
 import fyi.b612.lovehouse.feature.chat.CodexChatClient
 import fyi.b612.lovehouse.feature.chat.CodexChatResult
 import fyi.b612.lovehouse.feature.chat.CodexRuntimeEvidence
@@ -33,6 +37,8 @@ import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
 import fyi.b612.lovehouse.feature.settings.ToolRiskLevel
 import fyi.b612.lovehouse.feature.settings.ToolTestResult
 import kotlinx.coroutines.runBlocking
+import java.io.IOException
+import java.net.SocketTimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -88,12 +94,15 @@ class PersonaMcpRuntimeClosureTest {
         assertFalse(snapshot.toString().contains("opaque-ticket"))
     }
     @Test
-    fun `new conversation saves persona and store recreation restores it`() {
+    fun `new conversation saves authoritative persona and store recreation restores it`() = runBlocking {
         val persistence = InMemoryConversationPersonaStore()
+        val source = RecordingPersonaRuntimeSource(mutableListOf(profile("claude", "Claude")))
         val first = ChatSessionStore(
             conversationPersonas = persistence,
+            personaRuntimeSource = source,
             initialThreads = emptyList(),
         )
+        first.refreshPersonaProfiles()
         val created = first.createThread(first.personas.first { it.personaId == "claude" }, temporary = false)
 
         assertEquals("claude", persistence.personaId(created.threadId))
@@ -101,19 +110,27 @@ class PersonaMcpRuntimeClosureTest {
 
         val reopened = ChatSessionStore(
             conversationPersonas = persistence,
+            personaRuntimeSource = source,
             initialThreads = emptyList(),
         )
+        reopened.refreshPersonaProfiles()
         assertEquals("claude", reopened.thread(created.threadId)?.personaId)
         assertEquals("Claude", reopened.persona(created.threadId)?.name)
     }
 
     @Test
-    fun `conversation detail persona change updates the persisted truth source`() {
+    fun `conversation detail persona change updates the persisted truth source`() = runBlocking {
         val persistence = InMemoryConversationPersonaStore()
+        val source = RecordingPersonaRuntimeSource(mutableListOf(
+            profile("codex", "Codex"),
+            profile("claude", "Claude"),
+        ))
         val store = ChatSessionStore(
             conversationPersonas = persistence,
+            personaRuntimeSource = source,
             initialThreads = listOf(thread("conversation-1", "codex")),
         )
+        store.refreshPersonaProfiles()
         val claude = ChatPersona("claude", "Claude", "C", "claude_private")
 
         store.setPersona("conversation-1", claude)
@@ -157,6 +174,16 @@ class PersonaMcpRuntimeClosureTest {
     }
 
     @Test
+    fun `persona selector contains only authoritative App Backend profiles`() = runBlocking {
+        val source = RecordingPersonaRuntimeSource(mutableListOf(profile("persona-real", "真实 Persona")))
+        val store = ChatSessionStore(personaRuntimeSource = source, initialThreads = emptyList())
+
+        store.refreshPersonaProfiles()
+
+        assertEquals(listOf("persona-real"), store.personas.map(ChatPersona::personaId))
+    }
+
+    @Test
     fun `persona binding resolves complete MCP connections without per tool ownership`() = runBlocking {
         val mcp = FakeMcpRepository(
             listOf(
@@ -194,6 +221,29 @@ class PersonaMcpRuntimeClosureTest {
         assertTrue(resolved.tools.isEmpty())
         assertFalse(payload.contains("allowed_tool_ids"))
         assertTrue(payload.contains("\"persona_id\":\"claude\""))
+    }
+
+    @Test
+    fun `authoritative Persona runtime failures are not converted into empty tools`() = runBlocking {
+        val expected = PersonaRuntimeException(PersonaRuntimeFailure.PersonaMissing, "missing", 404)
+        val resolver = AppEffectiveToolResolver(
+            EmptyToolCenterRepository,
+            EmptyProfiles,
+            FailingAuthoritativeMcpRepository(expected),
+        )
+
+        val failure = runCatching { resolver.resolve("missing", "thread") }.exceptionOrNull()
+
+        assertTrue(failure === expected)
+    }
+
+    @Test
+    fun `Persona runtime failure classifier distinguishes missing auth timeout and network`() {
+        assertEquals(PersonaRuntimeFailure.PersonaMissing, personaRuntimeHttpFailure(404, "missing").failure)
+        assertEquals(PersonaRuntimeFailure.Authentication, personaRuntimeHttpFailure(401, "auth").failure)
+        assertEquals(PersonaRuntimeFailure.Backend, personaRuntimeHttpFailure(503, "backend").failure)
+        assertEquals(PersonaRuntimeFailure.Timeout, personaRuntimeIoFailure(SocketTimeoutException()).failure)
+        assertEquals(PersonaRuntimeFailure.Network, personaRuntimeIoFailure(IOException()).failure)
     }
 
     @Test
@@ -265,10 +315,21 @@ class PersonaMcpRuntimeClosureTest {
         requiresApproval = false,
         scope = emptyList(),
     )
+
+    private fun profile(id: String, name: String) = PersonaProfile(
+        personaId = id,
+        displayName = name,
+        avatar = name.take(1),
+        instructions = "",
+        background = "",
+        version = 1,
+        providerNativeAnchorPreference = false,
+    )
 }
 
-private class RecordingPersonaRuntimeSource : PersonaRuntimeSource {
-    val saved = mutableListOf<PersonaProfile>()
+private class RecordingPersonaRuntimeSource(
+    val saved: MutableList<PersonaProfile> = mutableListOf(),
+) : PersonaRuntimeSource {
 
     override suspend fun resolve(
         personaId: String,
@@ -279,6 +340,19 @@ private class RecordingPersonaRuntimeSource : PersonaRuntimeSource {
     override suspend fun profiles(): List<PersonaProfile> = saved.toList()
 
     override suspend fun save(profile: PersonaProfile): PersonaProfile = profile.copy(version = 1).also(saved::add)
+}
+
+private class FailingAuthoritativeMcpRepository(
+    private val failure: RuntimeException,
+) : McpConnectionRepository {
+    override suspend fun effectiveConnections(personaId: String) = throw failure
+    override suspend fun connections(): List<McpBackendConnection> = error("not used")
+    override suspend fun connection(id: String): McpBackendConnection = error("not used")
+    override suspend fun registry(): List<McpBackendConnection> = error("not used")
+    override suspend fun connect(serverUrl: String): McpConnectionStart = error("not used")
+    override suspend fun delete(connectionId: String) = error("not used")
+    override suspend fun bindIdentity(toolServiceId: String, identityId: String, connectionId: String) = error("not used")
+    override suspend fun unbindIdentity(toolServiceId: String, identityId: String) = error("not used")
 }
 
 private object EmptyToolCenterRepository : ToolCenterRepository {

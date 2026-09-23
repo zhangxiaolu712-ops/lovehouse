@@ -1,8 +1,10 @@
 package fyi.b612.lovehouse.feature.chat
 
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -30,10 +32,48 @@ data class PersonaProfile(
     val providerNativeAnchorPreference: Boolean,
 )
 
+enum class PersonaRuntimeFailure {
+    PersonaMissing,
+    Authentication,
+    Timeout,
+    Network,
+    Backend,
+}
+
+class PersonaRuntimeException(
+    val failure: PersonaRuntimeFailure,
+    message: String,
+    val httpStatus: Int? = null,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
+internal fun personaRuntimeHttpFailure(status: Int, message: String): PersonaRuntimeException = when (status) {
+    401 -> PersonaRuntimeException(PersonaRuntimeFailure.Authentication, message, status)
+    404 -> PersonaRuntimeException(PersonaRuntimeFailure.PersonaMissing, message, status)
+    else -> PersonaRuntimeException(PersonaRuntimeFailure.Backend, message, status)
+}
+
+internal fun personaRuntimeIoFailure(error: IOException): PersonaRuntimeException =
+    if (error is SocketTimeoutException) {
+        PersonaRuntimeException(PersonaRuntimeFailure.Timeout, "Persona Runtime 请求超时", cause = error)
+    } else {
+        PersonaRuntimeException(PersonaRuntimeFailure.Network, "Persona Runtime 网络请求失败", cause = error)
+    }
+
+fun Throwable.personaRuntimeMessage(): String = when ((this as? PersonaRuntimeException)?.failure) {
+    PersonaRuntimeFailure.PersonaMissing -> "当前 Persona 不存在或尚未完成迁移"
+    PersonaRuntimeFailure.Authentication -> "LoveHouse App Account 会话已失效，请重新登录"
+    PersonaRuntimeFailure.Timeout -> "Persona Runtime 请求超时，请稍后重试"
+    PersonaRuntimeFailure.Network -> "无法连接 Persona Runtime，请检查网络"
+    PersonaRuntimeFailure.Backend -> message ?: "Persona Runtime 暂时不可用"
+    null -> message ?: "Persona Runtime 暂时不可用"
+}
+
 interface PersonaRuntimeSource {
     suspend fun resolve(personaId: String, requestedToolIds: Set<String>, reanchorIntent: Boolean): PersonaRuntimeSnapshot?
     suspend fun profiles(): List<PersonaProfile> = emptyList()
     suspend fun profile(personaId: String): PersonaProfile? = null
+    suspend fun materialize(profile: PersonaProfile): PersonaProfile = profile(profile.personaId) ?: save(profile)
     suspend fun save(profile: PersonaProfile): PersonaProfile = error("Persona 档案尚未接入")
 }
 
@@ -66,20 +106,28 @@ class AppBackendPersonaRuntimeSource(
             .put("provider_native_anchor_preference", profile.providerNativeAnchorPreference)
         requireNotNull(request("PUT", "${baseUrl.trimEnd('/')}/api/personas/$encodedId", body.toString())).toProfile()
     }
+    override suspend fun materialize(profile: PersonaProfile): PersonaProfile = withContext(Dispatchers.IO) {
+        val encodedId = URLEncoder.encode(profile.personaId, Charsets.UTF_8.name()).replace("+", "%20")
+        val body = JSONObject().put("display_name", profile.displayName)
+            .put("avatar", profile.avatar ?: JSONObject.NULL)
+            .put("instructions", profile.instructions)
+            .put("background", profile.background)
+            .put("provider_native_anchor_preference", profile.providerNativeAnchorPreference)
+        requireNotNull(request("POST", "${baseUrl.trimEnd('/')}/api/personas/$encodedId/materialize", body.toString())).toProfile()
+    }
     override suspend fun resolve(
         personaId: String,
         requestedToolIds: Set<String>,
         reanchorIntent: Boolean,
     ): PersonaRuntimeSnapshot? = withContext(Dispatchers.IO) {
-        if (sessionCookie() == null) {
-            if (requestedToolIds.any { it.startsWith("mcp-connection:") }) error("请先登录 LoveHouse App Account 后使用 MCP Connection")
-            return@withContext null
-        }
+        if (sessionCookie() == null) throw PersonaRuntimeException(
+            PersonaRuntimeFailure.Authentication,
+            "请先登录 LoveHouse App Account",
+        )
         val encodedId = URLEncoder.encode(personaId, Charsets.UTF_8.name()).replace("+", "%20")
         val selectedConnectionIds = requestedToolIds.filterTo(linkedSetOf()) { it.startsWith("mcp-connection:") }
-        val profile = runCatching { request("GET", "${baseUrl.trimEnd('/')}/api/personas/$encodedId/runtime") }
-            .getOrElse { failure -> if (selectedConnectionIds.isEmpty()) null else throw failure }
-            ?: if (selectedConnectionIds.isEmpty()) return@withContext null else error("当前 Persona 尚未建立 App Account 档案，MCP Connection 不可用")
+        val profile = request("GET", "${baseUrl.trimEnd('/')}/api/personas/$encodedId/runtime")
+            ?: throw PersonaRuntimeException(PersonaRuntimeFailure.PersonaMissing, "Persona 不存在", 404)
         val connections = profile.optJSONArray("effective_connections")
         val connectionIds = buildSet {
             if (connections != null) for (index in 0 until connections.length()) {
@@ -111,7 +159,10 @@ class AppBackendPersonaRuntimeSource(
     }
 
     private fun request(method: String, endpoint: String, body: String? = null): JSONObject? {
-        val cookie = sessionCookie() ?: error("请先登录 LoveHouse App Account")
+        val cookie = sessionCookie() ?: throw PersonaRuntimeException(
+            PersonaRuntimeFailure.Authentication,
+            "请先登录 LoveHouse App Account",
+        )
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
@@ -127,9 +178,16 @@ class AppBackendPersonaRuntimeSource(
             if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val status = connection.responseCode
             if (status == 404 && method == "GET") return null
-            if (status == 401) error("App Account 会话已失效，请重新登录")
-            if (status !in 200..299) error("Persona Runtime 请求失败（HTTP $status）")
+            if (status !in 200..299) throw personaRuntimeHttpFailure(
+                status,
+                if (status == 401) "App Account 会话已失效，请重新登录"
+                else "Persona Runtime 请求失败（HTTP $status）",
+            )
             return JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        } catch (error: PersonaRuntimeException) {
+            throw error
+        } catch (error: IOException) {
+            throw personaRuntimeIoFailure(error)
         } finally {
             connection.disconnect()
         }

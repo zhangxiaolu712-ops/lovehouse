@@ -154,23 +154,22 @@ fun ChatListScreen(store: ChatSessionStore, onOpenThread: (ChatThreadSummary) ->
 
 @Composable private fun CreateWindowPanel(store: ChatSessionStore, onCancel: () -> Unit, onCreated: (ChatThreadSummary) -> Unit) {
     var selected by remember { mutableStateOf<ChatPersona?>(null) }
-    var importing by remember { mutableStateOf(false) }
-    var importedName by remember { mutableStateOf("") }
     Box(Modifier.fillMaxSize().background(Color(0x55293232)).clickable(onClick = onCancel), contentAlignment = Alignment.BottomCenter) {
         Surface(Modifier.fillMaxWidth().clickable(enabled = false) {}, RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp), LoveHouseGlass.StrongBackground, border = BorderStroke(1.dp, LoveHouseGlass.StrongBorder)) {
             Column(Modifier.navigationBarsPadding().padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (selected == null) "选择或导入 Persona" else "创建 Thread", Modifier.weight(1f), color = ChatInk, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(if (selected == null) "选择 Persona" else "创建 Thread", Modifier.weight(1f), color = ChatInk, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     IconTouch(LoveHouseIcon.Close, "取消", onCancel)
                 }
                 if (selected == null) {
                     store.personas.forEach { persona -> ActionRow(LoveHouseIcon.Contact, persona.name, persona.memoryLabel) { selected = persona } }
-                    if (!importing) ActionRow(LoveHouseIcon.Plus, "导入 Persona", "建立独立人格与专属 Memory") { importing = true }
-                    else {
-                        Surface(Modifier.fillMaxWidth().padding(top = 8.dp), RoundedCornerShape(14.dp), Color.White.copy(alpha = .38f)) {
-                            BasicTextField(importedName, { importedName = it }, Modifier.padding(12.dp), textStyle = TextStyle(ChatInk, fontSize = 11.sp), decorationBox = { inner -> Box { if (importedName.isBlank()) Text("Persona 名称", color = ChatMuted, fontSize = 11.sp); inner() } })
-                        }
-                        Text("确认导入", Modifier.align(Alignment.End).clickable { selected = store.importPersona(importedName) }.padding(12.dp), color = ChatInk, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    if (store.personas.isEmpty()) {
+                        Text(
+                            store.personaProfileError ?: "当前 App Account 暂无 Persona Profile",
+                            Modifier.padding(vertical = 14.dp),
+                            color = ChatMuted,
+                            fontSize = 10.sp,
+                        )
                     }
                 } else {
                     Text("${selected!!.name} · ${selected!!.memoryLabel}", color = ChatMuted, fontSize = 9.sp)

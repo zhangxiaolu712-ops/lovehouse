@@ -2,9 +2,13 @@ package fyi.b612.lovehouse.feature.chat
 
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import java.util.UUID
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -77,12 +81,15 @@ class ChatSessionStore(
         val saved = conversationPersonas.savedThreads()
         addAll((initialThreads + saved.filter { candidate -> initialThreads.none { it.threadId == candidate.threadId } }).map(::hydratePersona))
     }
-    val personas = mutableStateListOf(
+    private val legacyPersonas = listOf(
         ChatPersona("g", "G老师", "G", "gpt_private"),
         ChatPersona("claude", "Claude", "C", "claude_private"),
         ChatPersona("codex", "Codex", "⌘", "engineering_context"),
         ChatPersona("gemini", "Gemini", "星", "gemini_private"),
     )
+    val personas = mutableStateListOf<ChatPersona>()
+    var personaProfileError by mutableStateOf<String?>(null)
+        private set
     private val messagesByThread = mutableStateMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessageUi>>()
     private val membersByThread = mutableStateMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMember>>()
     private val backgrounds = mutableStateMapOf<String, String>()
@@ -123,37 +130,51 @@ class ChatSessionStore(
     suspend fun personaProfile(threadId: String): PersonaProfile? =
         thread(threadId)?.personaId?.let { personaRuntimeSource.profile(it) }
     suspend fun refreshPersonaProfiles() = personaProfileRefreshMutex.withLock {
-        val profiles = personaRuntimeSource.profiles().toMutableList()
-        val knownProfileIds = profiles.mapTo(linkedSetOf(), PersonaProfile::personaId)
-        threads.asSequence()
-            .mapNotNull { thread ->
-                val legacyId = legacyPersonaIdForThread(thread.threadId) ?: return@mapNotNull null
-                val persistedId = conversationPersonas.personaId(thread.threadId) ?: thread.personaId
-                legacyId.takeIf { it == persistedId && it !in knownProfileIds }
-            }
-            .distinct()
-            .forEach { personaId ->
-                val local = personas.firstOrNull { it.personaId == personaId } ?: return@forEach
-                val saved = personaRuntimeSource.save(
-                    PersonaProfile(
-                        personaId = local.personaId,
-                        displayName = local.name,
-                        avatar = local.avatar,
-                        instructions = "",
-                        background = "",
-                        version = 0,
-                        providerNativeAnchorPreference = false,
-                    ),
+        try {
+            val profiles = personaRuntimeSource.profiles().toMutableList()
+            val knownProfileIds = profiles.mapTo(linkedSetOf(), PersonaProfile::personaId)
+            threads.asSequence()
+                .mapNotNull { thread ->
+                    val legacyId = legacyPersonaIdForThread(thread.threadId) ?: return@mapNotNull null
+                    val persistedId = conversationPersonas.personaId(thread.threadId) ?: thread.personaId
+                    legacyId.takeIf { it == persistedId && it !in knownProfileIds }
+                }
+                .distinct()
+                .forEach { personaId ->
+                    val legacy = legacyPersonas.firstOrNull { it.personaId == personaId } ?: return@forEach
+                    val saved = personaRuntimeSource.materialize(
+                        PersonaProfile(
+                            personaId = legacy.personaId,
+                            displayName = legacy.name,
+                            avatar = legacy.avatar,
+                            instructions = "",
+                            background = "",
+                            version = 0,
+                            providerNativeAnchorPreference = false,
+                        ),
+                    )
+                    profiles += saved
+                    knownProfileIds += saved.personaId
+                }
+            val previous = personas.associateBy(ChatPersona::personaId)
+            val authoritative = profiles.distinctBy(PersonaProfile::personaId).map { profile ->
+                val fallback = previous[profile.personaId]
+                    ?: legacyPersonas.firstOrNull { it.personaId == profile.personaId }
+                ChatPersona(
+                    profile.personaId,
+                    profile.displayName,
+                    profile.avatar ?: fallback?.avatar ?: profile.displayName.take(1),
+                    fallback?.memoryLabel.orEmpty(),
                 )
-                profiles += saved
-                knownProfileIds += saved.personaId
             }
-        for (profile in profiles) {
-            val index = personas.indexOfFirst { it.personaId == profile.personaId }
-            val current = personas.getOrNull(index)
-            val updated = ChatPersona(profile.personaId, profile.displayName,
-                profile.avatar ?: current?.avatar ?: profile.displayName.take(1), current?.memoryLabel.orEmpty())
-            if (index >= 0) personas[index] = updated else personas.add(updated)
+            personas.clear()
+            personas.addAll(authoritative)
+            personaProfileError = null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            personaProfileError = error.personaRuntimeMessage()
+            throw error
         }
     }
     suspend fun savePersonaProfile(profile: PersonaProfile): PersonaProfile {
@@ -162,6 +183,13 @@ class ChatSessionStore(
         if (index >= 0) {
             val current = personas[index]
             personas[index] = current.copy(name = saved.displayName, avatar = saved.avatar ?: current.avatar)
+        } else {
+            personas += ChatPersona(
+                saved.personaId,
+                saved.displayName,
+                saved.avatar ?: saved.displayName.take(1),
+                "",
+            )
         }
         return saved
     }
@@ -384,12 +412,6 @@ class ChatSessionStore(
             }
             Result.failure(error)
         }
-    }
-
-    fun importPersona(name: String): ChatPersona {
-        val persona = ChatPersona("import-${UUID.randomUUID()}", name.ifBlank { "新 Persona" }, name.take(1).ifBlank { "新" }, "独立 Memory")
-        personas += persona
-        return persona
     }
 
     fun createThread(persona: ChatPersona, temporary: Boolean): ChatThreadSummary {

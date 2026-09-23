@@ -33,8 +33,7 @@ class AppEffectiveToolResolver(
                 capability.availability == ToolAvailability.Available &&
                     capability.toolId in profiles.profile(personaId, threadId).preferredToolIds
             }
-        val authoritative = runCatching { mcpConnections.effectiveConnections(personaId) }
-            .getOrElse { emptyList() }
+        val authoritative = mcpConnections.effectiveConnections(personaId)
         val mcpTools = if (authoritative != null) {
             authoritative.map { it.toCapability(personaId) }
         } else {

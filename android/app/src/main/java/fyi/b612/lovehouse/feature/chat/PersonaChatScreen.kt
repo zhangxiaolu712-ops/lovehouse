@@ -111,6 +111,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import fyi.b612.lovehouse.R
@@ -433,10 +434,17 @@ fun ChatShellScreen(
         threadId,
         effectiveToolResolver,
     ) {
-        value = if (conversationPersonaId.isBlank()) {
+        value = try {
+            if (conversationPersonaId.isBlank()) {
+                EffectiveToolSet.empty(conversationPersonaId, threadId)
+            } else {
+                effectiveToolResolver.resolve(conversationPersonaId, threadId)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            actionNotice = error.personaRuntimeMessage()
             EffectiveToolSet.empty(conversationPersonaId, threadId)
-        } else {
-            effectiveToolResolver.resolve(conversationPersonaId, threadId)
         }
     }
     val eligibleTools = effectiveToolSet.tools.distinctBy { it.group }
@@ -918,6 +926,16 @@ private fun PersonaPickerSheet(store: ChatSessionStore, threadId: String, visual
         Column {
             SheetHeader("选择 Persona", "该选择会保存到当前 Conversation。", onClose)
             LazyColumn(Modifier.weight(1f)) {
+                if (store.personas.isEmpty()) {
+                    item {
+                        Text(
+                            store.personaProfileError ?: "当前 App Account 暂无 Persona Profile",
+                            Modifier.padding(18.dp),
+                            color = PersonaMuted,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
                 items(store.personas, key = { it.personaId }) { persona ->
                     Row(
                         Modifier.fillMaxWidth().clickable { selected = persona }.padding(horizontal = 18.dp, vertical = 11.dp),
