@@ -23,6 +23,7 @@ internal object LoveHouseChatCatalog {
             updatedAt = "",
             pinned = true,
             speakerLabel = "长期单聊",
+            personaId = "g",
         ),
         ChatThreadSummary(
             threadId = ClaudeRuntime.threadId,
@@ -33,6 +34,7 @@ internal object LoveHouseChatCatalog {
             pinned = true,
             speakerLabel = "Claude · 长期单聊",
             avatarGlyph = "C",
+            personaId = ClaudeRuntime.personaId,
         ),
         ChatThreadSummary(
             threadId = "agent-codex",
@@ -41,6 +43,7 @@ internal object LoveHouseChatCatalog {
             preview = "真实本机历史",
             updatedAt = "",
             avatarGlyph = "⌘",
+            personaId = CodexRuntime.personaId,
         ),
     )
 }

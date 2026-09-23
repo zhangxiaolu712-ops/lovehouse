@@ -2,10 +2,16 @@ package fyi.b612.lovehouse.feature.chat
 
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import java.util.UUID
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class ChatPersona(
@@ -65,23 +71,32 @@ class ChatSessionStore(
     private val codexClient: CodexChatClient = HttpCodexChatClient(),
     private val messageRepository: LocalChatMessageRepository = NoOpLocalChatMessageRepository,
     private val now: () -> Long = System::currentTimeMillis,
+    private val conversationPersonas: ConversationPersonaStore = InMemoryConversationPersonaStore(),
+    private val personaRuntimeSource: PersonaRuntimeSource = NoOpPersonaRuntimeSource,
     private val claudeWebHistoryImporter: ClaudeWebHistoryImporter? = null,
     initialTasks: List<RemoteAgentTask> = emptyList(),
     initialThreads: List<ChatThreadSummary> = LoveHouseChatCatalog.threads,
 ) {
-    val threads = mutableStateListOf<ChatThreadSummary>().apply { addAll(initialThreads) }
-    val personas = mutableStateListOf(
+    val threads = mutableStateListOf<ChatThreadSummary>().apply {
+        val saved = conversationPersonas.savedThreads()
+        addAll((initialThreads + saved.filter { candidate -> initialThreads.none { it.threadId == candidate.threadId } }).map(::hydratePersona))
+    }
+    private val legacyPersonas = listOf(
         ChatPersona("g", "G老师", "G", "gpt_private"),
         ChatPersona("claude", "Claude", "C", "claude_private"),
         ChatPersona("codex", "Codex", "⌘", "engineering_context"),
         ChatPersona("gemini", "Gemini", "星", "gemini_private"),
     )
+    val personas = mutableStateListOf<ChatPersona>()
+    var personaProfileError by mutableStateOf<String?>(null)
+        private set
     private val messagesByThread = mutableStateMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMessageUi>>()
     private val membersByThread = mutableStateMapOf<String, androidx.compose.runtime.snapshots.SnapshotStateList<ChatMember>>()
     private val backgrounds = mutableStateMapOf<String, String>()
     private val tasksById = mutableStateMapOf<String, RemoteAgentTask>().apply {
         initialTasks.forEach { put(it.taskId, it) }
     }
+    private val personaProfileRefreshMutex = Mutex()
 
     init {
         messagesByThread["persona-gpt"] = mutableStateListOf()
@@ -107,6 +122,77 @@ class ChatSessionStore(
     }
 
     fun thread(threadId: String): ChatThreadSummary? = threads.firstOrNull { it.threadId == threadId }
+    fun persona(threadId: String): ChatPersona? = thread(threadId)?.personaId?.let { personaId ->
+        personas.firstOrNull { it.personaId == personaId }
+    }
+    fun reanchorPending(threadId: String): Boolean = conversationPersonas.reanchorPending(threadId)
+    fun requestReanchor(threadId: String) { conversationPersonas.setReanchorPending(threadId, true) }
+    suspend fun personaProfile(threadId: String): PersonaProfile? =
+        thread(threadId)?.personaId?.let { personaRuntimeSource.profile(it) }
+    suspend fun refreshPersonaProfiles() = personaProfileRefreshMutex.withLock {
+        try {
+            val profiles = personaRuntimeSource.profiles().toMutableList()
+            val knownProfileIds = profiles.mapTo(linkedSetOf(), PersonaProfile::personaId)
+            threads.asSequence()
+                .mapNotNull { thread ->
+                    val legacyId = legacyPersonaIdForThread(thread.threadId) ?: return@mapNotNull null
+                    val persistedId = conversationPersonas.personaId(thread.threadId) ?: thread.personaId
+                    legacyId.takeIf { it == persistedId && it !in knownProfileIds }
+                }
+                .distinct()
+                .forEach { personaId ->
+                    val legacy = legacyPersonas.firstOrNull { it.personaId == personaId } ?: return@forEach
+                    val saved = personaRuntimeSource.materialize(
+                        PersonaProfile(
+                            personaId = legacy.personaId,
+                            displayName = legacy.name,
+                            avatar = legacy.avatar,
+                            instructions = "",
+                            background = "",
+                            version = 0,
+                            providerNativeAnchorPreference = false,
+                        ),
+                    )
+                    profiles += saved
+                    knownProfileIds += saved.personaId
+                }
+            val previous = personas.associateBy(ChatPersona::personaId)
+            val authoritative = profiles.distinctBy(PersonaProfile::personaId).map { profile ->
+                val fallback = previous[profile.personaId]
+                    ?: legacyPersonas.firstOrNull { it.personaId == profile.personaId }
+                ChatPersona(
+                    profile.personaId,
+                    profile.displayName,
+                    profile.avatar ?: fallback?.avatar ?: profile.displayName.take(1),
+                    fallback?.memoryLabel.orEmpty(),
+                )
+            }
+            personas.clear()
+            personas.addAll(authoritative)
+            personaProfileError = null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            personaProfileError = error.personaRuntimeMessage()
+            throw error
+        }
+    }
+    suspend fun savePersonaProfile(profile: PersonaProfile): PersonaProfile {
+        val saved = personaRuntimeSource.save(profile)
+        val index = personas.indexOfFirst { it.personaId == saved.personaId }
+        if (index >= 0) {
+            val current = personas[index]
+            personas[index] = current.copy(name = saved.displayName, avatar = saved.avatar ?: current.avatar)
+        } else {
+            personas += ChatPersona(
+                saved.personaId,
+                saved.displayName,
+                saved.avatar ?: saved.displayName.take(1),
+                "",
+            )
+        }
+        return saved
+    }
     fun messages(threadId: String) = messagesByThread.getOrPut(threadId) { mutableStateListOf() }
     fun members(threadId: String) = membersByThread.getOrPut(threadId) { mutableStateListOf() }
     fun background(threadId: String): String = backgrounds[threadId] ?: "green"
@@ -154,6 +240,7 @@ class ChatSessionStore(
     suspend fun sendClaudeMessage(
         body: String,
         attachments: List<ChatAttachment> = emptyList(),
+        requestedToolIds: Set<String> = emptySet(),
         onText: (String) -> Unit,
     ): Result<CodexChatResult> = sendRuntimeMessage(
         localThreadId = ClaudeRuntime.threadId,
@@ -161,7 +248,7 @@ class ChatSessionStore(
         assistantName = "Claude",
         assistantAvatar = "C",
         body = body,
-        requestedToolIds = emptySet(),
+        requestedToolIds = requestedToolIds,
         attachments = attachments,
         onText = onText,
     )
@@ -224,12 +311,22 @@ class ChatSessionStore(
             messages(localThreadId) += persistedMessageUi(user)
             userVisible = true
             updateThread(localThreadId) { it.copy(preview = previewBody, updatedAt = "刚刚") }
+            val selectedPersonaId = thread(localThreadId)?.personaId ?: runtime.personaId
+            val pending = conversationPersonas.reanchorPending(localThreadId)
+            val snapshot = personaRuntimeSource.resolve(selectedPersonaId, requestedToolIds, pending)
+            val needsReanchor = pending || (snapshot != null &&
+                conversationPersonas.materializedPersonaVersion(localThreadId) != snapshot.personaVersion)
+            val turnSnapshot = snapshot?.let {
+                PersonaRuntimeSnapshot(it.personaId, it.personaVersion, it.instructions, it.background,
+                    it.connectionIds, it.executionTicket, needsReanchor)
+            }
             val result = withContext(Dispatchers.IO) {
-                codexClient.streamRuntimeMessageWithProcess(
+                codexClient.streamRuntimeMessageWithPersona(
                     runtime,
                     body,
                     requestedToolIds,
                     attachments,
+                    turnSnapshot,
                     onText = { fullText ->
                         assistantText = fullText
                         replaceMessage(
@@ -267,6 +364,10 @@ class ChatSessionStore(
             withContext(Dispatchers.IO) { messageRepository.upsert(listOf(user, assistant)) }
             replaceMessage(localThreadId, userId, persistedMessageUi(user))
             replaceMessage(localThreadId, assistantId, persistedMessageUi(assistant).copy(processEvents = processEvents.toList()))
+            if (turnSnapshot != null) {
+                conversationPersonas.setMaterializedPersonaVersion(localThreadId, turnSnapshot.personaVersion)
+                if (turnSnapshot.reanchorIntent) conversationPersonas.setReanchorPending(localThreadId, false)
+            }
             Result.success(result)
         } catch (error: Throwable) {
             if (assistantText.isNotBlank()) {
@@ -313,12 +414,6 @@ class ChatSessionStore(
         }
     }
 
-    fun importPersona(name: String): ChatPersona {
-        val persona = ChatPersona("import-${UUID.randomUUID()}", name.ifBlank { "新 Persona" }, name.take(1).ifBlank { "新" }, "独立 Memory")
-        personas += persona
-        return persona
-    }
-
     fun createThread(persona: ChatPersona, temporary: Boolean): ChatThreadSummary {
         val id = "thread-${UUID.randomUUID()}"
         val thread = ChatThreadSummary(
@@ -332,10 +427,21 @@ class ChatSessionStore(
             expiresAtLabel = if (temporary) "72小时" else null,
             taskId = null,
             avatarGlyph = persona.avatar,
+            personaId = persona.personaId,
         )
+        conversationPersonas.setPersonaId(id, persona.personaId)
+        conversationPersonas.saveThread(thread)
         threads.add(0, thread)
         messagesByThread[id] = mutableStateListOf()
         return thread
+    }
+
+    fun setPersona(threadId: String, persona: ChatPersona) {
+        conversationPersonas.setPersonaId(threadId, persona.personaId)
+        conversationPersonas.setReanchorPending(threadId, true)
+        updateThread(threadId) { current ->
+            current.copy(personaId = persona.personaId).also(conversationPersonas::saveThread)
+        }
     }
 
     fun addMember(threadId: String, persona: ChatPersona) {
@@ -414,6 +520,15 @@ class ChatSessionStore(
     private fun updateThread(threadId: String, transform: (ChatThreadSummary) -> ChatThreadSummary) {
         val index = threads.indexOfFirst { it.threadId == threadId }
         if (index >= 0) threads[index] = transform(threads[index])
+    }
+
+    private fun hydratePersona(thread: ChatThreadSummary): ChatThreadSummary {
+        val persisted = conversationPersonas.personaId(thread.threadId)
+        val resolved = persisted ?: thread.personaId ?: legacyPersonaIdForThread(thread.threadId)
+        if (persisted == null && resolved != null) {
+            conversationPersonas.setPersonaId(thread.threadId, resolved)
+        }
+        return thread.copy(personaId = resolved)
     }
 
     private fun threadForTask(taskId: String): String? = threads.firstOrNull { it.taskId == taskId }?.threadId

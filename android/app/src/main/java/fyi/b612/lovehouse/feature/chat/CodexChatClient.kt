@@ -92,11 +92,23 @@ interface CodexChatClient {
         onText,
         onProcess,
     )
+
+    suspend fun streamRuntimeMessageWithPersona(
+        config: ChatRuntimeConfig,
+        message: String,
+        requestedToolIds: Set<String>,
+        attachments: List<ChatAttachment>,
+        personaRuntime: PersonaRuntimeSnapshot?,
+        onText: (String) -> Unit,
+        onProcess: (ChatProcessEvent) -> Unit,
+    ): CodexChatResult = streamRuntimeMessageWithProcess(
+        config, message, requestedToolIds, attachments, onText, onProcess,
+    )
 }
 
 class HttpCodexChatClient(
     private val endpoint: String = BuildConfig.LOVEHOUSE_CHAT_URL,
-    private val allowedToolIdsFor: (String) -> Set<String> = { emptySet() },
+    private val allowedToolIdsFor: (String, String) -> Set<String> = { _, _ -> emptySet() },
 ) : CodexChatClient {
     override suspend fun streamMessage(
         threadId: String,
@@ -104,7 +116,7 @@ class HttpCodexChatClient(
         requestedToolIds: Set<String>,
         attachments: List<ChatAttachment>,
         onText: (String) -> Unit,
-    ): CodexChatResult = streamInternal(CodexRuntime.copy(threadId = threadId), message, requestedToolIds, attachments, onText) {}
+    ): CodexChatResult = streamInternal(CodexRuntime.copy(threadId = threadId), message, requestedToolIds, attachments, onText, onProcess = {})
 
     override suspend fun streamMessageWithProcess(
         threadId: String,
@@ -124,6 +136,16 @@ class HttpCodexChatClient(
         onProcess: (ChatProcessEvent) -> Unit,
     ): CodexChatResult = streamInternal(config, message, requestedToolIds, attachments, onText, onProcess)
 
+    override suspend fun streamRuntimeMessageWithPersona(
+        config: ChatRuntimeConfig,
+        message: String,
+        requestedToolIds: Set<String>,
+        attachments: List<ChatAttachment>,
+        personaRuntime: PersonaRuntimeSnapshot?,
+        onText: (String) -> Unit,
+        onProcess: (ChatProcessEvent) -> Unit,
+    ): CodexChatResult = streamInternal(config, message, requestedToolIds, attachments, onText, onProcess, personaRuntime)
+
     private suspend fun streamInternal(
         config: ChatRuntimeConfig,
         message: String,
@@ -131,6 +153,7 @@ class HttpCodexChatClient(
         attachments: List<ChatAttachment>,
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
+        personaRuntime: PersonaRuntimeSnapshot? = null,
     ): CodexChatResult {
         require(config.attachmentsEnabled || attachments.isEmpty()) { "${config.personaId} Runtime 尚未启用附件" }
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
@@ -142,7 +165,8 @@ class HttpCodexChatClient(
             setRequestProperty("Accept", "text/event-stream")
         }
         val allowedToolIds = if (config.toolCenterEnabled) {
-            allowedToolIdsFor(config.threadId).intersect(requestedToolIds)
+            allowedToolIdsFor(config.personaId, config.threadId)
+                .intersect(requestedToolIds).filterNotTo(linkedSetOf()) { it.startsWith("mcp-connection:") }
         } else {
             emptySet()
         }
@@ -151,6 +175,7 @@ class HttpCodexChatClient(
             toolDirectedMessage(message, allowedToolIds),
             allowedToolIds,
             attachments,
+            personaRuntime,
         )
         try {
             connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload) }
@@ -294,11 +319,22 @@ internal fun buildChatPayload(
     message: String,
     allowedToolIds: Set<String>,
     attachments: List<ChatAttachment> = emptyList(),
+    personaRuntime: PersonaRuntimeSnapshot? = null,
 ): String {
     val tools = allowedToolIds.sorted().joinToString(",") { "\"${jsonEscape(it)}\"" }
-    val toolField = if (config.toolCenterEnabled) "\"allowed_tool_ids\":[$tools]," else ""
+    val toolField = if (config.toolCenterEnabled && allowedToolIds.isNotEmpty()) "\"allowed_tool_ids\":[$tools]," else ""
     val attachmentField = if (config.attachmentsEnabled) ",\"attachments\":${chatAttachmentsJson(attachments)}" else ""
-    return """{"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
+    val personaField = personaRuntime?.let { snapshot ->
+        val ticket = snapshot.executionTicket?.let { ",\"execution_ticket\":\"${jsonEscape(it)}\"" }.orEmpty()
+        val connections = snapshot.connectionIds.sorted().joinToString(",") { "\"${jsonEscape(it)}\"" }
+        "\"persona_runtime\":{\"persona_id\":\"${jsonEscape(snapshot.personaId)}\"," +
+            "\"persona_version\":${snapshot.personaVersion}," +
+            "\"instructions\":\"${jsonEscape(snapshot.instructions)}\"," +
+            "\"background\":\"${jsonEscape(snapshot.background)}\"," +
+            "\"connection_ids\":[$connections]," +
+            "\"reanchor_intent\":${snapshot.reanchorIntent}$ticket},"
+    }.orEmpty()
+    return """{"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$personaField$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
 }
 
 internal fun jsonEscape(value: String): String = buildString {
@@ -309,6 +345,7 @@ internal fun jsonEscape(value: String): String = buildString {
             '\n' -> "\\n"
             '\r' -> "\\r"
             '\t' -> "\\t"
+            in '\u0000'..'\u001F' -> "\\u%04x".format(char.code)
             else -> char
         })
     }
@@ -343,5 +380,5 @@ internal val ClaudeRuntime = ChatRuntimeConfig(
     expectedRuntime = "claude_cli",
     expectedAdapterId = "claude-cli-v1",
     attachmentCapabilities = ClaudeAttachmentCapabilities,
-    toolCenterEnabled = false,
+    toolCenterEnabled = true,
 )

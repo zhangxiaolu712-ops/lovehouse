@@ -59,6 +59,10 @@ class AndroidAppAccountRepository(
     )
     override val state: StateFlow<AppAccountState> = mutableState.asStateFlow()
 
+    // Reuse the Keystore-backed App Account session for App Backend requests only.
+    // Callers must never persist or log the returned header.
+    internal fun backendSessionCookie(): String? = store.load()?.cookieHeader
+
     override suspend fun refresh() {
         val current = store.load()
         if (current == null) {

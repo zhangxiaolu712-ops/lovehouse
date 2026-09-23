@@ -28,6 +28,7 @@ import fyi.b612.lovehouse.core.selfcheck.BuildIdentitySelfCheckContributor
 import fyi.b612.lovehouse.core.selfcheck.DeploymentSelfCheckRunner
 import fyi.b612.lovehouse.core.selfcheck.NativeCapabilitySelfCheckContributor
 import fyi.b612.lovehouse.core.selfcheck.ProductionWiringSelfCheckContributor
+import fyi.b612.lovehouse.core.selfcheck.PersonaRuntimeSelfCheckContributor
 import fyi.b612.lovehouse.core.selfcheck.ProductionWiringSnapshot
 import fyi.b612.lovehouse.core.selfcheck.SelfCheckRegistry
 import fyi.b612.lovehouse.core.selfcheck.ToolCenterSelfCheckContributor
@@ -42,8 +43,12 @@ import fyi.b612.lovehouse.feature.chat.ChatAttachmentLifecycle
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentType
 import fyi.b612.lovehouse.feature.chat.ChatRuntimeConfig
 import fyi.b612.lovehouse.feature.chat.AndroidChatConnectionStore
+import fyi.b612.lovehouse.feature.chat.AndroidConversationPersonaStore
 import fyi.b612.lovehouse.feature.chat.ChatConnectionProbe
 import fyi.b612.lovehouse.feature.chat.ChatConnectionStore
+import fyi.b612.lovehouse.feature.chat.ConversationPersonaStore
+import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
+import fyi.b612.lovehouse.feature.chat.AppBackendPersonaRuntimeSource
 import fyi.b612.lovehouse.feature.chat.HttpChatConnectionProbe
 import fyi.b612.lovehouse.feature.settings.AndroidToolProfilePreferenceStore
 import fyi.b612.lovehouse.feature.settings.AndroidCapabilityRegistry
@@ -59,6 +64,8 @@ import fyi.b612.lovehouse.feature.settings.AndroidAppAccountRepository
 import fyi.b612.lovehouse.feature.settings.AppAccountRepository
 import fyi.b612.lovehouse.feature.settings.AppBackendMcpConnectionRepository
 import fyi.b612.lovehouse.feature.settings.McpConnectionRepository
+import fyi.b612.lovehouse.feature.settings.AppEffectiveToolResolver
+import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
 import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
@@ -81,6 +88,9 @@ data class AppDependencies(
     val chatConnectionProbe: ChatConnectionProbe,
     val appAccount: AppAccountRepository,
     val mcpConnections: McpConnectionRepository,
+    val conversationPersonas: ConversationPersonaStore,
+    val personaRuntimeSource: PersonaRuntimeSource,
+    val effectiveTools: EffectiveToolResolver,
     val selfCheck: DeploymentSelfCheckRunner,
 )
 
@@ -109,8 +119,18 @@ fun createAppDependencies(context: Context): AppDependencies {
     val localStorage: LocalStorage = DataStoreLocalStorage(appContext)
     val mediaAttachments: MediaAttachmentClient = HttpMediaAttachmentClient(appContext, ownerSession)
     val toolConnections: ToolConnectionStore = AndroidToolConnectionStore(appContext)
-    val appAccount: AppAccountRepository = AndroidAppAccountRepository(appContext, BuildConfig.LOVEHOUSE_APP_BACKEND_URL)
-    val mcpConnections: McpConnectionRepository = AppBackendMcpConnectionRepository(BuildConfig.LOVEHOUSE_APP_BACKEND_URL)
+    val appAccountSource = AndroidAppAccountRepository(appContext, BuildConfig.LOVEHOUSE_APP_BACKEND_URL)
+    val appAccount: AppAccountRepository = appAccountSource
+    val mcpConnections: McpConnectionRepository = AppBackendMcpConnectionRepository(
+        BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
+        sessionCookie = appAccountSource::backendSessionCookie,
+    )
+    val conversationPersonas: ConversationPersonaStore = AndroidConversationPersonaStore(appContext)
+    val personaRuntimeSource: PersonaRuntimeSource = AppBackendPersonaRuntimeSource(
+        BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
+        appAccountSource::backendSessionCookie,
+    )
+    val effectiveTools: EffectiveToolResolver = AppEffectiveToolResolver(toolCenter, toolProfiles, mcpConnections)
     val capabilityRegistry: CapabilityRegistry = AndroidCapabilityRegistry(toolCenter, toolProfiles, "codex", stableCodexThreadId())
     val deviceContext = AndroidDeviceContextProvider(
         appContext,
@@ -147,8 +167,16 @@ fun createAppDependencies(context: Context): AppDependencies {
                 ),
                 ToolCenterSelfCheckContributor(capabilityRegistry),
                 AccountSelfCheckContributor(appAccount, ownerSession),
+                PersonaRuntimeSelfCheckContributor(
+                    accountSourceProduction = appAccount is AndroidAppAccountRepository,
+                    profileSourceProduction = personaRuntimeSource is AppBackendPersonaRuntimeSource,
+                    conversationStoreProduction = conversationPersonas is AndroidConversationPersonaStore,
+                    capabilityResolverProduction = effectiveTools is AppEffectiveToolResolver,
+                    providerPayloadWired = personaRuntimeSource is AppBackendPersonaRuntimeSource,
+                ),
                 BuildIdentitySelfCheckContributor(buildIdentity),
             ),
+            requiredContributorIds = setOf(PersonaRuntimeSelfCheckContributor.CONTRIBUTOR_ID),
         ),
         buildIdentity = buildIdentity,
     )
@@ -170,6 +198,9 @@ fun createAppDependencies(context: Context): AppDependencies {
         chatConnectionProbe = HttpChatConnectionProbe(),
         appAccount = appAccount,
         mcpConnections = mcpConnections,
+        conversationPersonas = conversationPersonas,
+        personaRuntimeSource = personaRuntimeSource,
+        effectiveTools = effectiveTools,
         selfCheck = selfCheck,
     )
 }

@@ -28,6 +28,7 @@ data class ChatThreadSummary(
     val expiresAtLabel: String? = null,
     val taskId: String? = null,
     val avatarGlyph: String? = null,
+    val personaId: String? = null,
 )
 
 sealed interface ChatListState {

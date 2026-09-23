@@ -13,6 +13,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -63,11 +64,16 @@ private fun LoveHouseContent(
     val chatStore = remember(dependencies.chatMessages, dependencies.capabilityRegistry, dependencies.claudeWebHistoryImporter) {
         ChatSessionStore(
             codexClient = HttpCodexChatClient(
-                allowedToolIdsFor = { dependencies.capabilityRegistry.requestedToolIds() },
+                allowedToolIdsFor = dependencies.effectiveTools::cachedAllowedToolIds,
             ),
             messageRepository = dependencies.chatMessages,
+            conversationPersonas = dependencies.conversationPersonas,
+            personaRuntimeSource = dependencies.personaRuntimeSource,
             claudeWebHistoryImporter = dependencies.claudeWebHistoryImporter,
         )
+    }
+    LaunchedEffect(chatStore) {
+        runCatching { chatStore.refreshPersonaProfiles() }
     }
     NavHost(
         navController = navController,
@@ -105,7 +111,7 @@ private fun LoveHouseContent(
                 threadId = threadId,
                 store = chatStore,
                 localStorage = dependencies.localStorage,
-                capabilityRegistry = dependencies.capabilityRegistry,
+                effectiveToolResolver = dependencies.effectiveTools,
                 baseCapabilities = dependencies.baseCapabilities,
                 mediaAttachments = dependencies.mediaAttachments,
                 chatConnections = dependencies.chatConnections,
@@ -152,6 +158,7 @@ private fun LoveHouseContent(
                 toolConnectionProbe = dependencies.toolConnectionProbe,
                 appAccount = dependencies.appAccount,
                 mcpConnections = dependencies.mcpConnections,
+                personaRuntimeSource = dependencies.personaRuntimeSource,
                 selfCheck = dependencies.selfCheck,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
             )
@@ -202,6 +209,7 @@ private fun LoveHouseContent(
         ) { entry ->
             McpOAuthResultScreen(
                 repository = dependencies.mcpConnections,
+                personaRuntimeSource = dependencies.personaRuntimeSource,
                 connectionId = entry.arguments?.getString("connectionId").orEmpty(),
                 callbackStatus = entry.arguments?.getString("status").orEmpty(),
                 onBack = { navController.popBackStack() },

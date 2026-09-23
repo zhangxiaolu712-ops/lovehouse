@@ -111,6 +111,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import fyi.b612.lovehouse.R
@@ -132,7 +133,8 @@ import fyi.b612.lovehouse.core.storage.LocalStorage
 import fyi.b612.lovehouse.core.capability.OneShotLocationProvider
 import fyi.b612.lovehouse.feature.settings.ToolAvailability
 import fyi.b612.lovehouse.feature.settings.ToolCapability
-import fyi.b612.lovehouse.feature.settings.CapabilityRegistry
+import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
+import fyi.b612.lovehouse.feature.settings.EffectiveToolSet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -329,7 +331,7 @@ internal fun resolveChatWallpaperPath(
 private fun chatBackdropFor(key: String): ChatBackdrop =
     ChatBackdrop.entries.firstOrNull { it.key == key } ?: ChatBackdrop.Green
 
-private enum class PersonaPanel { Detail, Search, DateJump, Bookshelf, Appearance, Status, Models, IconGallery, MemberPicker, ForwardTarget, WorkflowForward, ForwardBundle, AvatarPicker }
+private enum class PersonaPanel { Detail, Search, DateJump, Bookshelf, Appearance, Status, Models, IconGallery, PersonaPicker, Profile, MemberPicker, ForwardTarget, WorkflowForward, ForwardBundle, AvatarPicker }
 private enum class BubbleStyle(val title: String, val subtitle: String) {
     None("无气泡", "文字直接浮在壁纸上"),
     Soft("轻气泡", "参考图式柔软浅气泡"),
@@ -342,7 +344,7 @@ fun ChatShellScreen(
     threadId: String,
     store: ChatSessionStore,
     localStorage: LocalStorage,
-    capabilityRegistry: CapabilityRegistry,
+    effectiveToolResolver: EffectiveToolResolver,
     baseCapabilities: LoveHouseCapabilityRegistry,
     mediaAttachments: MediaAttachmentClient,
     chatConnections: ChatConnectionStore,
@@ -351,6 +353,7 @@ fun ChatShellScreen(
     modifier: Modifier = Modifier,
 ) {
     val thread = store.thread(threadId) ?: return
+    LaunchedEffect(store) { runCatching { store.refreshPersonaProfiles() } }
     val messages = store.messages(threadId)
     val context = LocalContext.current
     val wallpaperScope = rememberCoroutineScope()
@@ -424,8 +427,27 @@ fun ChatShellScreen(
     var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var forwardingTaskId by remember { mutableStateOf<String?>(null) }
-    val capabilityState by capabilityRegistry.state.collectAsState()
-    val eligibleTools = if (isCodexRuntime) capabilityState.enabledCapabilities.distinctBy { it.group } else emptyList()
+    val conversationPersonaId = thread.personaId ?: runtimeConfig?.personaId.orEmpty()
+    val effectiveToolSet by produceState(
+        initialValue = EffectiveToolSet.empty(conversationPersonaId, threadId),
+        conversationPersonaId,
+        threadId,
+        effectiveToolResolver,
+    ) {
+        value = try {
+            if (conversationPersonaId.isBlank()) {
+                EffectiveToolSet.empty(conversationPersonaId, threadId)
+            } else {
+                effectiveToolResolver.resolve(conversationPersonaId, threadId)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            actionNotice = error.personaRuntimeMessage()
+            EffectiveToolSet.empty(conversationPersonaId, threadId)
+        }
+    }
+    val eligibleTools = effectiveToolSet.tools.distinctBy { it.group }
     val locationReader = remember(context.applicationContext) { OneShotLocationProvider(context.applicationContext) }
     DisposableEffect(locationReader) { onDispose { locationReader.cancel() } }
     val captureLocation: () -> Unit = {
@@ -505,15 +527,11 @@ fun ChatShellScreen(
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
         if (sending || uploadingAttachments || (outgoing.isBlank() && attachmentDraft.attachments.isEmpty())) return@submit
-        val toolsForTurn = if (isCodexRuntime) {
-            resolveRequestedToolIds(
-                message = outgoing,
-                selectedToolIds = requestedToolIds,
-                enabledCapabilities = capabilityState.enabledCapabilities,
-            )
-        } else {
-            emptySet()
-        }
+        val toolsForTurn = resolveRequestedToolIds(
+            message = outgoing,
+            selectedToolIds = requestedToolIds,
+            enabledCapabilities = effectiveToolSet.tools,
+        )
         val localAttachmentsForTurn = attachmentDraft.attachments
         requestedToolIds = emptySet()
         attachmentDraft = attachmentDraft.clear()
@@ -559,7 +577,7 @@ fun ChatShellScreen(
                         "canonical_turn_send attachments=${attachmentsForTurn.size} tools=${toolsForTurn.size}",
                     )
                     val result = if (isClaudeRuntime) {
-                        store.sendClaudeMessage(outgoing, attachmentsForTurn) { }
+                        store.sendClaudeMessage(outgoing, attachmentsForTurn, toolsForTurn) { }
                     } else {
                         store.sendCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { }
                     }
@@ -598,9 +616,9 @@ fun ChatShellScreen(
 
     BackHandler(panel != null || selectedMessages.isNotEmpty()) {
         panel = when (panel) {
-            PersonaPanel.MemberPicker, PersonaPanel.AvatarPicker, PersonaPanel.Search,
+            PersonaPanel.PersonaPicker, PersonaPanel.MemberPicker, PersonaPanel.AvatarPicker, PersonaPanel.Search,
             PersonaPanel.DateJump, PersonaPanel.Bookshelf, PersonaPanel.Appearance,
-            PersonaPanel.Status, PersonaPanel.Models, PersonaPanel.IconGallery -> PersonaPanel.Detail
+            PersonaPanel.Status, PersonaPanel.Models, PersonaPanel.IconGallery, PersonaPanel.Profile -> PersonaPanel.Detail
             else -> null
         }
         if (panel == null && selectedMessages.isNotEmpty()) selectedMessages = emptySet()
@@ -708,7 +726,7 @@ fun ChatShellScreen(
                 onToolMention = { tool ->
                     val mention = "@${tool.groupLabel}"
                     if (!input.contains(mention)) input = listOf(mention, input).filter(String::isNotBlank).joinToString(" ")
-                    val selectedForGroup = capabilityState.enabledCapabilities
+                    val selectedForGroup = effectiveToolSet.tools
                         .filter { it.group == tool.group }
                         .mapTo(linkedSetOf()) { it.toolId }
                     val merged = requestedToolIds + selectedForGroup
@@ -725,6 +743,10 @@ fun ChatShellScreen(
                 PersonaPanel.ForwardTarget -> ForwardTargetSheet(store, threadId, forwardingIds.size > 1, visualContext, onClose = { panel = null }, onConfirm = { target -> store.forward(threadId, forwardingIds, target, forwardingIds.size > 1); selectedMessages = emptySet(); panel = null; actionNotice = "已转发到 ${store.thread(target)?.title}" })
                 PersonaPanel.WorkflowForward -> ForwardTargetSheet(store, threadId, false, visualContext, title = "转发 Workflow", onClose = { panel = null; forwardingTaskId = null }, onConfirm = { target -> forwardingTaskId?.let { store.forwardWorkflow(it, target) }; panel = null; forwardingTaskId = null; actionNotice = "Workflow 已转发到 ${store.thread(target)?.title}" })
                 PersonaPanel.MemberPicker -> MemberPickerSheet(store, threadId, visualContext, onClose = { panel = PersonaPanel.Detail }) { store.addMember(threadId, it); panel = PersonaPanel.Detail }
+                PersonaPanel.PersonaPicker -> PersonaPickerSheet(store, threadId, visualContext, onClose = { panel = PersonaPanel.Detail }) {
+                    store.setPersona(threadId, it)
+                    panel = PersonaPanel.Detail
+                }
                 PersonaPanel.ForwardBundle -> ForwardBundleSheet(openedBundle, visualContext, onClose = { panel = null })
                 PersonaPanel.AvatarPicker -> AvatarPickerSheet(visualContext, onClose = { panel = PersonaPanel.Detail }) { store.updateAvatar(threadId, it); panel = PersonaPanel.Detail }
                 else -> PersonaSheet(
@@ -893,6 +915,53 @@ private fun MemberPickerSheet(store: ChatSessionStore, threadId: String, visualC
                 }
             }
             Text("确认加入", Modifier.align(Alignment.End).padding(18.dp).clip(RoundedCornerShape(12.dp)).background(PersonaAccent.copy(alpha = if (selected == null) .06f else .18f)).clickable(enabled = selected != null) { selected?.let(onConfirm) }.padding(horizontal = 18.dp, vertical = 10.dp), color = if (selected == null) PersonaMuted else PersonaInk, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun PersonaPickerSheet(store: ChatSessionStore, threadId: String, visualContext: ChatVisualContext, onClose: () -> Unit, onConfirm: (ChatPersona) -> Unit) {
+    var selected by remember { mutableStateOf(store.persona(threadId)) }
+    ChatOverlayFrame(visualContext, onClose) {
+        Column {
+            SheetHeader("选择 Persona", "该选择会保存到当前 Conversation。", onClose)
+            LazyColumn(Modifier.weight(1f)) {
+                if (store.personas.isEmpty()) {
+                    item {
+                        Text(
+                            store.personaProfileError ?: "当前 App Account 暂无 Persona Profile",
+                            Modifier.padding(18.dp),
+                            color = PersonaMuted,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
+                items(store.personas, key = { it.personaId }) { persona ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { selected = persona }.padding(horizontal = 18.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(36.dp).background(Color(0xFFDAE8E2), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                            Text(persona.avatar, color = PersonaAccent, fontWeight = FontWeight.Bold)
+                        }
+                        Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                            Text(persona.name, color = PersonaInk, fontSize = 11.sp)
+                            Text("persona_id · ${persona.personaId}", color = PersonaMuted, fontSize = 8.sp)
+                        }
+                        Text(if (selected?.personaId == persona.personaId) "✓" else "○", color = if (selected?.personaId == persona.personaId) PersonaAccent else PersonaMuted)
+                    }
+                }
+            }
+            Text(
+                "确认",
+                Modifier.align(Alignment.End).padding(18.dp).clip(RoundedCornerShape(12.dp))
+                    .background(PersonaAccent.copy(alpha = if (selected == null) .06f else .18f))
+                    .clickable(enabled = selected != null) { selected?.let(onConfirm) }
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                color = if (selected == null) PersonaMuted else PersonaInk,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 }
@@ -1615,7 +1684,7 @@ private fun PersonaSheet(
                 PersonaPanel.Detail -> when (thread.kind) {
                     ChatThreadKind.LivingRoom -> LivingRoomDetailPanel(thread, store, onClose, onNavigate)
                     ChatThreadKind.TemporaryTask -> Column { SheetHeader(thread.title, "Workflow 已作为临时任务主详情。", onClose) }
-                    else -> DirectDetailPanel(thread, model, onClose, onNavigate)
+                    else -> DirectDetailPanel(thread, store, store.persona(thread.threadId), model, onClose, onNavigate)
                 }
                 PersonaPanel.Appearance -> AppearancePanel(
                     current = bubble,
@@ -1632,6 +1701,7 @@ private fun PersonaSheet(
                 PersonaPanel.DateJump -> DatePanel(onClose)
                 PersonaPanel.Bookshelf -> BookshelfPanel(onClose)
                 PersonaPanel.Status -> StatusPanel(onClose)
+                PersonaPanel.Profile -> PersonaProfilePanel(thread.threadId, store, onClose)
                 PersonaPanel.Models -> ModelConnectionsPanel(chatConnections, chatConnectionProbe, onClose)
                 PersonaPanel.IconGallery -> IconGalleryPanel(onClose)
                 else -> Unit
@@ -1650,7 +1720,8 @@ private fun PersonaSheet(
     }
 }
 
-@Composable private fun DirectDetailPanel(thread: ChatThreadSummary, model: String, onClose: () -> Unit, onNavigate: (PersonaPanel) -> Unit) {
+@Composable private fun DirectDetailPanel(thread: ChatThreadSummary, store: ChatSessionStore, persona: ChatPersona?, model: String, onClose: () -> Unit, onNavigate: (PersonaPanel) -> Unit) {
+    var pending by remember(thread.threadId) { mutableStateOf(store.reanchorPending(thread.threadId)) }
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 15.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1659,7 +1730,12 @@ private fun PersonaSheet(
                 ChatIconButton(LoveHouseIcon.Close, "关闭", touchSize = 34.dp, onClick = onClose)
             }
             DetailRow("当前运行", model)
-            DetailRow("Persona", thread.title)
+            DetailRow("Persona", "${persona?.name ?: "未选择"}  ›") { onNavigate(PersonaPanel.PersonaPicker) }
+            DetailRow("人格档案", "Prompt · Background · Version  ›") { onNavigate(PersonaPanel.Profile) }
+            DetailRow("重新注入到当前会话", if (pending) "已等待下一条真实消息" else "下一条消息生效") {
+                store.requestReanchor(thread.threadId)
+                pending = true
+            }
             DetailRow("Memory", "状态尚未接入")
             DetailRow("长期 Thread", thread.threadId)
             DetailRow("更换头像", "自定义  ›") { onNavigate(PersonaPanel.AvatarPicker) }
@@ -1676,6 +1752,85 @@ private fun PersonaSheet(
             Text("运行模型 · 只改变底层引擎，不改变人格、Thread、Memory 和书架", Modifier.padding(horizontal = 19.dp, vertical = 14.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
             Text("这里保存并测试连接信息；Claude / Codex 正式聊天统一使用当前 /api/v1/chat 解耦链。", Modifier.padding(horizontal = 19.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
         }
+    }
+}
+
+@Composable
+private fun PersonaProfilePanel(threadId: String, store: ChatSessionStore, onClose: () -> Unit) {
+    val selected = store.persona(threadId)
+    val scope = rememberCoroutineScope()
+    var name by remember(threadId) { mutableStateOf(selected?.name.orEmpty()) }
+    var instructions by remember(threadId) { mutableStateOf("") }
+    var background by remember(threadId) { mutableStateOf("") }
+    var nativeAnchor by remember(threadId) { mutableStateOf(false) }
+    var version by remember(threadId) { mutableStateOf(0) }
+    var loading by remember(threadId) { mutableStateOf(true) }
+    var busy by remember(threadId) { mutableStateOf(false) }
+    var notice by remember(threadId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(threadId) {
+        try {
+            store.personaProfile(threadId)?.let { profile ->
+                name = profile.displayName
+                instructions = profile.instructions
+                background = profile.background
+                nativeAnchor = profile.providerNativeAnchorPreference
+                version = profile.version
+            }
+        } catch (_: Exception) {
+            notice = "App Account Persona 档案暂时无法读取"
+        } finally {
+            loading = false
+        }
+    }
+    LazyColumn(contentPadding = PaddingValues(bottom = 28.dp)) {
+        item { SheetHeader("人格档案", "App Account 真相源 · 当前会话只保存 persona_id", onClose) }
+        if (selected == null) {
+            item { Text("请先为当前会话选择人格", Modifier.padding(18.dp), color = PersonaMuted, fontSize = 11.sp) }
+        } else {
+            item { Text("${selected.personaId} · version ${if (version == 0) "未建立" else version}", Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 10.sp) }
+            item { PersonaProfileField("名称", name) { name = it } }
+            item { PersonaProfileField("Prompt", instructions) { instructions = it } }
+            item { PersonaProfileField("Background", background) { background = it } }
+            item {
+                DetailRow("Provider native anchor 偏好", if (nativeAnchor) "开启 · 当前 Adapter 未实现" else "关闭") {
+                    nativeAnchor = !nativeAnchor
+                }
+            }
+            item {
+                Text("Persona 不会作为聊天正文保存。档案版本变化会在下一条真实消息生效。Native anchor 当前只是偏好，未宣称已接通。",
+                    Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 9.sp, lineHeight = 14.sp)
+            }
+            item {
+                Text(if (busy) "保存中…" else "保存人格档案",
+                    Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                        .clip(RoundedCornerShape(12.dp)).background(PersonaAccent.copy(alpha = .16f))
+                        .clickable(enabled = !busy && !loading && name.isNotBlank()) {
+                            busy = true
+                            scope.launch {
+                                try {
+                                    val saved = store.savePersonaProfile(PersonaProfile(selected.personaId, name.trim(),
+                                        selected.avatar, instructions, background, version, nativeAnchor))
+                                    version = saved.version
+                                    notice = "已保存 version ${saved.version}；下次发送生效"
+                                } catch (_: Exception) {
+                                    notice = "保存失败；App Account 或 Persona 服务不可用"
+                                } finally { busy = false }
+                            }
+                        }.padding(horizontal = 14.dp, vertical = 10.dp), color = PersonaInk, fontSize = 11.sp)
+            }
+        }
+        notice?.let { message -> item { Text(message, Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = PersonaMuted, fontSize = 10.sp) } }
+    }
+}
+
+@Composable
+private fun PersonaProfileField(label: String, value: String, onValueChange: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
+        Text(label, color = PersonaMuted, fontSize = 10.sp)
+        BasicTextField(value, onValueChange, Modifier.fillMaxWidth().padding(top = 5.dp)
+            .clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = .22f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(color = PersonaInk, fontSize = 11.sp, lineHeight = 16.sp))
     }
 }
 

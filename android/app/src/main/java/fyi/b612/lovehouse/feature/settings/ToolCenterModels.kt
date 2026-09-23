@@ -1,8 +1,8 @@
 package fyi.b612.lovehouse.feature.settings
 
 enum class ToolAvailability { Available, Unconfigured, NoPermission, ConnectionFailed }
-enum class ToolRiskLevel { Low, Medium, High }
-enum class ToolCapabilityKind { Read, Write, Execute, Admin }
+enum class ToolRiskLevel { Low, Medium, High, Unknown }
+enum class ToolCapabilityKind { Read, Write, Execute, Admin, Unknown }
 
 data class ToolCapability(
     val toolId: String,
