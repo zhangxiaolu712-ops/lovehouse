@@ -65,9 +65,23 @@ internal fun McpConnectionsPanel(
     var pendingDelete by remember { mutableStateOf<McpBackendConnection?>(null) }
     var deletingId by remember { mutableStateOf<String?>(null) }
     var bindingTarget by remember { mutableStateOf<McpBackendConnection?>(null) }
+    var personasLoading by remember { mutableStateOf(false) }
     var expandedServiceId by remember { mutableStateOf<String?>(null) }
     var pendingClaim by remember { mutableStateOf<LegacyMcpConnection?>(null) }
     val scope = rememberCoroutineScope()
+    val openPersonaBinding: (McpBackendConnection) -> Unit = { connection ->
+        bindingTarget = connection
+        personasLoading = true
+        scope.launch {
+            runCatching { personaRuntimeSource.profiles() }
+                .onSuccess { loaded ->
+                    personas = loaded
+                    if (loaded.isEmpty()) message = "当前 App Account 尚无可绑定的 Persona Profile"
+                }
+                .onFailure { message = "无法读取 App Backend Persona Profile：${it.message ?: "请检查 App Account"}" }
+            personasLoading = false
+        }
+    }
 
     LaunchedEffect(repository, initialConnectionId, callbackStatus, reload) {
         loading = true
@@ -130,7 +144,7 @@ internal fun McpConnectionsPanel(
                 onExpand = { expandedServiceId = if (expandedServiceId == service.id) null else service.id },
                 deletingId = deletingId,
                 onDelete = { pendingDelete = it },
-                onBind = { bindingTarget = it },
+                onBind = openPersonaBinding,
                 onUnbind = { connection, identityId ->
                     scope.launch {
                         runCatching { repository.unbindIdentity(service.id, identityId) }
@@ -150,7 +164,7 @@ internal fun McpConnectionsPanel(
                     McpConnectionRow(
                         connection = connection, personas = personas,
                         registered = registry.any { it.id == connection.id }, deleting = deletingId == connection.id,
-                        onDelete = { pendingDelete = connection }, onBind = { bindingTarget = connection },
+                        onDelete = { pendingDelete = connection }, onBind = { openPersonaBinding(connection) },
                         onUnbind = { personaId ->
                             val serviceId = connection.toolServiceId
                             if (serviceId == null) message = "App Backend 未返回 tool_service_id，无法解绑"
@@ -235,7 +249,11 @@ internal fun McpConnectionsPanel(
             title = { Text("绑定身份") },
             text = {
                 Column {
-                    if (personas.isEmpty()) Text("当前 App Account 尚无可绑定的 Persona Profile", color = LoveHouseGlass.MutedInk, fontSize = 10.sp)
+                    if (personasLoading) {
+                        Text("正在读取 App Backend Persona Profile…", color = LoveHouseGlass.MutedInk, fontSize = 10.sp)
+                    } else if (personas.isEmpty()) {
+                        Text("当前 App Account 尚无可绑定的 Persona Profile", color = LoveHouseGlass.MutedInk, fontSize = 10.sp)
+                    }
                     personas.forEach { persona ->
                         val assignedElsewhere = connectionsByService[connection.toolServiceId].orEmpty()
                             .any { it.id != connection.id && persona.personaId in it.boundIdentityIds }
@@ -405,7 +423,7 @@ private fun McpConnectionRow(
             }
             Text(
                 if (connection.boundIdentityIds.isEmpty()) "绑定 Persona" else "绑定 / 更换 Persona",
-                Modifier.clickable(enabled = personas.isNotEmpty() && !connection.toolServiceId.isNullOrBlank(), onClick = onBind).padding(3.dp),
+                Modifier.clickable(onClick = onBind).padding(3.dp),
                 color = LoveHouseGlass.Ink,
                 fontSize = 9.sp,
             )

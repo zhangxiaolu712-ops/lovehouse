@@ -6,6 +6,8 @@ import java.util.UUID
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class ChatPersona(
@@ -87,6 +89,7 @@ class ChatSessionStore(
     private val tasksById = mutableStateMapOf<String, RemoteAgentTask>().apply {
         initialTasks.forEach { put(it.taskId, it) }
     }
+    private val personaProfileRefreshMutex = Mutex()
 
     init {
         messagesByThread["persona-gpt"] = mutableStateListOf()
@@ -119,8 +122,33 @@ class ChatSessionStore(
     fun requestReanchor(threadId: String) { conversationPersonas.setReanchorPending(threadId, true) }
     suspend fun personaProfile(threadId: String): PersonaProfile? =
         thread(threadId)?.personaId?.let { personaRuntimeSource.profile(it) }
-    suspend fun refreshPersonaProfiles() {
-        for (profile in personaRuntimeSource.profiles()) {
+    suspend fun refreshPersonaProfiles() = personaProfileRefreshMutex.withLock {
+        val profiles = personaRuntimeSource.profiles().toMutableList()
+        val knownProfileIds = profiles.mapTo(linkedSetOf(), PersonaProfile::personaId)
+        threads.asSequence()
+            .mapNotNull { thread ->
+                val legacyId = legacyPersonaIdForThread(thread.threadId) ?: return@mapNotNull null
+                val persistedId = conversationPersonas.personaId(thread.threadId) ?: thread.personaId
+                legacyId.takeIf { it == persistedId && it !in knownProfileIds }
+            }
+            .distinct()
+            .forEach { personaId ->
+                val local = personas.firstOrNull { it.personaId == personaId } ?: return@forEach
+                val saved = personaRuntimeSource.save(
+                    PersonaProfile(
+                        personaId = local.personaId,
+                        displayName = local.name,
+                        avatar = local.avatar,
+                        instructions = "",
+                        background = "",
+                        version = 0,
+                        providerNativeAnchorPreference = false,
+                    ),
+                )
+                profiles += saved
+                knownProfileIds += saved.personaId
+            }
+        for (profile in profiles) {
             val index = personas.indexOfFirst { it.personaId == profile.personaId }
             val current = personas.getOrNull(index)
             val updated = ChatPersona(profile.personaId, profile.displayName,

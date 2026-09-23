@@ -13,6 +13,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -70,6 +71,9 @@ private fun LoveHouseContent(
             personaRuntimeSource = dependencies.personaRuntimeSource,
             claudeWebHistoryImporter = dependencies.claudeWebHistoryImporter,
         )
+    }
+    LaunchedEffect(chatStore) {
+        runCatching { chatStore.refreshPersonaProfiles() }
     }
     NavHost(
         navController = navController,

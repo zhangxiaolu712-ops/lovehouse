@@ -9,6 +9,7 @@ import fyi.b612.lovehouse.feature.chat.CodexRuntime
 import fyi.b612.lovehouse.feature.chat.InMemoryConversationPersonaStore
 import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
 import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSnapshot
+import fyi.b612.lovehouse.feature.chat.PersonaProfile
 import fyi.b612.lovehouse.feature.chat.CodexChatClient
 import fyi.b612.lovehouse.feature.chat.CodexChatResult
 import fyi.b612.lovehouse.feature.chat.CodexRuntimeEvidence
@@ -137,6 +138,25 @@ class PersonaMcpRuntimeClosureTest {
     }
 
     @Test
+    fun `legacy fixed conversation materializes one real Persona Profile without overwriting it`() = runBlocking {
+        val persistence = InMemoryConversationPersonaStore()
+        val source = RecordingPersonaRuntimeSource()
+        val store = ChatSessionStore(
+            conversationPersonas = persistence,
+            personaRuntimeSource = source,
+            initialThreads = listOf(thread(ClaudeRuntime.threadId, personaId = null)),
+        )
+
+        store.refreshPersonaProfiles()
+        store.refreshPersonaProfiles()
+
+        assertEquals("claude", persistence.personaId(ClaudeRuntime.threadId))
+        assertEquals(listOf("claude"), source.saved.map(PersonaProfile::personaId))
+        assertEquals("Claude", source.saved.single().displayName)
+        assertEquals("Claude", store.persona(ClaudeRuntime.threadId)?.name)
+    }
+
+    @Test
     fun `persona binding resolves complete MCP connections without per tool ownership`() = runBlocking {
         val mcp = FakeMcpRepository(
             listOf(
@@ -245,6 +265,20 @@ class PersonaMcpRuntimeClosureTest {
         requiresApproval = false,
         scope = emptyList(),
     )
+}
+
+private class RecordingPersonaRuntimeSource : PersonaRuntimeSource {
+    val saved = mutableListOf<PersonaProfile>()
+
+    override suspend fun resolve(
+        personaId: String,
+        requestedToolIds: Set<String>,
+        reanchorIntent: Boolean,
+    ): PersonaRuntimeSnapshot? = null
+
+    override suspend fun profiles(): List<PersonaProfile> = saved.toList()
+
+    override suspend fun save(profile: PersonaProfile): PersonaProfile = profile.copy(version = 1).also(saved::add)
 }
 
 private object EmptyToolCenterRepository : ToolCenterRepository {
