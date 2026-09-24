@@ -9,6 +9,11 @@ import { ChatRuntimeError } from '../codex-chat/errors.js'
 import { unknownQuota } from '../codex-chat/runtimeContract.js'
 import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
+import {
+  emitRuntimeProvenance,
+  normalizeRuntimeTrace,
+  runtimeFailureCategory,
+} from '../chat-runtime/runtimeProvenance.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -332,18 +337,39 @@ export class ClaudeCliRuntimeAdapter {
   }
 
   async #run(input) {
-    const materialized = await this.attachmentMaterializer.materialize(input.attachments || [], input.signal)
+    const runtimeTrace = normalizeRuntimeTrace(input.runtimeTrace, {
+      provider: 'claude_cli', personaRuntime: input.personaRuntime,
+    })
+    emitRuntimeProvenance('runtime_materialization_started', {
+      ...runtimeTrace, materialization_attempted: true,
+    })
+    let materialized
+    try {
+      materialized = await this.attachmentMaterializer.materialize(input.attachments || [], input.signal)
+      emitRuntimeProvenance('runtime_materialization_completed', {
+        ...runtimeTrace, materialization_attempted: true, materialization_succeeded: true,
+      })
+    } catch (error) {
+      emitRuntimeProvenance('runtime_materialization_failed', {
+        ...runtimeTrace,
+        materialization_attempted: true,
+        materialization_succeeded: false,
+        normalized_error_code: error?.code || 'ATTACHMENT_MATERIALIZATION_FAILED',
+        reason_category: runtimeFailureCategory(error),
+      })
+      throw error
+    }
     let controlledMcp = null
     try {
-      controlledMcp = await this.#controlledMcpConfig(input.personaRuntime)
-      return await this.#runMaterialized({ ...input, attachments: materialized.items }, controlledMcp)
+      controlledMcp = await this.#controlledMcpConfig(input.personaRuntime, runtimeTrace)
+      return await this.#runMaterialized({ ...input, attachments: materialized.items, runtimeTrace }, controlledMcp)
     } finally {
       await controlledMcp?.cleanup()
       await materialized.cleanup()
     }
   }
 
-  async #controlledMcpConfig(personaRuntime) {
+  async #controlledMcpConfig(personaRuntime, runtimeTrace) {
     if (!personaRuntime?.connection_ids?.length) return null
     if (!personaRuntime.execution_ticket || !this.appBackendMcpUrl) {
       throw new ChatRuntimeError('TOOL_FAILED', 'Controlled MCP executor is unavailable', {
@@ -355,7 +381,11 @@ export class ClaudeCliRuntimeAdapter {
     try {
       await writeFile(configPath, JSON.stringify({ mcpServers: { lovehouse: {
         type: 'http', url: this.appBackendMcpUrl,
-        headers: { 'X-LoveHouse-Execution-Ticket': personaRuntime.execution_ticket },
+        headers: {
+          'X-LoveHouse-Execution-Ticket': personaRuntime.execution_ticket,
+          'X-LoveHouse-Trace-Id': runtimeTrace.trace_id,
+          'X-LoveHouse-Provider': runtimeTrace.provider || 'claude_cli',
+        },
       } } }), { mode: 0o600 })
       return { path: configPath, cleanup: () => rm(directory, { recursive: true, force: true }) }
     } catch (error) {
@@ -365,7 +395,7 @@ export class ClaudeCliRuntimeAdapter {
   }
 
   async #runMaterialized({ message, attachments, history, sessionId, signal, onRuntimeBinding, onText,
-    onThinking, onEvent, personaRuntime }, controlledMcp) {
+    onThinking, onEvent, personaRuntime, runtimeTrace }, controlledMcp) {
     const prompt = buildPrompt(sessionId ? [] : history, message, attachments)
     const estimatedInputTokens = estimateTokens(prompt)
     const personaInstructions = personaRuntime
@@ -378,6 +408,14 @@ export class ClaudeCliRuntimeAdapter {
       allowMcpServer: controlledMcp != null,
       personaInstructions,
     })
+    const invocationTrace = {
+      ...runtimeTrace,
+      session_mode: command.resumed ? 'resume' : 'new',
+      instructions_present: Boolean(personaRuntime?.instructions),
+      background_present: Boolean(personaRuntime?.background),
+      connection_count: personaRuntime?.connection_ids?.length || 0,
+    }
+    emitRuntimeProvenance('provider_invocation', invocationTrace)
     const tools = new Map()
     let reportedSessionId = ''
     let reportedModel = ''
@@ -418,6 +456,9 @@ export class ClaudeCliRuntimeAdapter {
           const descriptor = toolDescriptor(inner?.content_block)
           if (inner?.type === 'content_block_start' && descriptor) {
             tools.set(descriptor.call_id, descriptor)
+            emitRuntimeProvenance('provider_tool_event', {
+              ...invocationTrace, call_id: descriptor.call_id, tool_name: descriptor.name, status: 'started',
+            })
             onEvent('tool_call', { ...descriptor, status: 'running', lifecycle: 'started' })
           }
           return
@@ -446,6 +487,9 @@ export class ClaudeCliRuntimeAdapter {
             const descriptor = toolDescriptor(block)
             if (descriptor && !tools.has(descriptor.call_id)) {
               tools.set(descriptor.call_id, descriptor)
+              emitRuntimeProvenance('provider_tool_event', {
+                ...invocationTrace, call_id: descriptor.call_id, tool_name: descriptor.name, status: 'started',
+              })
               onEvent('tool_call', { ...descriptor, status: 'running', lifecycle: 'started' })
             }
           }
@@ -459,6 +503,13 @@ export class ClaudeCliRuntimeAdapter {
               call_id: callId, tool_type: 'claude_tool', name: 'tool',
             }
             const failed = block.is_error === true
+            emitRuntimeProvenance('provider_tool_event', {
+              ...invocationTrace,
+              call_id: descriptor.call_id,
+              tool_name: descriptor.name,
+              status: failed ? 'failed' : 'success',
+              ...(failed ? { reason_category: 'provider_cli_failure' } : {}),
+            })
             onEvent(failed ? 'tool_error' : 'tool_result', {
               ...descriptor,
               status: failed ? 'failed' : 'success',
@@ -514,11 +565,13 @@ export class ClaudeCliRuntimeAdapter {
     message, attachments = [], history = [], sessionId = null, signal,
     onRuntimeBinding = () => {}, onText = () => {}, onThinking = () => {}, onEvent = () => {},
     getContinuationContext, personaRuntime = null,
+    runtimeTrace = null,
   }) {
     try {
       return await this.#run({
         message, attachments, history, sessionId, signal, onRuntimeBinding, onText, onThinking, onEvent,
         personaRuntime,
+        runtimeTrace,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -530,7 +583,7 @@ export class ClaudeCliRuntimeAdapter {
       })
       return this.#run({
         message, attachments, history: fallbackHistory, sessionId: null, signal,
-        onRuntimeBinding, onText, onThinking, onEvent, personaRuntime,
+        onRuntimeBinding, onText, onThinking, onEvent, personaRuntime, runtimeTrace,
       })
     }
   }

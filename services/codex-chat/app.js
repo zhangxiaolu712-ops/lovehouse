@@ -6,6 +6,11 @@ import { assertRuntimeAdapter } from './runtimeContract.js'
 import { SessionStore } from './sessionStore.js'
 import { InMemoryThreadBindingStore } from './threadBindingStore.js'
 import { normalizeToolPreferenceIds } from '../../bridge/tool-center/catalog.js'
+import {
+  emitRuntimeProvenance,
+  normalizeRuntimeTrace,
+  runtimeFailureCategory,
+} from '../chat-runtime/runtimeProvenance.js'
 
 function json(res, status, body) {
   const payload = JSON.stringify(body)
@@ -61,6 +66,7 @@ function normalizeBody(body) {
     recentHistory: body.recent_history,
     allowedToolIds: normalizeToolPreferenceIds(body.allowed_tool_ids),
     personaRuntime: body.persona_runtime || null,
+    runtimeTrace: body.runtime_trace || null,
   }
 }
 
@@ -142,6 +148,7 @@ export function createCodexChatHandler({
     let input
     let session
     let persisted
+    let inboundTrace = null
     try {
       if (isProxyChat && req.headers['x-lovehouse-chat-key'] !== proxyAccess.apiKey) {
         throw new ChatRuntimeError('CHAT_PROXY_DENIED', 'Chat proxy key is invalid', {
@@ -149,7 +156,12 @@ export function createCodexChatHandler({
         })
       }
       owner = { userId: chatUserId }
-      input = normalizeBody(await readJson(req))
+      const body = await readJson(req)
+      inboundTrace = normalizeRuntimeTrace(body.runtime_trace, {
+        threadId: body.thread_id || body.window_id,
+        personaRuntime: body.persona_runtime,
+      })
+      input = normalizeBody(body)
       if (isProxyChat) {
         input.allowedToolIds = []
         input.personaRuntime = null
@@ -166,6 +178,12 @@ export function createCodexChatHandler({
       })
       sessions.acquire(session.key)
     } catch (error) {
+      emitRuntimeProvenance('sidecar_request_rejected', {
+        ...inboundTrace,
+        status: 'failed',
+        normalized_error_code: error?.code || 'INVALID_SIDECAR_REQUEST',
+        reason_category: runtimeFailureCategory(error),
+      })
       return json(res, error.status || 500, { error: publicRuntimeError(error) })
     }
 
@@ -188,6 +206,13 @@ export function createCodexChatHandler({
     }
 
     const capabilities = runtime.getCapabilities()
+    input.runtimeTrace = normalizeRuntimeTrace(input.runtimeTrace, {
+      threadId: input.threadId,
+      provider: capabilities.runtime_type,
+      personaRuntime: input.personaRuntime,
+    })
+    input.runtimeTrace.session_mode = session.resumed ? 'resume' : 'new'
+    emitRuntimeProvenance('sidecar_request_received', input.runtimeTrace)
     emit('runtime_status', {
       status: 'ready',
       runtime_type: capabilities.runtime_type,
@@ -214,6 +239,7 @@ export function createCodexChatHandler({
         getContinuationContext: async () => session.history,
         allowedToolIds: input.allowedToolIds,
         personaRuntime: input.personaRuntime,
+        runtimeTrace: input.runtimeTrace,
         authorization: null,
         threadId: input.threadId,
         onRuntimeBinding: value => {
@@ -259,6 +285,7 @@ export function createCodexChatHandler({
       await bindingWrite
       sessions.bind(session.key, result.sessionId)
       sessions.complete(session.key, input.message, result.text)
+      emitRuntimeProvenance('sidecar_request_completed', { ...input.runtimeTrace, status: 'success' })
       emit('done', {
         ok: true,
         session_id: result.sessionId,
@@ -266,6 +293,12 @@ export function createCodexChatHandler({
       })
       if (!clientClosed) res.end()
     } catch (error) {
+      emitRuntimeProvenance('sidecar_request_failed', {
+        ...input.runtimeTrace,
+        status: 'failed',
+        normalized_error_code: error?.code || 'UNKNOWN_RUNTIME_ERROR',
+        reason_category: runtimeFailureCategory(error),
+      })
       if (error?.code === 'QUOTA_EXHAUSTED') {
         emit('quota', {
           status: 'exhausted',

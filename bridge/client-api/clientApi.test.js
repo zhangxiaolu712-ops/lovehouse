@@ -135,6 +135,7 @@ test('Tool Center validation does not affect Claude or legacy requests without t
 })
 
 test('one stable Persona runtime reaches Claude and Codex without changing provider routing', async t => {
+  const traceId = '11111111-1111-4111-8111-111111111111'
   const calls = []
   const adapters = Object.fromEntries(['claude', 'codex'].map(provider => [provider,
     fakeAdapter(provider, { async chat(input) {
@@ -151,13 +152,19 @@ test('one stable Persona runtime reaches Claude and Codex without changing provi
   for (const provider of ['claude', 'codex']) {
     const response = await fetch(`${base}/v1/chat`, {
       method: 'POST', headers: authHeaders(),
-      body: JSON.stringify(chatBody({ persona_id: provider, persona_runtime: personaRuntime })),
+      body: JSON.stringify(chatBody({
+        trace_id: traceId,
+        persona_id: provider,
+        persona_runtime: personaRuntime,
+      })),
     })
     assert.equal(response.status, 200)
     await response.text()
   }
   assert.deepEqual(calls.map(call => call.provider), ['claude', 'codex'])
   assert.deepEqual(calls.map(call => call.personaRuntime), [personaRuntime, personaRuntime])
+  assert.deepEqual(calls.map(call => call.runtimeTrace.trace_id), [traceId, traceId])
+  assert.deepEqual(calls.map(call => call.runtimeTrace.provider), ['claude', 'codex'])
   assert.deepEqual(calls.map(call => call.allowedToolIds), [[], []])
 })
 

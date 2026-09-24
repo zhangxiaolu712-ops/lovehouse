@@ -10,6 +10,11 @@ import {
   attachmentCapabilitiesFrom,
   validateAttachmentRequest,
 } from './attachmentCapabilities.js'
+import {
+  emitRuntimeProvenance,
+  normalizeRuntimeTrace,
+  runtimeFailureCategory,
+} from '../../services/chat-runtime/runtimeProvenance.js'
 
 export const CLIENT_API_VERSION = 1
 export const CLIENT_STREAM_EVENTS = Object.freeze([
@@ -306,6 +311,11 @@ function normalizeThread(body, { requireThread = false } = {}) {
     })
   }
   const personaRuntime = normalizePersonaRuntime(body.persona_runtime)
+  if (body.trace_id !== undefined && !THREAD_ID_RE.test(body.trace_id)) {
+    throw new ClientApiError('INVALID_TRACE_ID', 'trace_id must be a UUID', {
+      stage: 'validation', status: 400,
+    })
+  }
   return {
     personaId: body.persona_id,
     threadId: body.thread_id || crypto.randomUUID(),
@@ -316,6 +326,7 @@ function normalizeThread(body, { requireThread = false } = {}) {
       ? normalizeAllowedToolIds(body.allowed_tool_ids)
       : [],
     personaRuntime,
+    traceId: body.trace_id || null,
   }
 }
 
@@ -596,9 +607,19 @@ export function installClientApi(app, {
   app.post('/v1/chat', async (req, res) => {
     let normalized
     let resolved
+    let runtimeTrace
     try {
       normalized = normalizeThread(req.body)
       resolved = providerRouter.resolve(normalized.personaId)
+      runtimeTrace = normalizeRuntimeTrace({
+        trace_id: normalized.traceId || req.clientRequestId,
+        provider: resolved.persona.id,
+      }, {
+        requestId: req.clientRequestId,
+        threadId: normalized.threadId,
+        personaRuntime: normalized.personaRuntime,
+      })
+      emitRuntimeProvenance('bridge_persona_runtime_received', runtimeTrace)
       validateAttachmentRequest({
         attachments: req.body?.message?.attachments,
         text: typeof req.body?.message?.text === 'string' ? req.body.message.text.trim() : '',
@@ -640,6 +661,12 @@ export function installClientApi(app, {
         requestedIds: normalized.allowedToolIds,
       })
     } catch (error) {
+      emitRuntimeProvenance('bridge_request_rejected', {
+        ...(runtimeTrace || { trace_id: req.clientRequestId, request_id: req.clientRequestId }),
+        status: 'failed',
+        normalized_error_code: error?.code || 'INVALID_BRIDGE_REQUEST',
+        reason_category: runtimeFailureCategory(error),
+      })
       return sendJsonError(res, error, req.clientRequestId)
     }
 
@@ -675,6 +702,7 @@ export function installClientApi(app, {
     })
 
     try {
+      emitRuntimeProvenance('bridge_provider_dispatch', runtimeTrace)
       const result = await resolved.adapter.chat({
         ownerUserId: req.userId,
         threadId: normalized.threadId,
@@ -687,6 +715,7 @@ export function installClientApi(app, {
         signal: controller.signal,
         allowedToolIds: normalized.allowedToolIds,
         personaRuntime: normalized.personaRuntime,
+        runtimeTrace,
         onText(delta) {
           if (!ended) emitSse(res, 'text_delta', { ...base, delta })
         },
@@ -696,9 +725,16 @@ export function installClientApi(app, {
           }
         },
       })
+      emitRuntimeProvenance('bridge_provider_completed', { ...runtimeTrace, status: 'success' })
       if (result?.usage && !ended) emitSse(res, 'usage', { ...base, usage: result.usage })
       if (!ended) emitSse(res, 'message_end', { ...base, ok: true })
     } catch (error) {
+      emitRuntimeProvenance('bridge_provider_failed', {
+        ...runtimeTrace,
+        status: 'failed',
+        normalized_error_code: error?.code || 'UNKNOWN_RUNTIME_ERROR',
+        reason_category: runtimeFailureCategory(error),
+      })
       if (!ended) {
         emitSse(res, 'error', publicError(error, req.clientRequestId))
         emitSse(res, 'message_end', { ...base, ok: false })

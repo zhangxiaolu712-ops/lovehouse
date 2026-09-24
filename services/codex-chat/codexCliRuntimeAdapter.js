@@ -6,6 +6,11 @@ import { unknownQuota } from './runtimeContract.js'
 import { normalizeToolPreferenceIds, toolById } from '../../bridge/tool-center/catalog.js'
 import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
+import {
+  emitRuntimeProvenance,
+  normalizeRuntimeTrace,
+  runtimeFailureCategory,
+} from '../chat-runtime/runtimeProvenance.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -42,19 +47,19 @@ function buildPrompt(history, message, attachments = []) {
     .filter(Boolean).join('\n\n')
 }
 
-function traceRuntime(stage, payload) {
-  console.log('[tool-runtime-trace]', JSON.stringify({ stage, ...payload }))
-}
-
-function traceCodexEvent(event) {
+function traceCodexEvent(event, runtimeTrace) {
   const item = event?.item
   if (!item || item.type !== 'mcp_tool_call') return
-  traceRuntime('codex_mcp_event', {
-    event_type: event.type,
+  const failed = item.status === 'failed' || Boolean(item.error)
+  emitRuntimeProvenance('provider_tool_event', {
+    ...runtimeTrace,
     call_id: String(item.id || '').slice(0, 128),
-    server: String(item.server || item.server_name || '').slice(0, 64),
-    tool: String(item.tool || item.tool_name || '').slice(0, 64),
+    tool_name: String(item.tool || item.tool_name || '').slice(0, 64),
     status: String(item.status || '').slice(0, 32),
+    ...(failed ? {
+      normalized_error_code: String(item.error?.code || 'PROVIDER_TOOL_FAILED'),
+      reason_category: 'provider_cli_failure',
+    } : {}),
   })
 }
 
@@ -76,7 +81,7 @@ function controlledMcpArgs(context) {
   return [
     '-c', 'approval_policy="never"',
     '-c', `mcp_servers.lovehouse_account.url=${JSON.stringify(context.url)}`,
-    '-c', 'mcp_servers.lovehouse_account.env_http_headers={"X-LoveHouse-Execution-Ticket"="LOVEHOUSE_EXECUTION_TICKET"}',
+    '-c', 'mcp_servers.lovehouse_account.env_http_headers={"X-LoveHouse-Execution-Ticket"="LOVEHOUSE_EXECUTION_TICKET","X-LoveHouse-Trace-Id"="LOVEHOUSE_TRACE_ID","X-LoveHouse-Provider"="LOVEHOUSE_PROVIDER_ROUTE"}',
   ]
 }
 
@@ -381,17 +386,13 @@ export class CodexCliRuntimeAdapter {
       let settled = false
       let stdoutBuffer = ''
       let stderr = ''
-      if (command.ownerToken) {
-        traceRuntime('codex_spawn', {
-          executable: this.executable,
-          args: command.args,
-          owner_token_present: true,
-        })
-      }
+      emitRuntimeProvenance('provider_process_spawn', command.runtimeTrace)
       const child = this.spawnImpl(this.executable, command.args, {
         cwd: this.cwd,
         env: { ...this.env, ...(command.ownerToken ? { LOVEHOUSE_OWNER_TOKEN: command.ownerToken } : {}),
-          ...(command.executionTicket ? { LOVEHOUSE_EXECUTION_TICKET: command.executionTicket } : {}) },
+          ...(command.executionTicket ? { LOVEHOUSE_EXECUTION_TICKET: command.executionTicket } : {}),
+          ...(command.traceId ? { LOVEHOUSE_TRACE_ID: command.traceId } : {}),
+          ...(command.providerRoute ? { LOVEHOUSE_PROVIDER_ROUTE: command.providerRoute } : {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       const finish = callback => value => {
@@ -406,7 +407,7 @@ export class CodexCliRuntimeAdapter {
         if (!line.trim()) return
         try {
           const event = JSON.parse(line)
-          traceCodexEvent(event)
+          traceCodexEvent(event, command.runtimeTrace)
           onJsonEvent(event)
         } catch (cause) {
           fail(new ChatRuntimeError('STREAM_INTERRUPTED', 'Codex returned invalid JSONL', {
@@ -448,7 +449,11 @@ export class CodexCliRuntimeAdapter {
   async #run({
     message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
     allowedToolIds = [], authorization = null, threadId = null, attachments = [], personaRuntime = null,
+    runtimeTrace = null,
   }) {
+    const safeTrace = normalizeRuntimeTrace(runtimeTrace, {
+      provider: 'codex_cli', threadId, personaRuntime,
+    })
     const normalizedToolIds = normalizeToolPreferenceIds(allowedToolIds)
     const ownerToken = typeof authorization === 'string' && authorization.startsWith('Bearer ')
       ? authorization.slice(7)
@@ -468,7 +473,25 @@ export class CodexCliRuntimeAdapter {
     const controlledMcp = connectionIds.length ? { url: this.appBackendMcpUrl } : null
     const personaInstructions = personaRuntime
       ? [personaRuntime.instructions, personaRuntime.background].filter(Boolean).join('\n\n') : ''
-    const materialized = await this.attachmentMaterializer.materialize(attachments, signal)
+    emitRuntimeProvenance('runtime_materialization_started', {
+      ...safeTrace, materialization_attempted: true,
+    })
+    let materialized
+    try {
+      materialized = await this.attachmentMaterializer.materialize(attachments, signal)
+      emitRuntimeProvenance('runtime_materialization_completed', {
+        ...safeTrace, materialization_attempted: true, materialization_succeeded: true,
+      })
+    } catch (error) {
+      emitRuntimeProvenance('runtime_materialization_failed', {
+        ...safeTrace,
+        materialization_attempted: true,
+        materialization_succeeded: false,
+        normalized_error_code: error?.code || 'ATTACHMENT_MATERIALIZATION_FAILED',
+        reason_category: runtimeFailureCategory(error),
+      })
+      throw error
+    }
     let command
     let prompt
     let estimatedInputTokens
@@ -480,6 +503,16 @@ export class CodexCliRuntimeAdapter {
       command.args = withImages(command.args, imagePaths)
       command.ownerToken = toolContext ? ownerToken : null
       command.executionTicket = controlledMcp ? personaRuntime.execution_ticket : null
+      command.runtimeTrace = {
+        ...safeTrace,
+        session_mode: sessionId ? 'resume' : 'new',
+        instructions_present: Boolean(personaRuntime?.instructions),
+        background_present: Boolean(personaRuntime?.background),
+        connection_count: connectionIds.length,
+      }
+      command.traceId = controlledMcp ? safeTrace.trace_id : null
+      command.providerRoute = controlledMcp ? (safeTrace.provider || 'codex_cli') : null
+      emitRuntimeProvenance('provider_invocation', command.runtimeTrace)
       prompt = buildPrompt(sessionId ? [] : history, message, materialized.items)
       estimatedInputTokens = estimateTokens(prompt)
     } catch (error) {
@@ -610,12 +643,13 @@ export class CodexCliRuntimeAdapter {
     authorization = null,
     threadId = null,
     personaRuntime = null,
+    runtimeTrace = null,
   }) {
     try {
       return await this.#run({
         message, history, sessionId, previousUsage, signal, onRuntimeBinding, onText, onEvent,
         allowedToolIds, authorization, threadId, attachments,
-        personaRuntime,
+        personaRuntime, runtimeTrace,
       })
     } catch (error) {
       if (!sessionId || error.code !== 'SESSION_RECOVERY_FAILED') throw error
@@ -640,7 +674,7 @@ export class CodexCliRuntimeAdapter {
         authorization,
         threadId,
         attachments,
-        personaRuntime,
+        personaRuntime, runtimeTrace,
       })
     }
   }

@@ -1,9 +1,11 @@
 package fyi.b612.lovehouse.feature.chat
 
+import android.util.Log
 import fyi.b612.lovehouse.BuildConfig
 import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 
 data class CodexRuntimeEvidence(
     val runtime: String,
@@ -156,6 +158,7 @@ class HttpCodexChatClient(
         personaRuntime: PersonaRuntimeSnapshot? = null,
     ): CodexChatResult {
         require(config.attachmentsEnabled || attachments.isEmpty()) { "${config.personaId} Runtime 尚未启用附件" }
+        val traceId = UUID.randomUUID().toString()
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
@@ -176,6 +179,11 @@ class HttpCodexChatClient(
             allowedToolIds,
             attachments,
             personaRuntime,
+            traceId,
+        )
+        Log.i(
+            "RuntimeProvenance",
+            androidRuntimeProvenanceJson(traceId, config, personaRuntime),
         )
         try {
             connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload) }
@@ -320,6 +328,7 @@ internal fun buildChatPayload(
     allowedToolIds: Set<String>,
     attachments: List<ChatAttachment> = emptyList(),
     personaRuntime: PersonaRuntimeSnapshot? = null,
+    traceId: String? = null,
 ): String {
     val tools = allowedToolIds.sorted().joinToString(",") { "\"${jsonEscape(it)}\"" }
     val toolField = if (config.toolCenterEnabled && allowedToolIds.isNotEmpty()) "\"allowed_tool_ids\":[$tools]," else ""
@@ -334,7 +343,28 @@ internal fun buildChatPayload(
             "\"connection_ids\":[$connections]," +
             "\"reanchor_intent\":${snapshot.reanchorIntent}$ticket},"
     }.orEmpty()
-    return """{"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$personaField$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
+    val traceField = traceId?.let { "\"trace_id\":\"${jsonEscape(it)}\"," }.orEmpty()
+    return """{$traceField"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$personaField$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
+}
+
+internal fun androidRuntimeProvenanceJson(
+    traceId: String,
+    config: ChatRuntimeConfig,
+    personaRuntime: PersonaRuntimeSnapshot?,
+): String = buildString {
+    append("{\"stage\":\"android_chat_request\"")
+    append(",\"trace_id\":\"").append(jsonEscape(traceId)).append('"')
+    append(",\"thread_id\":\"").append(jsonEscape(config.threadId)).append('"')
+    append(",\"provider\":\"").append(jsonEscape(config.personaId)).append('"')
+    personaRuntime?.let { runtime ->
+        append(",\"persona_id\":\"").append(jsonEscape(runtime.personaId)).append('"')
+        append(",\"persona_version\":").append(runtime.personaVersion)
+        append(",\"reanchor_intent\":").append(runtime.reanchorIntent)
+        append(",\"instructions_present\":").append(runtime.instructions.isNotBlank())
+        append(",\"background_present\":").append(runtime.background.isNotBlank())
+        append(",\"connection_count\":").append(runtime.connectionIds.size)
+    }
+    append('}')
 }
 
 internal fun jsonEscape(value: String): String = buildString {
