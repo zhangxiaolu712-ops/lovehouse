@@ -1,5 +1,5 @@
 const SAFE_FIELDS = Object.freeze([
-  'trace_id', 'request_id', 'thread_id', 'provider', 'persona_id', 'persona_version',
+  'trace_id', 'request_id', 'execution_id', 'thread_id', 'provider', 'persona_id', 'persona_version',
   'reanchor_intent', 'session_mode', 'materialization_attempted', 'materialization_succeeded',
   'instructions_present', 'background_present', 'connection_count', 'call_id', 'mcp_rpc_id',
   'connection_id', 'tool_name', 'validation_stage', 'downstream_status_category',
@@ -33,6 +33,7 @@ export function normalizeRuntimeTrace(value, fallback = {}) {
   return safeRuntimeProvenance({
     trace_id: safeText(value?.trace_id || fallback.traceId),
     request_id: safeText(fallback.requestId),
+    execution_id: safeText(value?.execution_id || fallback.executionId),
     thread_id: safeText(value?.thread_id || fallback.threadId),
     provider: safeText(value?.provider || fallback.provider, 64),
     persona_id: safeText(value?.persona_id || persona?.persona_id, 64),

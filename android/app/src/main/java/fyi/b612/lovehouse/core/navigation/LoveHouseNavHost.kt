@@ -73,6 +73,7 @@ private fun LoveHouseContent(
         )
     }
     LaunchedEffect(chatStore) {
+        chatStore.recoverPendingExecutions()
         runCatching { chatStore.refreshPersonaProfiles() }
     }
     NavHost(

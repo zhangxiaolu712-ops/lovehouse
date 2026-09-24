@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import { mkdtemp, rm } from 'node:fs/promises'
 import http from 'node:http'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
 import express from 'express'
@@ -19,6 +22,7 @@ import {
   createProviderRouter,
 } from './providerAdapters.js'
 import { InMemoryRuntimeBindingStore } from './runtimeBindingStore.js'
+import { ChatExecutionCoordinator, FileChatExecutionStore } from './chatExecutionStore.js'
 import {
   CODEX_ATTACHMENT_CAPABILITIES,
   GLOBAL_CHAT_ATTACHMENT_CAPABILITIES,
@@ -64,6 +68,7 @@ async function startHarness(t, {
   runtimeStatusProvider = null,
   toolCenterService = null,
   mediaService = null,
+  chatExecutionCoordinator = null,
 } = {}) {
   const app = express()
   app.use(express.json())
@@ -87,6 +92,7 @@ async function startHarness(t, {
     runtimeStatusProvider,
     toolCenterService,
     mediaService,
+    chatExecutionCoordinator,
   })
   const server = http.createServer(app)
   server.listen(0, '127.0.0.1')
@@ -416,6 +422,111 @@ function parseSse(text) {
     return { event, data: JSON.parse(data) }
   })
 }
+
+test('legacy clients without execution_id keep socket-close abort semantics', async t => {
+  let resolveAborted
+  const aborted = new Promise(resolve => { resolveAborted = resolve })
+  const adapters = {
+    claude: fakeAdapter('claude', {
+      async chat({ signal }) {
+        await new Promise((_resolve, reject) => signal.addEventListener('abort', () => {
+          resolveAborted()
+          reject(Object.assign(new Error('aborted'), { code: 'ABORTED' }))
+        }, { once: true }))
+      },
+    }),
+    codex: fakeAdapter('codex'),
+  }
+  const base = await startHarness(t, { adapters })
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(chatBody()),
+  })
+  await response.body.cancel()
+  await aborted
+})
+
+test('recoverable execution survives stream detach, is queryable, and duplicate POST does not rerun provider', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-client-execution-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') })
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {} })
+  let providerCalls = 0
+  let finish
+  let started
+  const providerStarted = new Promise(resolve => { started = resolve })
+  const providerFinish = new Promise(resolve => { finish = resolve })
+  const adapters = {
+    claude: fakeAdapter('claude', {
+      async chat({ onText, signal }) {
+        providerCalls += 1
+        assert.equal(signal, undefined)
+        started()
+        await providerFinish
+        onText('detached answer')
+        return { usage: null }
+      },
+    }),
+    codex: fakeAdapter('codex'),
+  }
+  const base = await startHarness(t, { adapters, chatExecutionCoordinator })
+  const executionId = '33333333-3333-4333-8333-333333333333'
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(chatBody({ execution_id: executionId })),
+  })
+  await providerStarted
+  await response.body.cancel()
+  finish()
+
+  let execution
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const status = await fetch(`${base}/v1/chat/executions/${executionId}`, { headers: authHeaders() })
+    assert.equal(status.status, 200)
+    execution = (await status.json()).execution
+    if (execution.status !== 'running') break
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  assert.equal(execution.status, 'completed')
+  assert.equal(execution.result.text, 'detached answer')
+
+  const duplicate = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(chatBody({ execution_id: executionId })),
+  })
+  const events = parseSse(await duplicate.text())
+  assert.equal(providerCalls, 1)
+  assert.equal(events.find(event => event.event === 'text_delta').data.delta, 'detached answer')
+  assert.equal(events.at(-1).event, 'message_end')
+})
+
+test('Claude and Codex use the same recoverable execution ownership contract', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-provider-execution-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({
+    store: new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') }),
+    log: {},
+  })
+  const calls = []
+  const adapters = Object.fromEntries(['claude', 'codex'].map(provider => [provider, fakeAdapter(provider, {
+    async chat({ onText }) {
+      calls.push(provider)
+      onText(`${provider} detached reply`)
+      return { usage: null }
+    },
+  })]))
+  const base = await startHarness(t, { adapters, chatExecutionCoordinator })
+  const executionIds = [
+    '44444444-4444-4444-8444-444444444444',
+    '55555555-5555-4555-8555-555555555555',
+  ]
+  for (const [index, provider] of ['claude', 'codex'].entries()) {
+    const response = await fetch(`${base}/v1/chat`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify(chatBody({ persona_id: provider, execution_id: executionIds[index] })),
+    })
+    assert.equal(response.status, 200)
+    assert.equal(parseSse(await response.text()).at(-1).data.ok, true)
+  }
+  assert.deepEqual(calls, ['claude', 'codex'])
+})
 
 test('runtime deployment identity comes from the actual release path only', () => {
   assert.equal(

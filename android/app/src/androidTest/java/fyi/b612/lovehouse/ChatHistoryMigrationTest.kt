@@ -8,6 +8,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentLifecycle
 import fyi.b612.lovehouse.feature.chat.ChatMediaAttachment
 import fyi.b612.lovehouse.feature.chat.LocalChatDeliveryStatus
+import fyi.b612.lovehouse.feature.chat.LocalChatExecution
+import fyi.b612.lovehouse.feature.chat.LocalChatExecutionStatus
 import fyi.b612.lovehouse.feature.chat.LocalChatMessage
 import fyi.b612.lovehouse.feature.chat.LocalChatRole
 import fyi.b612.lovehouse.feature.chat.SQLiteLocalChatMessageRepository
@@ -80,6 +82,17 @@ class ChatHistoryMigrationTest {
                 ),
             ),
         )
+        repository.upsertExecution(LocalChatExecution(
+            executionId = "11111111-1111-4111-8111-111111111111",
+            localThreadId = "thread",
+            provider = "codex",
+            canonicalThreadId = "thread",
+            userMessageId = "new-media",
+            assistantMessageId = "assistant:11111111-1111-4111-8111-111111111111",
+            status = LocalChatExecutionStatus.Running,
+            createdAtEpochMillis = 2L,
+            updatedAtEpochMillis = 2L,
+        ))
         repository.close()
 
         val reopened = SQLiteLocalChatMessageRepository(context, databaseName)
@@ -87,6 +100,7 @@ class ChatHistoryMigrationTest {
         assertEquals(listOf("old-text", "new-media"), messages.map { it.localMessageId })
         assertEquals(1, messages.last().attachments.size)
         assertTrue(messages.last().content.isEmpty())
+        assertEquals("11111111-1111-4111-8111-111111111111", reopened.pendingExecutions().single().executionId)
         reopened.close()
         context.deleteDatabase(databaseName)
     }

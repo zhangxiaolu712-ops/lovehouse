@@ -72,6 +72,7 @@ import { resolveBridgePort } from './runtimeConfig.js'
 import { ProjectChecklistStore } from './client-api/projectChecklist.js'
 import { createRuntimeStatusProvider } from './client-api/runtimeStatus.js'
 import { ToolCenterService } from './tool-center/service.js'
+import { ChatExecutionCoordinator, FileChatExecutionStore } from './client-api/chatExecutionStore.js'
 import {
   createR2MediaService,
   installMediaRoutes,
@@ -126,6 +127,8 @@ const OAUTH_CLIENT_REGISTRY_PATH = process.env.OAUTH_CLIENT_REGISTRY_PATH || ''
 const OAUTH_REFRESH_STORE_PATH = process.env.OAUTH_REFRESH_STORE_PATH || ''
 const APP_IDENTITY_VERIFY_URL = process.env.APP_IDENTITY_VERIFY_URL || ''
 const APP_IDENTITY_INTERNAL_KEY_FILE = process.env.APP_IDENTITY_INTERNAL_KEY_FILE || ''
+const CHAT_EXECUTION_STORE_PATH = process.env.CHAT_EXECUTION_STORE_PATH
+  || '/root/lovehouse-bridge-state/chat-executions.json'
 const appIdentityVerifier = APP_IDENTITY_VERIFY_URL && APP_IDENTITY_INTERNAL_KEY_FILE
   ? createAppIdentityVerifier({
       endpoint: APP_IDENTITY_VERIFY_URL,
@@ -453,6 +456,9 @@ const toolCenterService = new ToolCenterService({
   livingroomRest,
 })
 const verifyClientOwner = createClientOwnerAuth({ verifyOwnerToken, checkRate })
+const chatExecutionCoordinator = new ChatExecutionCoordinator({
+  store: new FileChatExecutionStore({ filePath: CHAT_EXECUTION_STORE_PATH }),
+})
 
 app.post('/chat', verifyOwnerBearer, (req, res) => {
   if (typeof req.body.message !== 'string' || !req.body.message.trim()) {
@@ -549,6 +555,7 @@ installClientApi(app, {
   runtimeStatusProvider,
   toolCenterService,
   mediaService: r2MediaService,
+  chatExecutionCoordinator,
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {

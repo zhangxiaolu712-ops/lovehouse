@@ -417,7 +417,8 @@ fun ChatShellScreen(
     var attachmentDraft by remember(threadId) { mutableStateOf(ChatAttachmentDraft()) }
     var uploadingAttachments by remember(threadId) { mutableStateOf(false) }
     var requestedToolIds by remember(threadId) { mutableStateOf<Set<String>>(emptySet()) }
-    var sending by remember { mutableStateOf(false) }
+    var preparingSend by remember { mutableStateOf(false) }
+    val sending = preparingSend || store.isSending(threadId)
     var selectedMessages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var forwardingIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var openedBundle by remember { mutableStateOf<ChatMessageUi?>(null) }
@@ -552,7 +553,7 @@ fun ChatShellScreen(
                 actionNotice = rejection
                 return@submit
             }
-            sending = true
+            preparingSend = true
             chatScope.launch {
                 try {
                     val attachmentsForTurn = if (runtimeConfig?.attachmentsEnabled == true) {
@@ -576,20 +577,25 @@ fun ChatShellScreen(
                         "LoveHouseMedia",
                         "canonical_turn_send attachments=${attachmentsForTurn.size} tools=${toolsForTurn.size}",
                     )
-                    val result = if (isClaudeRuntime) {
-                        store.sendClaudeMessage(outgoing, attachmentsForTurn, toolsForTurn) { }
-                    } else {
-                        store.sendCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { }
-                    }
-                    result.onSuccess { response ->
-                        actionNotice = response.evidence.toolCalls.lastOrNull()?.let { call ->
-                            "${response.evidence.requestedToolIds.sorted().joinToString()} · MCP ${call.name} · ${call.status}"
+                    if (isClaudeRuntime) {
+                        store.launchClaudeMessage(outgoing, attachmentsForTurn, toolsForTurn) { result ->
+                            result.onSuccess { response ->
+                                actionNotice = response.evidence.toolCalls.lastOrNull()?.let { call ->
+                                    "${response.evidence.requestedToolIds.sorted().joinToString()} · MCP ${call.name} · ${call.status}"
+                                }
+                            }.onFailure { error -> actionNotice = error.message ?: "发送失败" }
                         }
-                    }.onFailure { error ->
-                        actionNotice = error.message ?: "发送失败"
+                    } else {
+                        store.launchCodexMessage(threadId, outgoing, toolsForTurn, attachmentsForTurn) { result ->
+                            result.onSuccess { response ->
+                                actionNotice = response.evidence.toolCalls.lastOrNull()?.let { call ->
+                                    "${response.evidence.requestedToolIds.sorted().joinToString()} · MCP ${call.name} · ${call.status}"
+                                }
+                            }.onFailure { error -> actionNotice = error.message ?: "发送失败" }
+                        }
                     }
                 } finally {
-                    sending = false
+                    preparingSend = false
                 }
             }
         }

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 
 import { ClientApiError, normalizeClientApiError } from './errors.js'
+import { chatExecutionFingerprint } from './chatExecutionStore.js'
 import { SCENES } from './personas.js'
 import { installMemoryTimeline } from './memoryTimeline.js'
 import { installProjectChecklistApi } from './projectChecklist.js'
@@ -316,6 +317,11 @@ function normalizeThread(body, { requireThread = false } = {}) {
       stage: 'validation', status: 400,
     })
   }
+  if (body.execution_id !== undefined && !THREAD_ID_RE.test(body.execution_id)) {
+    throw new ClientApiError('INVALID_EXECUTION_ID', 'execution_id must be a UUID', {
+      stage: 'validation', status: 400,
+    })
+  }
   return {
     personaId: body.persona_id,
     threadId: body.thread_id || crypto.randomUUID(),
@@ -327,7 +333,38 @@ function normalizeThread(body, { requireThread = false } = {}) {
       : [],
     personaRuntime,
     traceId: body.trace_id || null,
+    executionId: body.execution_id || null,
   }
+}
+
+function executionFingerprint(normalized) {
+  return chatExecutionFingerprint({
+    provider: normalized.personaId,
+    thread_id: normalized.threadId,
+    window_id: normalized.windowId,
+    scene: normalized.requestedScene,
+    allowed_tool_ids: [...normalized.allowedToolIds].sort(),
+    message: {
+      type: normalized.message.type,
+      text: normalized.message.text,
+      attachments: normalized.message.attachments.map(item => ({
+        type: item.type,
+        media_asset_id: item.media_asset_id || null,
+        storage_ref: item.storage_ref || null,
+        latitude: item.latitude ?? null,
+        longitude: item.longitude ?? null,
+        captured_at: item.captured_at || null,
+      })),
+    },
+    persona_runtime: normalized.personaRuntime ? {
+      persona_id: normalized.personaRuntime.persona_id,
+      persona_version: normalized.personaRuntime.persona_version,
+      instructions: normalized.personaRuntime.instructions,
+      background: normalized.personaRuntime.background,
+      connection_ids: normalized.personaRuntime.connection_ids,
+      reanchor_intent: normalized.personaRuntime.reanchor_intent,
+    } : null,
+  })
 }
 
 function emitSse(res, event, data) {
@@ -363,6 +400,7 @@ export function installClientApi(app, {
   runtimeStatusProvider = null,
   toolCenterService = null,
   mediaService = null,
+  chatExecutionCoordinator = null,
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
@@ -387,7 +425,7 @@ export function installClientApi(app, {
 
   app.use('/v1', requestContext)
   app.use('/v1', (req, res, next) => {
-    if (req.path === '/chat' || req.path === '/chat/reset') {
+    if (req.path === '/chat' || req.path === '/chat/reset' || req.path.startsWith('/chat/executions/')) {
       req.userId = chatUserId
       return next()
     }
@@ -457,6 +495,28 @@ export function installClientApi(app, {
       request_id: req.clientRequestId,
       personas: providerRouter.listPersonas(),
     })
+  })
+
+  app.get('/v1/chat/executions/:executionId', async (req, res) => {
+    if (!chatExecutionCoordinator) {
+      return sendJsonError(res, new ClientApiError(
+        'CHAT_EXECUTION_RECOVERY_UNAVAILABLE', 'Chat execution recovery is unavailable',
+        { stage: 'runtime', status: 503, retryable: true },
+      ), req.clientRequestId)
+    }
+    try {
+      const record = await chatExecutionCoordinator.store.get({
+        ownerUserId: req.userId,
+        executionId: req.params.executionId,
+      })
+      if (!record) throw new ClientApiError('CHAT_EXECUTION_NOT_FOUND', 'Chat execution was not found', {
+        stage: 'runtime', status: 404,
+      })
+      res.setHeader('Cache-Control', 'no-store')
+      return res.json({ ok: true, request_id: req.clientRequestId, execution: record })
+    } catch (error) {
+      return sendJsonError(res, error, req.clientRequestId)
+    }
   })
 
   if (toolCenterService) {
@@ -616,6 +676,7 @@ export function installClientApi(app, {
         provider: resolved.persona.id,
       }, {
         requestId: req.clientRequestId,
+        executionId: normalized.executionId,
         threadId: normalized.threadId,
         personaRuntime: normalized.personaRuntime,
       })
@@ -671,6 +732,131 @@ export function installClientApi(app, {
     }
 
     const scene = normalized.requestedScene || resolved.persona.scene
+    if (normalized.executionId) {
+      if (!chatExecutionCoordinator) {
+        return sendJsonError(res, new ClientApiError(
+          'CHAT_EXECUTION_RECOVERY_UNAVAILABLE', 'Chat execution recovery is unavailable',
+          { stage: 'runtime', status: 503, retryable: true },
+        ), req.clientRequestId)
+      }
+      const base = {
+        request_id: req.clientRequestId,
+        execution_id: normalized.executionId,
+        thread_id: normalized.threadId,
+        persona_id: resolved.persona.id,
+      }
+      let ended = false
+      let sawText = false
+      res.status(200)
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+      res.setHeader('Cache-Control', 'no-cache, no-transform')
+      res.setHeader('Connection', 'keep-alive')
+      res.setHeader('X-Accel-Buffering', 'no')
+      res.flushHeaders?.()
+      emitSse(res, 'message_start', {
+        ...base,
+        runtime: resolved.persona.runtime?.runtime_type || resolved.persona.default_runtime,
+        adapter_id: resolved.persona.runtime?.adapter_id || null,
+        scene,
+        reply_policy: { default_modality: 'text', voice_enabled: false },
+        message_type: normalized.message.type,
+      })
+      try {
+        const observed = await chatExecutionCoordinator.observeOrStart({
+          ownerUserId: req.userId,
+          executionId: normalized.executionId,
+          threadId: normalized.threadId,
+          provider: resolved.persona.id,
+          inputFingerprint: executionFingerprint(normalized),
+          async execute(publish) {
+            let assistantText = ''
+            emitRuntimeProvenance('bridge_provider_dispatch', runtimeTrace)
+            try {
+              const result = await resolved.adapter.chat({
+                ownerUserId: req.userId,
+                threadId: normalized.threadId,
+                windowId: normalized.windowId,
+                scene,
+                text: normalized.message.text,
+                source: normalized.message.source,
+                attachments: normalized.message.attachments,
+                threadSource: normalized.source,
+                allowedToolIds: normalized.allowedToolIds,
+                personaRuntime: normalized.personaRuntime,
+                runtimeTrace,
+                onText(delta) {
+                  assistantText += delta
+                  publish({ event: 'text_delta', payload: { delta } })
+                },
+                onEvent(event, payload) {
+                  if (ADAPTER_STREAM_EVENTS.has(event) && payload && typeof payload === 'object') {
+                    publish({ event, payload })
+                  }
+                },
+              })
+              emitRuntimeProvenance('bridge_provider_completed', { ...runtimeTrace, status: 'success' })
+              return {
+                text: assistantText,
+                runtime: resolved.persona.runtime?.runtime_type || resolved.persona.default_runtime,
+                adapter_id: resolved.persona.runtime?.adapter_id || null,
+                usage: result?.usage || null,
+              }
+            } catch (error) {
+              emitRuntimeProvenance('bridge_provider_failed', {
+                ...runtimeTrace,
+                status: 'failed',
+                normalized_error_code: error?.code || 'UNKNOWN_RUNTIME_ERROR',
+                reason_category: runtimeFailureCategory(error),
+              })
+              throw error
+            }
+          },
+          onEvent(event) {
+            if (ended) return
+            if (event.type === 'stream') {
+              if (event.event === 'text_delta') sawText = true
+              emitSse(res, event.event, { ...event.payload, ...base })
+              return
+            }
+            const record = event.record
+            if (record.status === 'completed') {
+              if (!sawText && record.result?.text) emitSse(res, 'text_delta', { ...base, delta: record.result.text })
+              if (record.result?.usage) emitSse(res, 'usage', { ...base, usage: record.result.usage })
+              emitSse(res, 'message_end', { ...base, ok: true })
+            } else {
+              emitSse(res, 'error', {
+                code: record.error?.code || 'CHAT_EXECUTION_FAILED',
+                message: record.error?.message || 'Chat execution failed',
+                request_id: req.clientRequestId,
+              })
+              emitSse(res, 'message_end', { ...base, ok: false })
+            }
+            ended = true
+            res.end()
+          },
+        })
+        res.on('close', () => {
+          observed.unsubscribe()
+          ended = true
+        })
+        await observed.finished
+      } catch (error) {
+        emitRuntimeProvenance('bridge_provider_failed', {
+          ...runtimeTrace,
+          status: 'failed',
+          normalized_error_code: error?.code || 'UNKNOWN_RUNTIME_ERROR',
+          reason_category: runtimeFailureCategory(error),
+        })
+        if (!ended) {
+          emitSse(res, 'error', publicError(error, req.clientRequestId))
+          emitSse(res, 'message_end', { ...base, ok: false })
+          ended = true
+          res.end()
+        }
+      }
+      return
+    }
+
     res.status(200)
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
     res.setHeader('Cache-Control', 'no-cache, no-transform')

@@ -8,8 +8,13 @@ import androidx.compose.runtime.setValue
 import java.util.UUID
 import java.text.DateFormat
 import java.util.Date
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -97,6 +102,9 @@ class ChatSessionStore(
         initialTasks.forEach { put(it.taskId, it) }
     }
     private val personaProfileRefreshMutex = Mutex()
+    private val executionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val runningExecutionsByThread = mutableStateMapOf<String, Int>()
+    private val recoveringExecutionIds = ConcurrentHashMap.newKeySet<String>()
 
     init {
         messagesByThread["persona-gpt"] = mutableStateListOf()
@@ -194,6 +202,7 @@ class ChatSessionStore(
         return saved
     }
     fun messages(threadId: String) = messagesByThread.getOrPut(threadId) { mutableStateListOf() }
+    fun isSending(threadId: String): Boolean = (runningExecutionsByThread[threadId] ?: 0) > 0
     fun members(threadId: String) = membersByThread.getOrPut(threadId) { mutableStateListOf() }
     fun background(threadId: String): String = backgrounds[threadId] ?: "green"
     fun backgroundOverride(threadId: String): String? = backgrounds[threadId]
@@ -253,6 +262,67 @@ class ChatSessionStore(
         onText = onText,
     )
 
+    fun launchCodexMessage(
+        threadId: String,
+        body: String,
+        requestedToolIds: Set<String> = emptySet(),
+        attachments: List<ChatAttachment> = emptyList(),
+        onComplete: (Result<CodexChatResult>) -> Unit = {},
+    ): String = launchRuntimeMessage(
+        localThreadId = threadId,
+        runtime = CodexRuntime,
+        assistantName = "Codex",
+        assistantAvatar = "⌘",
+        body = body,
+        requestedToolIds = requestedToolIds,
+        attachments = attachments,
+        onComplete = onComplete,
+    )
+
+    fun launchClaudeMessage(
+        body: String,
+        attachments: List<ChatAttachment> = emptyList(),
+        requestedToolIds: Set<String> = emptySet(),
+        onComplete: (Result<CodexChatResult>) -> Unit = {},
+    ): String = launchRuntimeMessage(
+        localThreadId = ClaudeRuntime.threadId,
+        runtime = ClaudeRuntime,
+        assistantName = "Claude",
+        assistantAvatar = "C",
+        body = body,
+        requestedToolIds = requestedToolIds,
+        attachments = attachments,
+        onComplete = onComplete,
+    )
+
+    private fun launchRuntimeMessage(
+        localThreadId: String,
+        runtime: ChatRuntimeConfig,
+        assistantName: String,
+        assistantAvatar: String,
+        body: String,
+        requestedToolIds: Set<String>,
+        attachments: List<ChatAttachment>,
+        onComplete: (Result<CodexChatResult>) -> Unit,
+    ): String {
+        val executionId = UUID.randomUUID().toString()
+        runningExecutionsByThread[localThreadId] = (runningExecutionsByThread[localThreadId] ?: 0) + 1
+        executionScope.launch {
+            val result = try {
+                sendRuntimeMessage(
+                    localThreadId, runtime, assistantName, assistantAvatar, body,
+                    requestedToolIds, attachments, onText = {}, executionId = executionId,
+                )
+            } finally {
+                val remaining = (runningExecutionsByThread[localThreadId] ?: 1) - 1
+                if (remaining > 0) runningExecutionsByThread[localThreadId] = remaining
+                else runningExecutionsByThread.remove(localThreadId)
+            }
+            onComplete(result)
+        }
+        return executionId
+    }
+
     private suspend fun sendRuntimeMessage(
         localThreadId: String,
         runtime: ChatRuntimeConfig,
@@ -262,12 +332,13 @@ class ChatSessionStore(
         requestedToolIds: Set<String>,
         attachments: List<ChatAttachment>,
         onText: (String) -> Unit,
+        executionId: String = UUID.randomUUID().toString(),
     ): Result<CodexChatResult> {
         if (body.isBlank() && attachments.isEmpty()) return Result.failure(CodexChatException("消息不能为空"))
         val displayBody = body.trim()
         val previewBody = displayBody.ifEmpty { attachments.joinToString(" · ", transform = ChatAttachment::displaySummary) }
         val canonicalThreadId = runtime.threadId
-        val userId = "sent-${UUID.randomUUID()}"
+        val userId = "user:$executionId"
         val createdAt = now()
         var user = LocalChatMessage(
             localMessageId = userId,
@@ -279,9 +350,11 @@ class ChatSessionStore(
             createdAtEpochMillis = createdAt,
             status = LocalChatDeliveryStatus.Sending,
         )
-        val assistantId = "${runtime.personaId}-${UUID.randomUUID()}"
+        val assistantId = "assistant:$executionId"
         var userVisible = false
+        var remoteStarted = false
         var assistantText = ""
+        var execution: LocalChatExecution? = null
         val processEvents = mutableListOf<ChatProcessEvent>()
         fun updateProcess(event: ChatProcessEvent) {
             val updated = mergeProcessEvent(processEvents, event)
@@ -320,13 +393,34 @@ class ChatSessionStore(
                 PersonaRuntimeSnapshot(it.personaId, it.personaVersion, it.instructions, it.background,
                     it.connectionIds, it.executionTicket, needsReanchor)
             }
+            execution = LocalChatExecution(
+                executionId = executionId,
+                localThreadId = localThreadId,
+                provider = runtime.personaId,
+                canonicalThreadId = canonicalThreadId,
+                userMessageId = userId,
+                assistantMessageId = assistantId,
+                status = LocalChatExecutionStatus.Running,
+                personaVersion = turnSnapshot?.personaVersion,
+                reanchorIntent = turnSnapshot?.reanchorIntent == true,
+                createdAtEpochMillis = createdAt,
+                updatedAtEpochMillis = createdAt,
+            )
+            withContext(Dispatchers.IO) { messageRepository.upsertExecution(execution) }
             val result = withContext(Dispatchers.IO) {
-                codexClient.streamRuntimeMessageWithPersona(
-                    runtime,
-                    body,
-                    requestedToolIds,
-                    attachments,
-                    turnSnapshot,
+                codexClient.streamRecoverableRuntimeMessage(
+                    executionId = executionId,
+                    config = runtime,
+                    message = body,
+                    requestedToolIds = requestedToolIds,
+                    attachments = attachments,
+                    personaRuntime = turnSnapshot,
+                    onStarted = {
+                        remoteStarted = true
+                        user = user.copy(status = LocalChatDeliveryStatus.Sent)
+                        messageRepository.upsert(user)
+                        replaceMessage(localThreadId, userId, persistedMessageUi(user))
+                    },
                     onText = { fullText ->
                         assistantText = fullText
                         replaceMessage(
@@ -362,6 +456,12 @@ class ChatSessionStore(
                 adapterId = result.evidence.adapterId?.takeIf(String::isNotBlank),
             )
             withContext(Dispatchers.IO) { messageRepository.upsert(listOf(user, assistant)) }
+            withContext(Dispatchers.IO) {
+                messageRepository.upsertExecution(execution.copy(
+                    status = LocalChatExecutionStatus.Completed,
+                    updatedAtEpochMillis = receivedAt,
+                ))
+            }
             replaceMessage(localThreadId, userId, persistedMessageUi(user))
             replaceMessage(localThreadId, assistantId, persistedMessageUi(assistant).copy(processEvents = processEvents.toList()))
             if (turnSnapshot != null) {
@@ -370,6 +470,26 @@ class ChatSessionStore(
             }
             Result.success(result)
         } catch (error: Throwable) {
+            if (codexClient.supportsExecutionRecovery && execution != null) {
+                val recovery = runCatching { withContext(Dispatchers.IO) { codexClient.chatExecution(executionId) } }
+                val recovered = recovery.getOrNull()
+                when (recovered?.status) {
+                    ChatExecutionRemoteStatus.Completed -> return completeRecoveredExecution(execution, recovered)
+                    ChatExecutionRemoteStatus.Failed -> return failRecoveredExecution(execution, recovered.errorMessage ?: error.message)
+                    ChatExecutionRemoteStatus.Running -> {
+                        launchExecutionRecovery(execution)
+                        return Result.failure(CodexChatException("回复仍在后台生成，可稍后重新进入会话查看"))
+                    }
+                    null -> if ((recovery.exceptionOrNull() as? CodexChatException)?.httpStatus != 404) {
+                        if (remoteStarted && user.status != LocalChatDeliveryStatus.Sent) {
+                            user = user.copy(status = LocalChatDeliveryStatus.Sent)
+                            runCatching { withContext(Dispatchers.IO) { messageRepository.upsert(user) } }
+                        }
+                        launchExecutionRecovery(execution)
+                        return Result.failure(error)
+                    }
+                }
+            }
             if (assistantText.isNotBlank()) {
                 val failedAssistant = LocalChatMessage(
                     localMessageId = assistantId,
@@ -410,8 +530,175 @@ class ChatSessionStore(
                 runCatching { withContext(Dispatchers.IO) { messageRepository.upsert(user) } }
                 replaceMessage(localThreadId, userId, persistedMessageUi(user))
             }
+            execution?.let { current ->
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        messageRepository.upsertExecution(current.copy(
+                            status = LocalChatExecutionStatus.Failed,
+                            lastError = error.message,
+                            updatedAtEpochMillis = now(),
+                        ))
+                    }
+                }
+            }
             Result.failure(error)
         }
+    }
+
+    fun recoverPendingExecutions() {
+        executionScope.launch {
+            val pending = runCatching { messageRepository.pendingExecutions() }.getOrDefault(emptyList())
+            pending.forEach(::launchExecutionRecovery)
+        }
+    }
+
+    private fun launchExecutionRecovery(execution: LocalChatExecution) {
+        if (!recoveringExecutionIds.add(execution.executionId)) return
+        runningExecutionsByThread[execution.localThreadId] =
+            (runningExecutionsByThread[execution.localThreadId] ?: 0) + 1
+        ensureRunningPlaceholder(execution)
+        executionScope.launch {
+            try {
+                recoverExecutionUntilTerminal(execution)
+            } finally {
+                recoveringExecutionIds.remove(execution.executionId)
+                val remaining = (runningExecutionsByThread[execution.localThreadId] ?: 1) - 1
+                if (remaining > 0) runningExecutionsByThread[execution.localThreadId] = remaining
+                else runningExecutionsByThread.remove(execution.localThreadId)
+            }
+        }
+    }
+
+    internal suspend fun recoverPendingExecutionsOnce() {
+        messageRepository.pendingExecutions().forEach { execution ->
+            val result = runCatching { codexClient.chatExecution(execution.executionId) }
+            val snapshot = result.getOrNull()
+            when (snapshot?.status) {
+                ChatExecutionRemoteStatus.Completed -> completeRecoveredExecution(execution, snapshot)
+                ChatExecutionRemoteStatus.Failed -> failRecoveredExecution(execution, snapshot.errorMessage)
+                ChatExecutionRemoteStatus.Running -> Unit
+                null -> if ((result.exceptionOrNull() as? CodexChatException)?.httpStatus == 404) {
+                    failRecoveredExecution(execution, "后台执行记录已不可用")
+                } else Unit
+            }
+        }
+    }
+
+    private suspend fun recoverExecutionUntilTerminal(execution: LocalChatExecution) {
+        if (!codexClient.supportsExecutionRecovery) return
+        while (true) {
+            val result = runCatching { codexClient.chatExecution(execution.executionId) }
+            val snapshot = result.getOrNull()
+            when (snapshot?.status) {
+                ChatExecutionRemoteStatus.Completed -> {
+                    completeRecoveredExecution(execution, snapshot)
+                    return
+                }
+                ChatExecutionRemoteStatus.Failed -> {
+                    failRecoveredExecution(execution, snapshot.errorMessage)
+                    return
+                }
+                ChatExecutionRemoteStatus.Running -> delay(2_000)
+                null -> {
+                    val error = result.exceptionOrNull()
+                    if ((error as? CodexChatException)?.httpStatus == 404) {
+                        failRecoveredExecution(execution, "后台执行记录已不可用")
+                        return
+                    }
+                    delay(5_000)
+                }
+            }
+        }
+    }
+
+    private fun ensureRunningPlaceholder(execution: LocalChatExecution) {
+        val existing = messages(execution.localThreadId).firstOrNull { it.messageId == execution.assistantMessageId }
+        if (existing == null) {
+            val assistantName = if (execution.provider == ClaudeRuntime.personaId) "Claude" else "Codex"
+            val assistantAvatar = if (execution.provider == ClaudeRuntime.personaId) "C" else "⌘"
+            messages(execution.localThreadId) += message(
+                execution.assistantMessageId,
+                assistantName,
+                assistantAvatar,
+                "仍在生成…",
+                "刚刚",
+                deliveryStatus = LocalChatDeliveryStatus.Sending,
+                createdAtEpochMillis = execution.createdAtEpochMillis,
+            )
+        }
+    }
+
+    private suspend fun completeRecoveredExecution(
+        execution: LocalChatExecution,
+        snapshot: ChatExecutionRemoteSnapshot,
+    ): Result<CodexChatResult> {
+        val text = snapshot.text?.takeIf(String::isNotBlank)
+            ?: return failRecoveredExecution(execution, "后台执行完成但没有返回文字")
+        val user = messageRepository.messages(execution.canonicalThreadId)
+            .firstOrNull { it.localMessageId == execution.userMessageId }
+            ?.copy(status = LocalChatDeliveryStatus.Sent)
+        val receivedAt = now()
+        val assistant = LocalChatMessage(
+            localMessageId = execution.assistantMessageId,
+            threadId = execution.canonicalThreadId,
+            role = LocalChatRole.Assistant,
+            sender = execution.provider,
+            content = text,
+            createdAtEpochMillis = execution.createdAtEpochMillis,
+            receivedAtEpochMillis = receivedAt,
+            status = LocalChatDeliveryStatus.Sent,
+            runtime = snapshot.runtime,
+            adapterId = snapshot.adapterId,
+        )
+        withContext(Dispatchers.IO) {
+            messageRepository.upsert(listOfNotNull(user, assistant))
+            messageRepository.upsertExecution(execution.copy(
+                status = LocalChatExecutionStatus.Completed,
+                lastError = null,
+                updatedAtEpochMillis = receivedAt,
+            ))
+        }
+        user?.let { replaceMessage(execution.localThreadId, it.localMessageId, persistedMessageUi(it)) }
+        replaceMessage(execution.localThreadId, assistant.localMessageId, persistedMessageUi(assistant))
+        updateThread(execution.localThreadId) { it.copy(preview = text, updatedAt = "刚刚") }
+        execution.personaVersion?.let { version ->
+            conversationPersonas.setMaterializedPersonaVersion(execution.localThreadId, version)
+            if (execution.reanchorIntent) conversationPersonas.setReanchorPending(execution.localThreadId, false)
+        }
+        return Result.success(CodexChatResult(
+            text = text,
+            evidence = CodexRuntimeEvidence(
+                runtime = snapshot.runtime.orEmpty(),
+                adapterId = snapshot.adapterId,
+                threadId = execution.canonicalThreadId,
+            ),
+        ))
+    }
+
+    private suspend fun failRecoveredExecution(
+        execution: LocalChatExecution,
+        message: String?,
+    ): Result<CodexChatResult> {
+        val failure = message ?: "后台执行失败"
+        val user = messageRepository.messages(execution.canonicalThreadId)
+            .firstOrNull { it.localMessageId == execution.userMessageId }
+            ?.copy(status = LocalChatDeliveryStatus.Failed)
+        withContext(Dispatchers.IO) {
+            user?.let(messageRepository::upsert)
+            messageRepository.upsertExecution(execution.copy(
+                status = LocalChatExecutionStatus.Failed,
+                lastError = failure,
+                updatedAtEpochMillis = now(),
+            ))
+        }
+        user?.let { replaceMessage(execution.localThreadId, it.localMessageId, persistedMessageUi(it)) }
+        messages(execution.localThreadId).firstOrNull { it.messageId == execution.assistantMessageId }?.let { current ->
+            replaceMessage(execution.localThreadId, execution.assistantMessageId, current.copy(
+                deliveryStatus = LocalChatDeliveryStatus.Failed,
+                deliveryError = failure,
+            ))
+        }
+        return Result.failure(CodexChatException(failure))
     }
 
     fun createThread(persona: ChatPersona, temporary: Boolean): ChatThreadSummary {

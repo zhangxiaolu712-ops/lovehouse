@@ -59,9 +59,22 @@ data class CodexChatResult(
     val evidence: CodexRuntimeEvidence,
 )
 
-class CodexChatException(message: String) : Exception(message)
+enum class ChatExecutionRemoteStatus { Running, Completed, Failed }
+
+data class ChatExecutionRemoteSnapshot(
+    val executionId: String,
+    val status: ChatExecutionRemoteStatus,
+    val text: String? = null,
+    val runtime: String? = null,
+    val adapterId: String? = null,
+    val errorCode: String? = null,
+    val errorMessage: String? = null,
+)
+
+class CodexChatException(message: String, val httpStatus: Int? = null) : Exception(message)
 
 interface CodexChatClient {
+    val supportsExecutionRecovery: Boolean get() = false
     suspend fun streamMessage(
         threadId: String,
         message: String,
@@ -106,12 +119,33 @@ interface CodexChatClient {
     ): CodexChatResult = streamRuntimeMessageWithProcess(
         config, message, requestedToolIds, attachments, onText, onProcess,
     )
+
+    suspend fun streamRecoverableRuntimeMessage(
+        executionId: String,
+        config: ChatRuntimeConfig,
+        message: String,
+        requestedToolIds: Set<String>,
+        attachments: List<ChatAttachment>,
+        personaRuntime: PersonaRuntimeSnapshot?,
+        onStarted: () -> Unit,
+        onText: (String) -> Unit,
+        onProcess: (ChatProcessEvent) -> Unit,
+    ): CodexChatResult {
+        onStarted()
+        return streamRuntimeMessageWithPersona(
+            config, message, requestedToolIds, attachments, personaRuntime, onText, onProcess,
+        )
+    }
+
+    suspend fun chatExecution(executionId: String): ChatExecutionRemoteSnapshot =
+        throw CodexChatException("当前 Chat client 不支持 execution recovery")
 }
 
 class HttpCodexChatClient(
     private val endpoint: String = BuildConfig.LOVEHOUSE_CHAT_URL,
     private val allowedToolIdsFor: (String, String) -> Set<String> = { _, _ -> emptySet() },
 ) : CodexChatClient {
+    override val supportsExecutionRecovery: Boolean = true
     override suspend fun streamMessage(
         threadId: String,
         message: String,
@@ -148,6 +182,53 @@ class HttpCodexChatClient(
         onProcess: (ChatProcessEvent) -> Unit,
     ): CodexChatResult = streamInternal(config, message, requestedToolIds, attachments, onText, onProcess, personaRuntime)
 
+    override suspend fun streamRecoverableRuntimeMessage(
+        executionId: String,
+        config: ChatRuntimeConfig,
+        message: String,
+        requestedToolIds: Set<String>,
+        attachments: List<ChatAttachment>,
+        personaRuntime: PersonaRuntimeSnapshot?,
+        onStarted: () -> Unit,
+        onText: (String) -> Unit,
+        onProcess: (ChatProcessEvent) -> Unit,
+    ): CodexChatResult = streamInternal(
+        config, message, requestedToolIds, attachments, onText, onProcess, personaRuntime,
+        executionId = executionId, onStarted = onStarted,
+    )
+
+    override suspend fun chatExecution(executionId: String): ChatExecutionRemoteSnapshot {
+        val connection = (URL("${endpoint.trimEnd('/')}/executions/$executionId").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15_000
+            readTimeout = 15_000
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            val statusCode = connection.responseCode
+            val body = (if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+            if (statusCode !in 200..299) throw CodexChatException(httpFailure(statusCode, body), statusCode)
+            val status = when (jsonString(body, "status")) {
+                "running" -> ChatExecutionRemoteStatus.Running
+                "completed" -> ChatExecutionRemoteStatus.Completed
+                "failed" -> ChatExecutionRemoteStatus.Failed
+                else -> throw CodexChatException("Chat execution 状态无效")
+            }
+            return ChatExecutionRemoteSnapshot(
+                executionId = jsonString(body, "execution_id") ?: executionId,
+                status = status,
+                text = jsonString(body, "text"),
+                runtime = jsonString(body, "runtime"),
+                adapterId = jsonString(body, "adapter_id"),
+                errorCode = jsonString(body, "code"),
+                errorMessage = jsonString(body, "message"),
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private suspend fun streamInternal(
         config: ChatRuntimeConfig,
         message: String,
@@ -156,6 +237,8 @@ class HttpCodexChatClient(
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
         personaRuntime: PersonaRuntimeSnapshot? = null,
+        executionId: String? = null,
+        onStarted: () -> Unit = {},
     ): CodexChatResult {
         require(config.attachmentsEnabled || attachments.isEmpty()) { "${config.personaId} Runtime 尚未启用附件" }
         val traceId = UUID.randomUUID().toString()
@@ -180,17 +263,19 @@ class HttpCodexChatClient(
             attachments,
             personaRuntime,
             traceId,
+            executionId,
         )
         Log.i(
             "RuntimeProvenance",
-            androidRuntimeProvenanceJson(traceId, config, personaRuntime),
+            androidRuntimeProvenanceJson(traceId, config, personaRuntime, executionId),
         )
         try {
             connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(payload) }
             if (connection.responseCode !in 200..299) {
                 val detail = connection.errorStream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
-                throw CodexChatException(httpFailure(connection.responseCode, detail))
+                throw CodexChatException(httpFailure(connection.responseCode, detail), connection.responseCode)
             }
+            onStarted()
             var event = "message"
             val data = StringBuilder()
             var text = ""
@@ -329,6 +414,7 @@ internal fun buildChatPayload(
     attachments: List<ChatAttachment> = emptyList(),
     personaRuntime: PersonaRuntimeSnapshot? = null,
     traceId: String? = null,
+    executionId: String? = null,
 ): String {
     val tools = allowedToolIds.sorted().joinToString(",") { "\"${jsonEscape(it)}\"" }
     val toolField = if (config.toolCenterEnabled && allowedToolIds.isNotEmpty()) "\"allowed_tool_ids\":[$tools]," else ""
@@ -344,16 +430,19 @@ internal fun buildChatPayload(
             "\"reanchor_intent\":${snapshot.reanchorIntent}$ticket},"
     }.orEmpty()
     val traceField = traceId?.let { "\"trace_id\":\"${jsonEscape(it)}\"," }.orEmpty()
-    return """{$traceField"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$personaField$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
+    val executionField = executionId?.let { "\"execution_id\":\"${jsonEscape(it)}\"," }.orEmpty()
+    return """{$traceField$executionField"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$personaField$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
 }
 
 internal fun androidRuntimeProvenanceJson(
     traceId: String,
     config: ChatRuntimeConfig,
     personaRuntime: PersonaRuntimeSnapshot?,
+    executionId: String? = null,
 ): String = buildString {
     append("{\"stage\":\"android_chat_request\"")
     append(",\"trace_id\":\"").append(jsonEscape(traceId)).append('"')
+    executionId?.let { append(",\"execution_id\":\"").append(jsonEscape(it)).append('"') }
     append(",\"thread_id\":\"").append(jsonEscape(config.threadId)).append('"')
     append(",\"provider\":\"").append(jsonEscape(config.personaId)).append('"')
     personaRuntime?.let { runtime ->

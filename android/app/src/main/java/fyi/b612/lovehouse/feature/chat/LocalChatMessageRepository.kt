@@ -9,6 +9,23 @@ enum class LocalChatRole { User, Assistant }
 
 enum class LocalChatDeliveryStatus { Sending, Sent, Failed }
 
+enum class LocalChatExecutionStatus { Running, Completed, Failed }
+
+data class LocalChatExecution(
+    val executionId: String,
+    val localThreadId: String,
+    val provider: String,
+    val canonicalThreadId: String,
+    val userMessageId: String,
+    val assistantMessageId: String,
+    val status: LocalChatExecutionStatus,
+    val lastError: String? = null,
+    val personaVersion: Int? = null,
+    val reanchorIntent: Boolean = false,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+)
+
 data class LocalChatMessage(
     val localMessageId: String,
     val threadId: String,
@@ -27,12 +44,16 @@ interface LocalChatMessageRepository {
     fun messages(threadId: String): List<LocalChatMessage>
     fun upsert(message: LocalChatMessage)
     fun upsert(messages: List<LocalChatMessage>) = messages.forEach(::upsert)
+    fun pendingExecutions(): List<LocalChatExecution> = emptyList()
+    fun upsertExecution(execution: LocalChatExecution) = Unit
 }
 
 object NoOpLocalChatMessageRepository : LocalChatMessageRepository {
     override fun messages(threadId: String): List<LocalChatMessage> = emptyList()
     override fun upsert(message: LocalChatMessage) = Unit
     override fun upsert(messages: List<LocalChatMessage>) = Unit
+    override fun pendingExecutions(): List<LocalChatExecution> = emptyList()
+    override fun upsertExecution(execution: LocalChatExecution) = Unit
 }
 
 class SQLiteLocalChatMessageRepository(
@@ -105,6 +126,66 @@ class SQLiteLocalChatMessageRepository(
         } finally {
             database.writableDatabase.endTransaction()
         }
+    }
+
+    @Synchronized
+    override fun pendingExecutions(): List<LocalChatExecution> = buildList {
+        database.readableDatabase.query(
+            TABLE_EXECUTIONS,
+            EXECUTION_COLUMNS,
+            "status = ?",
+            arrayOf(LocalChatExecutionStatus.Running.name),
+            null,
+            null,
+            "created_at_epoch_ms ASC",
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                fun nullableString(name: String): String? = cursor.getColumnIndexOrThrow(name).let { index ->
+                    if (cursor.isNull(index)) null else cursor.getString(index)
+                }
+                fun nullableInt(name: String): Int? = cursor.getColumnIndexOrThrow(name).let { index ->
+                    if (cursor.isNull(index)) null else cursor.getInt(index)
+                }
+                add(LocalChatExecution(
+                    executionId = cursor.getString(cursor.getColumnIndexOrThrow("execution_id")),
+                    localThreadId = cursor.getString(cursor.getColumnIndexOrThrow("local_thread_id")),
+                    provider = cursor.getString(cursor.getColumnIndexOrThrow("provider")),
+                    canonicalThreadId = cursor.getString(cursor.getColumnIndexOrThrow("canonical_thread_id")),
+                    userMessageId = cursor.getString(cursor.getColumnIndexOrThrow("user_message_id")),
+                    assistantMessageId = cursor.getString(cursor.getColumnIndexOrThrow("assistant_message_id")),
+                    status = LocalChatExecutionStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status"))),
+                    lastError = nullableString("last_error"),
+                    personaVersion = nullableInt("persona_version"),
+                    reanchorIntent = cursor.getInt(cursor.getColumnIndexOrThrow("reanchor_intent")) == 1,
+                    createdAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("created_at_epoch_ms")),
+                    updatedAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at_epoch_ms")),
+                ))
+            }
+        }
+    }
+
+    @Synchronized
+    override fun upsertExecution(execution: LocalChatExecution) {
+        val values = ContentValues().apply {
+            put("execution_id", execution.executionId)
+            put("local_thread_id", execution.localThreadId)
+            put("provider", execution.provider)
+            put("canonical_thread_id", execution.canonicalThreadId)
+            put("user_message_id", execution.userMessageId)
+            put("assistant_message_id", execution.assistantMessageId)
+            put("status", execution.status.name)
+            execution.lastError?.let { put("last_error", it) } ?: putNull("last_error")
+            execution.personaVersion?.let { put("persona_version", it) } ?: putNull("persona_version")
+            put("reanchor_intent", if (execution.reanchorIntent) 1 else 0)
+            put("created_at_epoch_ms", execution.createdAtEpochMillis)
+            put("updated_at_epoch_ms", execution.updatedAtEpochMillis)
+        }
+        database.writableDatabase.insertWithOnConflict(
+            TABLE_EXECUTIONS,
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_REPLACE,
+        ).also { rowId -> check(rowId != -1L) { "Could not persist local chat execution" } }
     }
 
     private fun write(db: SQLiteDatabase, message: LocalChatMessage) {
@@ -211,22 +292,28 @@ class SQLiteLocalChatMessageRepository(
         override fun onCreate(db: SQLiteDatabase) {
             createMessagesTable(db)
             createAttachmentsTable(db)
+            createExecutionsTable(db)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            if (oldVersion == 1 && newVersion >= 2) {
+            var migratedVersion = oldVersion
+            if (migratedVersion == 1 && newVersion >= 2) {
                 db.execSQL("ALTER TABLE $TABLE_MESSAGES RENAME TO chat_messages_v1")
                 db.execSQL("DROP INDEX IF EXISTS chat_messages_thread_time_idx")
                 createMessagesTable(db)
                 db.execSQL("INSERT INTO $TABLE_MESSAGES SELECT * FROM chat_messages_v1")
                 db.execSQL("DROP TABLE chat_messages_v1")
                 createAttachmentsTable(db)
-                if (newVersion == 2) return
-            } else if (oldVersion == 2 && newVersion >= 3) {
+                migratedVersion = 3
+            } else if (migratedVersion == 2 && newVersion >= 3) {
                 migratePreviewAttachments(db)
-                return
+                migratedVersion = 3
             }
-            if (oldVersion != 1 || newVersion != 3) {
+            if (migratedVersion == 3 && newVersion >= 4) {
+                createExecutionsTable(db)
+                migratedVersion = 4
+            }
+            if (migratedVersion != newVersion) {
                 error("A non-destructive chat history migration is required from version $oldVersion to $newVersion")
             }
         }
@@ -282,6 +369,28 @@ class SQLiteLocalChatMessageRepository(
             db.execSQL("CREATE INDEX IF NOT EXISTS chat_attachments_message_idx ON $TABLE_ATTACHMENTS(local_message_id, position)")
         }
 
+        private fun createExecutionsTable(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_EXECUTIONS (
+                    execution_id TEXT PRIMARY KEY NOT NULL,
+                    local_thread_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    canonical_thread_id TEXT NOT NULL,
+                    user_message_id TEXT NOT NULL,
+                    assistant_message_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('Running', 'Completed', 'Failed')),
+                    last_error TEXT,
+                    persona_version INTEGER,
+                    reanchor_intent INTEGER NOT NULL DEFAULT 0,
+                    created_at_epoch_ms INTEGER NOT NULL,
+                    updated_at_epoch_ms INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS chat_executions_status_idx ON $TABLE_EXECUTIONS(status, updated_at_epoch_ms)")
+        }
+
         private fun migratePreviewAttachments(db: SQLiteDatabase) {
             db.execSQL("ALTER TABLE $TABLE_ATTACHMENTS RENAME TO chat_message_attachments_preview_v2")
             db.execSQL("DROP INDEX IF EXISTS chat_attachments_message_idx")
@@ -311,9 +420,10 @@ class SQLiteLocalChatMessageRepository(
 
     private companion object {
         const val DATABASE_NAME = "lovehouse_chat.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
         const val TABLE_MESSAGES = "chat_messages"
         const val TABLE_ATTACHMENTS = "chat_message_attachments"
+        const val TABLE_EXECUTIONS = "chat_executions"
         val MESSAGE_COLUMNS = arrayOf(
             "local_message_id",
             "thread_id",
@@ -325,6 +435,11 @@ class SQLiteLocalChatMessageRepository(
             "status",
             "runtime",
             "adapter_id",
+        )
+        val EXECUTION_COLUMNS = arrayOf(
+            "execution_id", "local_thread_id", "provider", "canonical_thread_id",
+            "user_message_id", "assistant_message_id", "status", "last_error",
+            "persona_version", "reanchor_intent", "created_at_epoch_ms", "updated_at_epoch_ms",
         )
     }
 }
