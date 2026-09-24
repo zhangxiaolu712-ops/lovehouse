@@ -473,20 +473,14 @@ export class CodexCliRuntimeAdapter {
     const controlledMcp = connectionIds.length ? { url: this.appBackendMcpUrl } : null
     const personaInstructions = personaRuntime
       ? [personaRuntime.instructions, personaRuntime.background].filter(Boolean).join('\n\n') : ''
-    emitRuntimeProvenance('runtime_materialization_started', {
-      ...safeTrace, materialization_attempted: true,
-    })
+    emitRuntimeProvenance('attachment_materialization_started', safeTrace)
     let materialized
     try {
       materialized = await this.attachmentMaterializer.materialize(attachments, signal)
-      emitRuntimeProvenance('runtime_materialization_completed', {
-        ...safeTrace, materialization_attempted: true, materialization_succeeded: true,
-      })
+      emitRuntimeProvenance('attachment_materialization_completed', safeTrace)
     } catch (error) {
-      emitRuntimeProvenance('runtime_materialization_failed', {
+      emitRuntimeProvenance('attachment_materialization_failed', {
         ...safeTrace,
-        materialization_attempted: true,
-        materialization_succeeded: false,
         normalized_error_code: error?.code || 'ATTACHMENT_MATERIALIZATION_FAILED',
         reason_category: runtimeFailureCategory(error),
       })
@@ -506,12 +500,15 @@ export class CodexCliRuntimeAdapter {
       command.runtimeTrace = {
         ...safeTrace,
         session_mode: sessionId ? 'resume' : 'new',
+        materialization_attempted: personaRuntime != null,
+        materialization_succeeded: personaRuntime != null,
         instructions_present: Boolean(personaRuntime?.instructions),
         background_present: Boolean(personaRuntime?.background),
         connection_count: connectionIds.length,
       }
       command.traceId = controlledMcp ? safeTrace.trace_id : null
       command.providerRoute = controlledMcp ? (safeTrace.provider || 'codex_cli') : null
+      emitRuntimeProvenance('persona_runtime_materialized', command.runtimeTrace)
       emitRuntimeProvenance('provider_invocation', command.runtimeTrace)
       prompt = buildPrompt(sessionId ? [] : history, message, materialized.items)
       estimatedInputTokens = estimateTokens(prompt)

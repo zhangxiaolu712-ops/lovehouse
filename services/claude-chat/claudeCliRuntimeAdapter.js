@@ -340,20 +340,14 @@ export class ClaudeCliRuntimeAdapter {
     const runtimeTrace = normalizeRuntimeTrace(input.runtimeTrace, {
       provider: 'claude_cli', personaRuntime: input.personaRuntime,
     })
-    emitRuntimeProvenance('runtime_materialization_started', {
-      ...runtimeTrace, materialization_attempted: true,
-    })
+    emitRuntimeProvenance('attachment_materialization_started', runtimeTrace)
     let materialized
     try {
       materialized = await this.attachmentMaterializer.materialize(input.attachments || [], input.signal)
-      emitRuntimeProvenance('runtime_materialization_completed', {
-        ...runtimeTrace, materialization_attempted: true, materialization_succeeded: true,
-      })
+      emitRuntimeProvenance('attachment_materialization_completed', runtimeTrace)
     } catch (error) {
-      emitRuntimeProvenance('runtime_materialization_failed', {
+      emitRuntimeProvenance('attachment_materialization_failed', {
         ...runtimeTrace,
-        materialization_attempted: true,
-        materialization_succeeded: false,
         normalized_error_code: error?.code || 'ATTACHMENT_MATERIALIZATION_FAILED',
         reason_category: runtimeFailureCategory(error),
       })
@@ -411,10 +405,13 @@ export class ClaudeCliRuntimeAdapter {
     const invocationTrace = {
       ...runtimeTrace,
       session_mode: command.resumed ? 'resume' : 'new',
+      materialization_attempted: personaRuntime != null,
+      materialization_succeeded: personaRuntime != null,
       instructions_present: Boolean(personaRuntime?.instructions),
       background_present: Boolean(personaRuntime?.background),
       connection_count: personaRuntime?.connection_ids?.length || 0,
     }
+    emitRuntimeProvenance('persona_runtime_materialized', invocationTrace)
     emitRuntimeProvenance('provider_invocation', invocationTrace)
     const tools = new Map()
     let reportedSessionId = ''
