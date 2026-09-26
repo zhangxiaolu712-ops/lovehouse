@@ -69,6 +69,8 @@ import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
 import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
+import fyi.b612.lovehouse.feature.events.ServerEventFeedState
+import fyi.b612.lovehouse.feature.events.ServerEventRepository
 
 private val Ink = LoveHouseGlass.Ink
 private val Muted = LoveHouseGlass.MutedInk
@@ -94,6 +96,7 @@ private val groupTemplates = listOf(
         SettingEntry("AI 档案管理", "人格、专属记忆与头像", "2 个", LoveHouseIcon.Chat),
     )),
     SettingGroup("系统能力", listOf(
+        SettingEntry("动态", "回复完成与需要确认的服务器事件", "打开查看", LoveHouseIcon.Bell),
         SettingEntry("权限", "查看与管理系统权限", "6/8", LoveHouseIcon.Settings),
         SettingEntry("通知", "消息、任务与审批提醒", "已开启", LoveHouseIcon.Bell),
         SettingEntry("AI 权限", "AI 可读取与使用的信息边界", "受限", LoveHouseIcon.CatPawSend),
@@ -132,6 +135,8 @@ fun SettingsScreen(
     personaRuntimeSource: PersonaRuntimeSource,
     selfCheck: DeploymentSelfCheckRunner,
     onOpenConnectionControl: () -> Unit,
+    serverEvents: ServerEventRepository,
+    onOpenEvents: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selected by remember { mutableStateOf<SettingEntry?>(null) }
@@ -146,8 +151,9 @@ fun SettingsScreen(
                 baseCapabilities = baseCapabilities,
                 toolConnections = toolConnections,
                 appAccount = appAccount,
+                serverEvents = serverEvents,
                 onOpenConnectionControl = onOpenConnectionControl,
-                onSelect = { selected = it },
+                onSelect = { entry -> if (entry.title == "动态") onOpenEvents() else selected = entry },
             )
         } else {
             SettingsDetail(
@@ -178,6 +184,7 @@ private fun SettingsHome(
     baseCapabilities: LoveHouseCapabilityRegistry,
     toolConnections: ToolConnectionStore,
     appAccount: AppAccountRepository,
+    serverEvents: ServerEventRepository,
     onOpenConnectionControl: () -> Unit,
     onSelect: (SettingEntry) -> Unit,
 ) {
@@ -188,6 +195,7 @@ private fun SettingsHome(
     val session by ownerSession.state.collectAsState()
     val savedToolConnections by toolConnections.connections.collectAsState()
     val appAccountState by appAccount.state.collectAsState()
+    val eventState by serverEvents.feed.collectAsState()
     val appearance = LocalLoveHouseAppearance.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val deviceContext = remember(context.applicationContext) {
@@ -223,6 +231,13 @@ private fun SettingsHome(
         "AI 档案管理" to (personaCount?.let { "$it 个" } ?: "本机"),
         "权限" to "$availablePermissions/${deviceCapabilities.size}",
         "通知" to notificationState,
+        "动态" to when (val events = eventState) {
+            ServerEventFeedState.Initial -> "待刷新"
+            ServerEventFeedState.Loading -> "刷新中"
+            ServerEventFeedState.AuthenticationRequired -> "需登录"
+            is ServerEventFeedState.Error -> "暂不可用"
+            is ServerEventFeedState.Ready -> if (events.events.isEmpty()) "暂无" else "${events.events.size} 条"
+        },
         "AI 权限" to "策略待接入",
         "语音" to "原生录音可用",
         "天气与时间" to "天气未接入",

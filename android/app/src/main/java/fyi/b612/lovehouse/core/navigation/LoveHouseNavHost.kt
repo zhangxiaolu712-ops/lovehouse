@@ -13,11 +13,16 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -43,6 +48,10 @@ import fyi.b612.lovehouse.feature.settings.ToolCenterLabScreen
 import fyi.b612.lovehouse.feature.settings.McpOAuthResultScreen
 import fyi.b612.lovehouse.feature.shell.NavGlyph
 import fyi.b612.lovehouse.feature.shell.PlaceholderScreen
+import fyi.b612.lovehouse.feature.events.ServerEventDetailScreen
+import fyi.b612.lovehouse.feature.events.ServerEventsScreen
+import kotlinx.coroutines.launch
+import android.net.Uri
 
 @Composable
 fun LoveHouseShell(
@@ -61,6 +70,8 @@ private fun LoveHouseContent(
     dependencies: AppDependencies,
     modifier: Modifier = Modifier,
 ) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val applicationScope = rememberCoroutineScope()
     val chatStore = remember(dependencies.chatMessages, dependencies.capabilityRegistry, dependencies.claudeWebHistoryImporter) {
         ChatSessionStore(
             codexClient = HttpCodexChatClient(
@@ -75,6 +86,16 @@ private fun LoveHouseContent(
     LaunchedEffect(chatStore) {
         chatStore.recoverPendingExecutions()
         runCatching { chatStore.refreshPersonaProfiles() }
+    }
+    LaunchedEffect(dependencies.serverEvents) { dependencies.serverEvents.refresh() }
+    DisposableEffect(lifecycleOwner, dependencies.serverEvents) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                applicationScope.launch { dependencies.serverEvents.refresh() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     NavHost(
         navController = navController,
@@ -161,7 +182,33 @@ private fun LoveHouseContent(
                 mcpConnections = dependencies.mcpConnections,
                 personaRuntimeSource = dependencies.personaRuntimeSource,
                 selfCheck = dependencies.selfCheck,
+                serverEvents = dependencies.serverEvents,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
+                onOpenEvents = { navController.navigate(AppDestination.Events.route) },
+            )
+        }
+
+        composable(
+            route = AppDestination.Events.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Events.deepLink }),
+        ) {
+            ServerEventsScreen(
+                repository = dependencies.serverEvents,
+                onOpenEvent = { eventId -> navController.navigate("events/${Uri.encode(eventId)}") },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = AppDestination.EventDetail.route,
+            arguments = listOf(navArgument("eventId") { type = NavType.StringType }),
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.EventDetail.deepLink }),
+        ) { entry ->
+            ServerEventDetailScreen(
+                eventId = entry.arguments?.getString("eventId").orEmpty(),
+                repository = dependencies.serverEvents,
+                onOpenThread = { threadId -> navController.navigate("chat/thread/${Uri.encode(threadId)}") },
+                onBack = { navController.popBackStack() },
             )
         }
 

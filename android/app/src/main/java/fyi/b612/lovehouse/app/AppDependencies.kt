@@ -69,6 +69,8 @@ import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
 import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
+import fyi.b612.lovehouse.feature.events.AndroidServerEventRepository
+import fyi.b612.lovehouse.feature.events.ServerEventRepository
 
 data class AppDependencies(
     val permissions: PermissionStatusProvider,
@@ -87,6 +89,7 @@ data class AppDependencies(
     val chatConnections: ChatConnectionStore,
     val chatConnectionProbe: ChatConnectionProbe,
     val appAccount: AppAccountRepository,
+    val serverEvents: ServerEventRepository,
     val mcpConnections: McpConnectionRepository,
     val conversationPersonas: ConversationPersonaStore,
     val personaRuntimeSource: PersonaRuntimeSource,
@@ -121,6 +124,11 @@ fun createAppDependencies(context: Context): AppDependencies {
     val toolConnections: ToolConnectionStore = AndroidToolConnectionStore(appContext)
     val appAccountSource = AndroidAppAccountRepository(appContext, BuildConfig.LOVEHOUSE_APP_BACKEND_URL)
     val appAccount: AppAccountRepository = appAccountSource
+    val serverEvents: ServerEventRepository = AndroidServerEventRepository(
+        baseUrl = BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
+        sessionCookie = appAccountSource::backendSessionCookie,
+        onAuthenticationRequired = appAccountSource::refresh,
+    )
     val mcpConnections: McpConnectionRepository = AppBackendMcpConnectionRepository(
         BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
         sessionCookie = appAccountSource::backendSessionCookie,
@@ -197,6 +205,7 @@ fun createAppDependencies(context: Context): AppDependencies {
         chatConnections = AndroidChatConnectionStore(appContext),
         chatConnectionProbe = HttpChatConnectionProbe(),
         appAccount = appAccount,
+        serverEvents = serverEvents,
         mcpConnections = mcpConnections,
         conversationPersonas = conversationPersonas,
         personaRuntimeSource = personaRuntimeSource,
