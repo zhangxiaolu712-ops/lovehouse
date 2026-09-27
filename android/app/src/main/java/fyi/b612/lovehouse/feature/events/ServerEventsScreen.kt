@@ -82,7 +82,7 @@ fun ServerEventsScreen(
 fun ServerEventDetailScreen(
     eventId: String,
     repository: ServerEventRepository,
-    onOpenThread: (String) -> Unit,
+    onOpenThread: (String) -> Boolean,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -110,9 +110,15 @@ fun ServerEventDetailScreen(
                     item { ServerEventCard(event) }
                     if (event.kind == ServerEventKind.ReplyCompleted && event.threadId != null) {
                         item {
-                            Button(onClick = { onOpenThread(event.threadId) }, modifier = Modifier.fillMaxWidth()) {
+                            Button(
+                                onClick = {
+                                    feedback = if (onOpenThread(event.threadId)) null else "未找到对应的本地聊天"
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
                                 Text("进入对应聊天")
                             }
+                            feedback?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp) }
                         }
                     }
                     if (event.kind == ServerEventKind.ConfirmationRequired) {

@@ -34,12 +34,60 @@ class ChatExecutionRecoveryTest {
             messages[message.localMessageId] = message
         }
 
+        override fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? =
+            executions.values
+                .filter { it.canonicalThreadId == canonicalThreadId }
+                .maxByOrNull { it.updatedAtEpochMillis }
+                ?.localThreadId
+
         override fun pendingExecutions(): List<LocalChatExecution> =
             executions.values.filter { it.status == LocalChatExecutionStatus.Running }
 
         override fun upsertExecution(execution: LocalChatExecution) {
             executions[execution.executionId] = execution
         }
+    }
+
+    @Test
+    fun `event canonical thread resolves through persisted execution to local chat route`() {
+        val canonicalThreadId = "7c814f9a-7588-4e35-b4b6-a216f172c012"
+        val localThreadId = "agent-codex"
+        val executionId = "33333333-3333-4333-8333-333333333333"
+        val repository = ExecutionRepository(
+            message = LocalChatMessage(
+                localMessageId = "user:$executionId",
+                threadId = localThreadId,
+                role = LocalChatRole.User,
+                sender = "owner",
+                content = "message",
+                createdAtEpochMillis = 10L,
+                status = LocalChatDeliveryStatus.Sent,
+            ),
+            execution = LocalChatExecution(
+                executionId = executionId,
+                localThreadId = localThreadId,
+                provider = "codex",
+                canonicalThreadId = canonicalThreadId,
+                userMessageId = "user:$executionId",
+                assistantMessageId = "assistant:$executionId",
+                status = LocalChatExecutionStatus.Completed,
+                createdAtEpochMillis = 10L,
+                updatedAtEpochMillis = 20L,
+            ),
+        )
+        val store = ChatSessionStore(messageRepository = repository)
+
+        val route = fyi.b612.lovehouse.core.navigation.eventChatRoute(
+            canonicalThreadId = canonicalThreadId,
+            resolveLocalThreadId = store::localThreadIdForCanonicalThread,
+            encodeRouteSegment = { it },
+        )
+
+        assertTrue(localThreadId != canonicalThreadId)
+        assertEquals("chat/thread/agent-codex", route)
+        assertEquals(null, store.localThreadIdForCanonicalThread("missing-canonical-thread"))
+        assertEquals(localThreadId, store.localThreadIdForCanonicalThread(localThreadId))
+        assertEquals(null, store.thread(canonicalThreadId))
     }
 
     @Test

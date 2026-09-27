@@ -130,6 +130,13 @@ class ChatSessionStore(
     }
 
     fun thread(threadId: String): ChatThreadSummary? = threads.firstOrNull { it.threadId == threadId }
+    fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? {
+        if (thread(canonicalThreadId) != null) return canonicalThreadId
+        val localThreadId = runCatching {
+            messageRepository.localThreadIdForCanonicalThread(canonicalThreadId)
+        }.getOrNull() ?: return null
+        return localThreadId.takeIf { thread(it) != null }
+    }
     fun persona(threadId: String): ChatPersona? = thread(threadId)?.personaId?.let { personaId ->
         personas.firstOrNull { it.personaId == personaId }
     }

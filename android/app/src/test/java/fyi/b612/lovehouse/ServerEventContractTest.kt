@@ -2,6 +2,8 @@ package fyi.b612.lovehouse
 
 import java.io.File
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -34,12 +36,40 @@ class ServerEventContractTest {
     }
 
     @Test
-    fun `reply event reuses canonical chat thread route`() {
-        val navigation = source("core/navigation/LoveHouseNavHost.kt")
-        val destinations = source("core/navigation/AppDestination.kt")
+    fun `reply event resolves canonical thread to its distinct local chat route`() {
+        val canonicalThreadId = "7c814f9a-7588-4e35-b4b6-a216f172c012"
+        val localThreadId = "agent-codex"
+        val route = fyi.b612.lovehouse.core.navigation.eventChatRoute(
+            canonicalThreadId = canonicalThreadId,
+            resolveLocalThreadId = { requested -> localThreadId.takeIf { requested == canonicalThreadId } },
+            encodeRouteSegment = { it },
+        )
 
-        assertTrue(destinations.contains("lovehouse://chat/thread/{threadId}"))
-        assertTrue(navigation.contains("navController.navigate(\"chat/thread/${'$'}{Uri.encode(threadId)}\")"))
+        assertTrue(localThreadId != canonicalThreadId)
+        assertEquals("chat/thread/agent-codex", route)
+    }
+
+    @Test
+    fun `reply event with no local mapping safely refuses navigation`() {
+        val route = fyi.b612.lovehouse.core.navigation.eventChatRoute(
+            canonicalThreadId = "missing-canonical-thread",
+            resolveLocalThreadId = { null },
+            encodeRouteSegment = { it },
+        )
+
+        assertNull(route)
+    }
+
+    @Test
+    fun `ordinary local chat navigation remains a direct local route`() {
+        val localThreadId = "agent-codex"
+        val route = fyi.b612.lovehouse.core.navigation.eventChatRoute(
+            canonicalThreadId = localThreadId,
+            resolveLocalThreadId = { requested -> requested.takeIf { it == localThreadId } },
+            encodeRouteSegment = { it },
+        )
+
+        assertEquals("chat/thread/agent-codex", route)
     }
 
     @Test

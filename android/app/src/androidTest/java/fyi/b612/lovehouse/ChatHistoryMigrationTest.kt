@@ -86,7 +86,7 @@ class ChatHistoryMigrationTest {
             executionId = "11111111-1111-4111-8111-111111111111",
             localThreadId = "thread",
             provider = "codex",
-            canonicalThreadId = "thread",
+            canonicalThreadId = "canonical-thread",
             userMessageId = "new-media",
             assistantMessageId = "assistant:11111111-1111-4111-8111-111111111111",
             status = LocalChatExecutionStatus.Running,
@@ -101,6 +101,8 @@ class ChatHistoryMigrationTest {
         assertEquals(1, messages.last().attachments.size)
         assertTrue(messages.last().content.isEmpty())
         assertEquals("11111111-1111-4111-8111-111111111111", reopened.pendingExecutions().single().executionId)
+        assertEquals("thread", reopened.localThreadIdForCanonicalThread("canonical-thread"))
+        assertEquals(null, reopened.localThreadIdForCanonicalThread("missing-canonical-thread"))
         reopened.close()
         context.deleteDatabase(databaseName)
     }

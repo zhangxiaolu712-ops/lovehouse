@@ -208,7 +208,16 @@ private fun LoveHouseContent(
             ServerEventDetailScreen(
                 eventId = entry.arguments?.getString("eventId").orEmpty(),
                 repository = dependencies.serverEvents,
-                onOpenThread = { threadId -> navController.navigate("chat/thread/${Uri.encode(threadId)}") },
+                onOpenThread = { canonicalThreadId ->
+                    eventChatRoute(
+                        canonicalThreadId = canonicalThreadId,
+                        resolveLocalThreadId = chatStore::localThreadIdForCanonicalThread,
+                        encodeRouteSegment = Uri::encode,
+                    )?.let { route ->
+                        navController.navigate(route)
+                        true
+                    } ?: false
+                },
                 onBack = { navController.popBackStack() },
             )
         }

@@ -44,6 +44,7 @@ interface LocalChatMessageRepository {
     fun messages(threadId: String): List<LocalChatMessage>
     fun upsert(message: LocalChatMessage)
     fun upsert(messages: List<LocalChatMessage>) = messages.forEach(::upsert)
+    fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? = null
     fun pendingExecutions(): List<LocalChatExecution> = emptyList()
     fun upsertExecution(execution: LocalChatExecution) = Unit
 }
@@ -52,6 +53,7 @@ object NoOpLocalChatMessageRepository : LocalChatMessageRepository {
     override fun messages(threadId: String): List<LocalChatMessage> = emptyList()
     override fun upsert(message: LocalChatMessage) = Unit
     override fun upsert(messages: List<LocalChatMessage>) = Unit
+    override fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? = null
     override fun pendingExecutions(): List<LocalChatExecution> = emptyList()
     override fun upsertExecution(execution: LocalChatExecution) = Unit
 }
@@ -127,6 +129,21 @@ class SQLiteLocalChatMessageRepository(
             database.writableDatabase.endTransaction()
         }
     }
+
+    @Synchronized
+    override fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? =
+        database.readableDatabase.query(
+            TABLE_EXECUTIONS,
+            arrayOf("local_thread_id"),
+            "canonical_thread_id = ?",
+            arrayOf(canonicalThreadId),
+            null,
+            null,
+            "updated_at_epoch_ms DESC, rowid DESC",
+            "1",
+        ).use { cursor ->
+            cursor.takeIf { it.moveToFirst() }?.getString(0)
+        }
 
     @Synchronized
     override fun pendingExecutions(): List<LocalChatExecution> = buildList {
