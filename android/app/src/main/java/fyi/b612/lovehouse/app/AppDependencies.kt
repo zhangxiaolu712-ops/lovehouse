@@ -71,6 +71,8 @@ import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverRuntime
 import fyi.b612.lovehouse.feature.screenobserver.ScreenObserverStatus
 import fyi.b612.lovehouse.feature.events.AndroidServerEventRepository
 import fyi.b612.lovehouse.feature.events.ServerEventRepository
+import fyi.b612.lovehouse.feature.events.RemoteEventPushRegistration
+import fyi.b612.lovehouse.feature.events.createRemoteEventPushCoordinator
 
 data class AppDependencies(
     val permissions: PermissionStatusProvider,
@@ -91,6 +93,7 @@ data class AppDependencies(
     val appAccount: AppAccountRepository,
     val appAccountSessionCookie: () -> String?,
     val serverEvents: ServerEventRepository,
+    val remoteEventPush: RemoteEventPushRegistration,
     val mcpConnections: McpConnectionRepository,
     val conversationPersonas: ConversationPersonaStore,
     val personaRuntimeSource: PersonaRuntimeSource,
@@ -123,7 +126,12 @@ fun createAppDependencies(context: Context): AppDependencies {
     val localStorage: LocalStorage = DataStoreLocalStorage(appContext)
     val mediaAttachments: MediaAttachmentClient = HttpMediaAttachmentClient(appContext, ownerSession)
     val toolConnections: ToolConnectionStore = AndroidToolConnectionStore(appContext)
-    val appAccountSource = AndroidAppAccountRepository(appContext, BuildConfig.LOVEHOUSE_APP_BACKEND_URL)
+    val remoteEventPush = createRemoteEventPushCoordinator(appContext)
+    val appAccountSource = AndroidAppAccountRepository(
+        appContext,
+        BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
+        pushLifecycle = remoteEventPush,
+    )
     val appAccount: AppAccountRepository = appAccountSource
     val serverEvents: ServerEventRepository = AndroidServerEventRepository(
         baseUrl = BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
@@ -208,6 +216,7 @@ fun createAppDependencies(context: Context): AppDependencies {
         appAccount = appAccount,
         appAccountSessionCookie = appAccountSource::backendSessionCookie,
         serverEvents = serverEvents,
+        remoteEventPush = remoteEventPush,
         mcpConnections = mcpConnections,
         conversationPersonas = conversationPersonas,
         personaRuntimeSource = personaRuntimeSource,

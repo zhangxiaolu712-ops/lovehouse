@@ -84,14 +84,25 @@ fun ServerEventDetailScreen(
     repository: ServerEventRepository,
     onOpenThread: (String) -> Boolean,
     onBack: () -> Unit,
+    autoOpenTarget: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var state by remember(eventId) { mutableStateOf<ServerEventLoadResult?>(null) }
     var feedback by remember(eventId) { mutableStateOf<String?>(null) }
     var deciding by remember(eventId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    var autoOpenAttempted by remember(eventId) { mutableStateOf(false) }
     suspend fun reload() { state = repository.get(eventId) }
     LaunchedEffect(eventId) { reload() }
+    LaunchedEffect(state, autoOpenTarget) {
+        val event = (state as? ServerEventLoadResult.Found)?.event
+        if (autoOpenTarget && !autoOpenAttempted && event?.kind == ServerEventKind.ReplyCompleted
+            && event.threadId != null
+        ) {
+            autoOpenAttempted = true
+            if (!onOpenThread(event.threadId)) feedback = "未找到对应的本地聊天"
+        }
+    }
     BackHandler(onBack = onBack)
     Column(modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         EventTopBar("动态详情", onBack, onRefresh = { scope.launch { reload() } })

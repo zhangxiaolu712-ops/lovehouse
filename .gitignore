@@ -17,6 +17,10 @@ dist-ssr
 # migration build, but must never enter Git or a normal distributable APK.
 android/app/src/main/res/raw/claude_v1_web_migration.json
 
+# Firebase project configuration is supplied only to approved local/release builds.
+android/app/google-services.json
+**/*firebase-adminsdk*.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

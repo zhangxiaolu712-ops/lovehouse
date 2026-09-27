@@ -28,7 +28,7 @@ class ServerEventContractTest {
         val destinations = source("core/navigation/AppDestination.kt")
         val navigation = source("core/navigation/LoveHouseNavHost.kt")
 
-        assertTrue(destinations.contains("EventDetail(\"events/{eventId}\""))
+        assertTrue(destinations.contains("EventDetail(\"events/{eventId}?openTarget={openTarget}\""))
         assertTrue(destinations.contains("\"lovehouse://event/{eventId}\""))
         assertFalse(destinations.contains("decision={decision}"))
         assertFalse(destinations.contains("action=approve"))

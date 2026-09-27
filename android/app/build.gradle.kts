@@ -18,6 +18,18 @@ android {
         .orElse("")
     val appBackendUrl = providers.gradleProperty("lovehouse.appBackendUrl")
         .orElse("https://app.b612.fyi")
+    val firebaseApplicationId = providers.gradleProperty("lovehouse.firebaseApplicationId")
+        .orElse(providers.environmentVariable("LOVEHOUSE_FIREBASE_APPLICATION_ID"))
+        .orElse("")
+    val firebaseApiKey = providers.gradleProperty("lovehouse.firebaseApiKey")
+        .orElse(providers.environmentVariable("LOVEHOUSE_FIREBASE_API_KEY"))
+        .orElse("")
+    val firebaseProjectId = providers.gradleProperty("lovehouse.firebaseProjectId")
+        .orElse(providers.environmentVariable("LOVEHOUSE_FIREBASE_PROJECT_ID"))
+        .orElse("")
+    val firebaseSenderId = providers.gradleProperty("lovehouse.firebaseSenderId")
+        .orElse(providers.environmentVariable("LOVEHOUSE_FIREBASE_SENDER_ID"))
+        .orElse("")
     val buildGitSha = providers.environmentVariable("GITHUB_SHA")
         .orElse(
             providers.exec {
@@ -47,6 +59,10 @@ android {
         buildConfigField("String", "LOVEHOUSE_SUPABASE_PUBLISHABLE_KEY", quotedBuildConfig(supabasePublishableKey.get()))
         buildConfigField("String", "LOVEHOUSE_GIT_SHA", quotedBuildConfig(buildGitSha.get()))
         buildConfigField("String", "LOVEHOUSE_BUILD_TIME", quotedBuildConfig(buildTimestamp.get()))
+        buildConfigField("String", "LOVEHOUSE_FIREBASE_APPLICATION_ID", quotedBuildConfig(firebaseApplicationId.get()))
+        buildConfigField("String", "LOVEHOUSE_FIREBASE_API_KEY", quotedBuildConfig(firebaseApiKey.get()))
+        buildConfigField("String", "LOVEHOUSE_FIREBASE_PROJECT_ID", quotedBuildConfig(firebaseProjectId.get()))
+        buildConfigField("String", "LOVEHOUSE_FIREBASE_SENDER_ID", quotedBuildConfig(firebaseSenderId.get()))
     }
 
     buildTypes {
@@ -84,6 +100,8 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)

@@ -48,9 +48,20 @@ internal interface AppAccountSessionStore {
     fun clear()
 }
 
+interface AppAccountPushLifecycle {
+    suspend fun onAuthenticated(cookieHeader: String)
+    suspend fun beforeLogout(cookieHeader: String)
+}
+
+internal object NoOpAppAccountPushLifecycle : AppAccountPushLifecycle {
+    override suspend fun onAuthenticated(cookieHeader: String) = Unit
+    override suspend fun beforeLogout(cookieHeader: String) = Unit
+}
+
 class AndroidAppAccountRepository(
     context: Context,
     baseUrl: String,
+    private val pushLifecycle: AppAccountPushLifecycle = NoOpAppAccountPushLifecycle,
 ) : AppAccountRepository {
     private val store: AppAccountSessionStore = EncryptedAppAccountSessionStore(context.applicationContext)
     private val api: AppAccountApi = HttpAppAccountApi(baseUrl)
@@ -79,6 +90,7 @@ class AndroidAppAccountRepository(
                     val refreshed = current.copy(email = email)
                     store.save(refreshed)
                     mutableState.value = AppAccountState.SignedIn(email)
+                    runCatching { pushLifecycle.onAuthenticated(refreshed.cookieHeader) }
                 }
             }
             .onFailure { mutableState.value = AppAccountState.Error(it.userMessage(), current.email) }
@@ -93,6 +105,7 @@ class AndroidAppAccountRepository(
             mutableState.value = AppAccountState.SignedOut
             return
         }
+        runCatching { pushLifecycle.beforeLogout(current.cookieHeader) }
         runCatching { api.logout(current.cookieHeader) }
             .onSuccess {
                 store.clear()
@@ -115,6 +128,7 @@ class AndroidAppAccountRepository(
                 val session = StoredAppSession(response.email ?: normalizedEmail, response.cookieHeader)
                 store.save(session)
                 mutableState.value = AppAccountState.SignedIn(session.email)
+                runCatching { pushLifecycle.onAuthenticated(session.cookieHeader) }
             }
             .onFailure { mutableState.value = AppAccountState.Error(it.userMessage()) }
     }
@@ -216,7 +230,7 @@ private class HttpAppAccountApi(private val baseUrl: String) : AppAccountApi {
     }
 }
 
-private class EncryptedAppAccountSessionStore(context: Context) : AppAccountSessionStore {
+internal class EncryptedAppAccountSessionStore(context: Context) : AppAccountSessionStore {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
     override fun load(): StoredAppSession? {

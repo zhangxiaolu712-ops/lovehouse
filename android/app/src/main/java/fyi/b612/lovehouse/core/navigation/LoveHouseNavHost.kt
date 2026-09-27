@@ -89,6 +89,9 @@ private fun LoveHouseContent(
         runCatching { chatStore.refreshPersonaProfiles() }
     }
     LaunchedEffect(dependencies.serverEvents) { dependencies.serverEvents.refresh() }
+    LaunchedEffect(dependencies.remoteEventPush) {
+        runCatching { dependencies.remoteEventPush.refreshRegistration() }
+    }
     DisposableEffect(lifecycleOwner, dependencies.serverEvents) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) {
@@ -202,11 +205,18 @@ private fun LoveHouseContent(
 
         composable(
             route = AppDestination.EventDetail.route,
-            arguments = listOf(navArgument("eventId") { type = NavType.StringType }),
-            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.EventDetail.deepLink }),
+            arguments = listOf(
+                navArgument("eventId") { type = NavType.StringType },
+                navArgument("openTarget") { type = NavType.BoolType; defaultValue = false },
+            ),
+            deepLinks = listOf(
+                navDeepLink { uriPattern = AppDestination.EventDetail.deepLink },
+                navDeepLink { uriPattern = "lovehouse://event/{eventId}?open_target={openTarget}" },
+            ),
         ) { entry ->
             ServerEventDetailScreen(
                 eventId = entry.arguments?.getString("eventId").orEmpty(),
+                autoOpenTarget = entry.arguments?.getBoolean("openTarget") ?: false,
                 repository = dependencies.serverEvents,
                 onOpenThread = { canonicalThreadId ->
                     eventChatRoute(
