@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -69,6 +69,7 @@ async function startHarness(t, {
   toolCenterService = null,
   mediaService = null,
   chatExecutionCoordinator = null,
+  appIdentityVerifier = null,
 } = {}) {
   const app = express()
   app.use(express.json())
@@ -93,6 +94,7 @@ async function startHarness(t, {
     toolCenterService,
     mediaService,
     chatExecutionCoordinator,
+    appIdentityVerifier,
   })
   const server = http.createServer(app)
   server.listen(0, '127.0.0.1')
@@ -526,6 +528,132 @@ test('Claude and Codex use the same recoverable execution ownership contract', a
     assert.equal(parseSse(await response.text()).at(-1).data.ok, true)
   }
   assert.deepEqual(calls, ['claude', 'codex'])
+})
+
+test('recoverable Chat pins verified App Account identity without leaking the session', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-app-identity-execution-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const filePath = path.join(directory, 'executions.json')
+  const store = new FileChatExecutionStore({ filePath })
+  const logs = []
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({
+    store,
+    log: { info: (...values) => logs.push(values), warn: (...values) => logs.push(values) },
+  })
+  const credentials = [
+    'lovehouse_app_session=fake-session-secret-a',
+    'lovehouse_app_session=fake-session-secret-b',
+  ]
+  const verificationCookies = []
+  const adapterCalls = []
+  const appIdentityVerifier = {
+    async verifySession(cookie) {
+      verificationCookies.push(cookie)
+      return { id: 'stable-app-account-id', email: 'owner@example.com' }
+    },
+  }
+  const adapters = {
+    claude: fakeAdapter('claude', { async chat(input) {
+      adapterCalls.push(input)
+      input.onText('identity-safe reply')
+      return { usage: null }
+    } }),
+    codex: fakeAdapter('codex'),
+  }
+  const base = await startHarness(t, { adapters, chatExecutionCoordinator, appIdentityVerifier })
+  const executionIds = [
+    '99999999-9999-4999-8999-999999999998',
+    '99999999-9999-4999-8999-999999999999',
+  ]
+  for (const [index, executionId] of executionIds.entries()) {
+    const body = chatBody({
+      execution_id: executionId,
+      app_account_id: 'forged-client-account',
+      persona_runtime: {
+        persona_id: 'stable-persona', persona_version: 1,
+        instructions: 'safe instructions', background: 'safe background',
+        connection_ids: [], runtime_grant: null, reanchor_intent: false,
+      },
+    })
+    const response = await fetch(`${base}/v1/chat`, {
+      method: 'POST', headers: { ...authHeaders(), Cookie: credentials[index] }, body: JSON.stringify(body),
+    })
+    assert.equal(response.status, 200)
+    assert.equal(parseSse(await response.text()).at(-1).data.ok, true)
+  }
+  assert.deepEqual(verificationCookies, credentials)
+  const records = await Promise.all(executionIds.map(executionId =>
+    store.get({ ownerUserId: OWNER_ID, executionId })))
+  assert.deepEqual(records.map(record => record.app_account_id), [
+    'stable-app-account-id', 'stable-app-account-id',
+  ])
+  assert.equal(records[0].input_fingerprint, records[1].input_fingerprint)
+  assert.equal(JSON.stringify(adapterCalls).includes('fake-session-secret'), false)
+  assert.equal(JSON.stringify(adapterCalls).includes('forged-client-account'), false)
+  assert.equal(JSON.stringify(logs).includes('fake-session-secret'), false)
+  const persisted = await readFile(filePath, 'utf8')
+  assert.equal(persisted.includes('fake-session-secret'), false)
+  assert.equal(persisted.includes('forged-client-account'), false)
+})
+
+test('invalid unavailable and timed-out identity verification never blocks recoverable Chat', async t => {
+  const outcomes = [
+    { name: 'invalid', verifySession: async () => null },
+    { name: 'unavailable', verifySession: async () => { throw new Error('unavailable') } },
+    { name: 'timeout', verifySession: async () => { throw Object.assign(new Error('timeout'), { code: 'APP_IDENTITY_TIMEOUT' }) } },
+  ]
+  for (const [index, outcome] of outcomes.entries()) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), `lovehouse-identity-${outcome.name}-`))
+    t.after(() => rm(directory, { recursive: true, force: true }))
+    const store = new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') })
+    const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {} })
+    const base = await startHarness(t, { chatExecutionCoordinator, appIdentityVerifier: outcome })
+    const executionId = `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${index}`
+    const response = await fetch(`${base}/v1/chat`, {
+      method: 'POST', headers: { ...authHeaders(), Cookie: 'lovehouse_app_session=fake-session-secret' },
+      body: JSON.stringify(chatBody({ execution_id: executionId })),
+    })
+    assert.equal(response.status, 200)
+    assert.equal(parseSse(await response.text()).at(-1).data.ok, true)
+    assert.equal((await store.get({ ownerUserId: OWNER_ID, executionId })).app_account_id, undefined)
+  }
+})
+
+test('conflicting verified account never overwrites owner or reruns Provider', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-identity-conflict-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') })
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {} })
+  let account = 'account-a'
+  let providerCalls = 0
+  const adapters = {
+    claude: fakeAdapter('claude', { async chat(input) {
+      providerCalls += 1
+      input.onText('one reply')
+      return { usage: null }
+    } }),
+    codex: fakeAdapter('codex'),
+  }
+  const base = await startHarness(t, {
+    adapters,
+    chatExecutionCoordinator,
+    appIdentityVerifier: { verifySession: async () => ({ id: account, email: `${account}@example.com` }) },
+  })
+  const executionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const request = () => fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { ...authHeaders(), Cookie: 'lovehouse_app_session=fake-session-secret' },
+    body: JSON.stringify(chatBody({ execution_id: executionId })),
+  })
+  const first = await request()
+  assert.equal(first.status, 200)
+  assert.equal(parseSse(await first.text()).at(-1).data.ok, true)
+  account = 'account-b'
+  const conflict = await request()
+  assert.equal(conflict.status, 200)
+  const events = parseSse(await conflict.text())
+  assert.equal(events.find(event => event.event === 'error').data.error.code, 'EXECUTION_APP_ACCOUNT_CONFLICT')
+  assert.equal(providerCalls, 1)
+  assert.equal((await store.get({ ownerUserId: OWNER_ID, executionId })).app_account_id, 'account-a')
 })
 
 test('runtime deployment identity comes from the actual release path only', () => {

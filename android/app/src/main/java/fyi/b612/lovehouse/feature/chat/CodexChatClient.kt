@@ -144,6 +144,7 @@ interface CodexChatClient {
 class HttpCodexChatClient(
     private val endpoint: String = BuildConfig.LOVEHOUSE_CHAT_URL,
     private val allowedToolIdsFor: (String, String) -> Set<String> = { _, _ -> emptySet() },
+    private val appAccountSessionCookie: () -> String? = { null },
 ) : CodexChatClient {
     override val supportsExecutionRecovery: Boolean = true
     override suspend fun streamMessage(
@@ -249,6 +250,7 @@ class HttpCodexChatClient(
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "text/event-stream")
+            chatIdentityCookie(appAccountSessionCookie(), executionId)?.let { setRequestProperty("Cookie", it) }
         }
         val allowedToolIds = if (config.toolCenterEnabled) {
             allowedToolIdsFor(config.personaId, config.threadId)
@@ -375,6 +377,9 @@ class HttpCodexChatClient(
         else -> jsonString(body, "message") ?: "连接失败（HTTP $status）"
     }
 }
+
+internal fun chatIdentityCookie(sessionCookie: String?, executionId: String?): String? =
+    sessionCookie?.takeIf { executionId != null && it.isNotBlank() }
 
 private fun toolTitle(name: String): String = when {
     name.contains("engineering", ignoreCase = true) -> "读取 Engineering"

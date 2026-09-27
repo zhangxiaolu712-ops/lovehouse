@@ -12,6 +12,7 @@ import fyi.b612.lovehouse.feature.chat.LocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.LocalChatRole
 import fyi.b612.lovehouse.feature.chat.buildChatPayload
 import fyi.b612.lovehouse.feature.chat.ClaudeRuntime
+import fyi.b612.lovehouse.feature.chat.chatIdentityCookie
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -53,6 +54,24 @@ class ChatExecutionRecoveryTest {
 
         assertFalse(legacy.contains("execution_id"))
         assertTrue(recoverable.contains("\"execution_id\":\"11111111-1111-4111-8111-111111111111\""))
+    }
+
+    @Test
+    fun `App Account session is a recoverable transport header and never Chat payload data`() {
+        val credential = "lovehouse_app_session=fake-session-secret"
+        val executionId = "11111111-1111-4111-8111-111111111111"
+        val payload = buildChatPayload(
+            ClaudeRuntime,
+            "hello",
+            emptySet(),
+            executionId = executionId,
+        )
+
+        assertEquals(credential, chatIdentityCookie(credential, executionId))
+        assertEquals(null, chatIdentityCookie(credential, null))
+        assertEquals(null, chatIdentityCookie(null, executionId))
+        assertFalse(payload.contains(credential))
+        assertFalse(payload.contains("app_account_id"))
     }
 
     @Test

@@ -556,6 +556,7 @@ installClientApi(app, {
   toolCenterService,
   mediaService: r2MediaService,
   chatExecutionCoordinator,
+  appIdentityVerifier,
 })
 
 app.get('/livingroom', verifyLivingroom, async (req, res) => {

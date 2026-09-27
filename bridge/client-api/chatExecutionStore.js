@@ -28,6 +28,15 @@ function validateIdentity({ ownerUserId, executionId }) {
   }
 }
 
+function validateAppAccountId(appAccountId) {
+  if (appAccountId == null) return
+  if (typeof appAccountId !== 'string' || !appAccountId || appAccountId.length > 128) {
+    throw new ClientApiError('CHAT_EXECUTION_APP_ACCOUNT_INVALID', 'Verified App Account identity is invalid', {
+      stage: 'identity', status: 500,
+    })
+  }
+}
+
 function validateState(state) {
   if (!state || state.version !== 1 || typeof state.records !== 'object' || Array.isArray(state.records)) {
     throw new Error('unsupported chat execution file shape')
@@ -124,6 +133,7 @@ export class FileChatExecutionStore {
 
   async reserve(record) {
     validateIdentity(record)
+    validateAppAccountId(record.appAccountId)
     await this.#ready
     const operation = this.#queue.then(async () => {
       const state = await this.#read()
@@ -137,6 +147,13 @@ export class FileChatExecutionStore {
             stage: 'validation', status: 409,
           })
         }
+        if (current.app_account_id && record.appAccountId && current.app_account_id !== record.appAccountId) {
+          throw new ClientApiError(
+            'EXECUTION_APP_ACCOUNT_CONFLICT',
+            'execution_id is already bound to another App Account',
+            { stage: 'identity', status: 409 },
+          )
+        }
         return { created: false, record: clone(current) }
       }
       const timestamp = new Date(this.now()).toISOString()
@@ -149,6 +166,7 @@ export class FileChatExecutionStore {
         created_at: timestamp,
         updated_at: timestamp,
       }
+      if (record.appAccountId) value.app_account_id = record.appAccountId
       state.records[key] = value
       await this.#write(state)
       return { created: true, record: clone(value) }
@@ -230,8 +248,10 @@ export class ChatExecutionCoordinator {
     return `${ownerUserId}\0${executionId}`
   }
 
-  async observeOrStart({ ownerUserId, executionId, threadId, provider, inputFingerprint, execute, onEvent }) {
-    const reserved = await this.store.reserve({ ownerUserId, executionId, threadId, provider, inputFingerprint })
+  async observeOrStart({ ownerUserId, appAccountId, executionId, threadId, provider, inputFingerprint, execute, onEvent }) {
+    const reserved = await this.store.reserve({
+      ownerUserId, appAccountId, executionId, threadId, provider, inputFingerprint,
+    })
     const key = this.#key(ownerUserId, executionId)
     let active = this.active.get(key)
     if (!reserved.created && !active) {

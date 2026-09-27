@@ -76,6 +76,7 @@ private fun LoveHouseContent(
         ChatSessionStore(
             codexClient = HttpCodexChatClient(
                 allowedToolIdsFor = dependencies.effectiveTools::cachedAllowedToolIds,
+                appAccountSessionCookie = dependencies.appAccountSessionCookie,
             ),
             messageRepository = dependencies.chatMessages,
             conversationPersonas = dependencies.conversationPersonas,

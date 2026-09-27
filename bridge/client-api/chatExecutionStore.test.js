@@ -84,3 +84,40 @@ test('detaching the observer does not cancel execution and duplicate execution i
   assert.equal(providerCalls, 1)
   assert.equal((await store.get({ ownerUserId: OWNER, executionId: EXECUTION })).status, 'completed')
 })
+
+test('verified App Account identity is fixed at first reserve without changing execution fingerprint', async t => {
+  const { filePath, store } = await fixture(t)
+  const identity = {
+    ownerUserId: OWNER,
+    executionId: '77777777-7777-4777-8777-777777777777',
+    threadId: THREAD,
+    provider: 'claude',
+    inputFingerprint: chatExecutionFingerprint({ message: 'same logical request' }),
+  }
+  await store.reserve({ ...identity, appAccountId: 'account-a' })
+  const repeated = await store.reserve(identity)
+  assert.equal(repeated.created, false)
+  assert.equal(repeated.record.app_account_id, 'account-a')
+  await assert.rejects(
+    store.reserve({ ...identity, appAccountId: 'account-b' }),
+    error => error.code === 'EXECUTION_APP_ACCOUNT_CONFLICT' && error.status === 409,
+  )
+  const persisted = await readFile(filePath, 'utf8')
+  assert.equal(persisted.includes('account-a'), true)
+  assert.equal(persisted.includes('fake-session-secret'), false)
+})
+
+test('execution created without verified identity never backfills owner on reconnect', async t => {
+  const { store } = await fixture(t)
+  const identity = {
+    ownerUserId: OWNER,
+    executionId: '88888888-8888-4888-8888-888888888888',
+    threadId: THREAD,
+    provider: 'codex',
+    inputFingerprint: chatExecutionFingerprint({ message: 'same logical request' }),
+  }
+  await store.reserve(identity)
+  const repeated = await store.reserve({ ...identity, appAccountId: 'account-a' })
+  assert.equal(repeated.created, false)
+  assert.equal(repeated.record.app_account_id, undefined)
+})

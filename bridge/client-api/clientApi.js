@@ -35,6 +35,7 @@ export const CLIENT_STREAM_EVENTS = Object.freeze([
 const ADAPTER_STREAM_EVENTS = new Set(CLIENT_STREAM_EVENTS.filter(event => ![
   'message_start', 'text_delta', 'error', 'message_end',
 ].includes(event)))
+const APP_SESSION_COOKIE = 'lovehouse_app_session'
 export const CLIENT_MESSAGE_TYPES = Object.freeze([
   'text',
   'audio',
@@ -367,6 +368,14 @@ function executionFingerprint(normalized) {
   })
 }
 
+function appSessionCookieHeader(req) {
+  for (const candidate of String(req.headers.cookie || '').split(';')) {
+    const [name, ...parts] = candidate.trim().split('=')
+    if (name === APP_SESSION_COOKIE && parts.length > 0) return `${name}=${parts.join('=')}`
+  }
+  return null
+}
+
 function emitSse(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 }
@@ -401,6 +410,7 @@ export function installClientApi(app, {
   toolCenterService = null,
   mediaService = null,
   chatExecutionCoordinator = null,
+  appIdentityVerifier = null,
 }) {
   if (!app || typeof app.use !== 'function') throw new TypeError('Client API requires an Express app')
   if (typeof verifyOwner !== 'function') throw new TypeError('Client API requires Owner auth middleware')
@@ -421,6 +431,9 @@ export function installClientApi(app, {
   }
   if (toolCenterService && typeof toolCenterService.capabilities !== 'function') {
     throw new TypeError('Client API Tool Center service is invalid')
+  }
+  if (appIdentityVerifier && typeof appIdentityVerifier.verifySession !== 'function') {
+    throw new TypeError('Client API App Identity verifier is invalid')
   }
 
   app.use('/v1', requestContext)
@@ -745,6 +758,15 @@ export function installClientApi(app, {
         thread_id: normalized.threadId,
         persona_id: resolved.persona.id,
       }
+      let appAccountId = null
+      const sessionCookie = appSessionCookieHeader(req)
+      if (sessionCookie && appIdentityVerifier) {
+        try {
+          appAccountId = (await appIdentityVerifier.verifySession(sessionCookie))?.id || null
+        } catch {
+          // Identity enrichment is best-effort and must never become a Chat dependency.
+        }
+      }
       let ended = false
       let sawText = false
       res.status(200)
@@ -764,6 +786,7 @@ export function installClientApi(app, {
       try {
         const observed = await chatExecutionCoordinator.observeOrStart({
           ownerUserId: req.userId,
+          appAccountId,
           executionId: normalized.executionId,
           threadId: normalized.threadId,
           provider: resolved.persona.id,
