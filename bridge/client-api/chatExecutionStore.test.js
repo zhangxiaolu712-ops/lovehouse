@@ -121,3 +121,123 @@ test('execution created without verified identity never backfills owner on recon
   assert.equal(repeated.created, false)
   assert.equal(repeated.record.app_account_id, undefined)
 })
+
+test('authoritative completion produces one owner-scoped attention event without exposing reply content', async t => {
+  const { store } = await fixture(t)
+  const deliveries = []
+  const producer = {
+    async produce(value) {
+      deliveries.push(value)
+      return { id: 'event-1' }
+    },
+  }
+  const coordinator = new ChatExecutionCoordinator({ store, replyCompletedProducer: producer, log: {} })
+  const input = {
+    ownerUserId: OWNER,
+    appAccountId: 'account-a',
+    executionId: '99999999-9999-4999-8999-999999999999',
+    threadId: THREAD,
+    provider: 'claude',
+    inputFingerprint: chatExecutionFingerprint({ turn: 2 }),
+    async execute() {
+      return { text: 'private assistant reply', hidden: 'private provider payload' }
+    },
+  }
+  const first = await coordinator.observeOrStart(input)
+  await first.finished
+  const duplicate = await coordinator.observeOrStart(input)
+  await duplicate.finished
+
+  assert.deepEqual(deliveries, [{
+    appAccountId: 'account-a',
+    executionId: input.executionId,
+    threadId: THREAD,
+  }])
+  assert.equal(JSON.stringify(deliveries).includes('private assistant reply'), false)
+  assert.equal(JSON.stringify(deliveries).includes('private provider payload'), false)
+})
+
+test('ownerless completion skips event production', async t => {
+  const { store } = await fixture(t)
+  let deliveries = 0
+  const coordinator = new ChatExecutionCoordinator({
+    store,
+    replyCompletedProducer: { async produce() { deliveries += 1 } },
+    log: {},
+  })
+  const observed = await coordinator.observeOrStart({
+    ownerUserId: OWNER,
+    executionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    threadId: THREAD,
+    provider: 'codex',
+    inputFingerprint: chatExecutionFingerprint({ turn: 3 }),
+    async execute() { return { text: 'done' } },
+  })
+  await observed.finished
+  assert.equal(deliveries, 0)
+})
+
+test('producer delivery failure cannot change completed Chat or rerun Provider', async t => {
+  const { store } = await fixture(t)
+  const warnings = []
+  let providerCalls = 0
+  let producerCalls = 0
+  const coordinator = new ChatExecutionCoordinator({
+    store,
+    replyCompletedProducer: {
+      async produce() {
+        producerCalls += 1
+        throw Object.assign(new Error('backend unavailable'), { code: 'REPLY_COMPLETED_DELIVERY_FAILED' })
+      },
+    },
+    log: { info() {}, warn(_label, payload) { warnings.push(payload) } },
+  })
+  const input = {
+    ownerUserId: OWNER,
+    appAccountId: 'account-a',
+    executionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    threadId: THREAD,
+    provider: 'codex',
+    inputFingerprint: chatExecutionFingerprint({ turn: 4 }),
+    async execute() {
+      providerCalls += 1
+      return { text: 'canonical Chat result' }
+    },
+  }
+  const first = await coordinator.observeOrStart(input)
+  const completed = await first.finished
+  const duplicate = await coordinator.observeOrStart(input)
+  await duplicate.finished
+
+  assert.equal(completed.status, 'completed')
+  assert.equal(completed.result.text, 'canonical Chat result')
+  assert.equal((await store.get({ ownerUserId: OWNER, executionId: input.executionId })).status, 'completed')
+  assert.equal(providerCalls, 1)
+  assert.equal(producerCalls, 1)
+  assert.equal(warnings.some(value => value.includes('delivery_failed')), true)
+  assert.equal(warnings.some(value => value.includes('canonical Chat result')), false)
+})
+
+test('failed Provider execution never produces reply-completed', async t => {
+  const { store } = await fixture(t)
+  let deliveries = 0
+  const coordinator = new ChatExecutionCoordinator({
+    store,
+    replyCompletedProducer: { async produce() { deliveries += 1 } },
+    log: {},
+  })
+  const input = {
+    ownerUserId: OWNER,
+    appAccountId: 'account-a',
+    executionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    threadId: THREAD,
+    provider: 'claude',
+    inputFingerprint: chatExecutionFingerprint({ turn: 5 }),
+    async execute() { throw Object.assign(new Error('provider failed'), { code: 'PROVIDER_FAILED' }) },
+  }
+  const observed = await coordinator.observeOrStart(input)
+  const failed = await observed.finished
+
+  assert.equal(failed.status, 'failed')
+  assert.equal(deliveries, 0)
+})

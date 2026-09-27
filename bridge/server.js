@@ -9,6 +9,7 @@ import {
 import { createFileOAuthClientRegistry } from './oauthClientRegistry.js'
 import { createFileRefreshTokenStore } from './oauthRefreshStore.js'
 import { createAppIdentityVerifier } from './appIdentityVerifier.js'
+import { createReplyCompletedEventProducer } from './serverEventProducer.js'
 import {
   sendMessage as claudeSend,
   abortWindow,
@@ -129,10 +130,19 @@ const APP_IDENTITY_VERIFY_URL = process.env.APP_IDENTITY_VERIFY_URL || ''
 const APP_IDENTITY_INTERNAL_KEY_FILE = process.env.APP_IDENTITY_INTERNAL_KEY_FILE || ''
 const CHAT_EXECUTION_STORE_PATH = process.env.CHAT_EXECUTION_STORE_PATH
   || '/root/lovehouse-bridge-state/chat-executions.json'
+const APP_IDENTITY_INTERNAL_KEY = APP_IDENTITY_INTERNAL_KEY_FILE
+  ? fs.readFileSync(APP_IDENTITY_INTERNAL_KEY_FILE, 'utf8').trim()
+  : ''
 const appIdentityVerifier = APP_IDENTITY_VERIFY_URL && APP_IDENTITY_INTERNAL_KEY_FILE
   ? createAppIdentityVerifier({
       endpoint: APP_IDENTITY_VERIFY_URL,
-      internalKey: fs.readFileSync(APP_IDENTITY_INTERNAL_KEY_FILE, 'utf8').trim(),
+      internalKey: APP_IDENTITY_INTERNAL_KEY,
+    })
+  : null
+const replyCompletedEventProducer = APP_IDENTITY_VERIFY_URL && APP_IDENTITY_INTERNAL_KEY
+  ? createReplyCompletedEventProducer({
+      identityEndpoint: APP_IDENTITY_VERIFY_URL,
+      internalKey: APP_IDENTITY_INTERNAL_KEY,
     })
   : null
 const CODEX_CHAT_INTERNAL_URL = process.env.CODEX_CHAT_INTERNAL_URL
@@ -458,6 +468,7 @@ const toolCenterService = new ToolCenterService({
 const verifyClientOwner = createClientOwnerAuth({ verifyOwnerToken, checkRate })
 const chatExecutionCoordinator = new ChatExecutionCoordinator({
   store: new FileChatExecutionStore({ filePath: CHAT_EXECUTION_STORE_PATH }),
+  replyCompletedProducer: replyCompletedEventProducer,
 })
 
 app.post('/chat', verifyOwnerBearer, (req, res) => {

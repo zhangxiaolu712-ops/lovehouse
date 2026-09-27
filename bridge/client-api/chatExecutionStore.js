@@ -237,9 +237,13 @@ export class FileChatExecutionStore {
 }
 
 export class ChatExecutionCoordinator {
-  constructor({ store, log = console } = {}) {
+  constructor({ store, replyCompletedProducer = null, log = console } = {}) {
     if (!store) throw new TypeError('Chat execution coordinator requires a store')
+    if (replyCompletedProducer && typeof replyCompletedProducer.produce !== 'function') {
+      throw new TypeError('Chat execution coordinator reply-completed producer is invalid')
+    }
     this.store = store
+    this.replyCompletedProducer = replyCompletedProducer
     this.log = log
     this.active = new Map()
   }
@@ -282,6 +286,7 @@ export class ChatExecutionCoordinator {
       const record = await this.store.complete({ ownerUserId, executionId }, result)
       emit({ type: 'terminal', record })
       this.log.info?.('[chat-execution]', JSON.stringify({ execution_id: executionId, thread_id: threadId, provider, status: 'completed' }))
+      await this.#deliverReplyCompleted(record)
       return record
     } catch (error) {
       const record = await this.store.fail({ ownerUserId, executionId }, error)
@@ -294,6 +299,30 @@ export class ChatExecutionCoordinator {
     } finally {
       this.active.delete(key)
       active.listeners.clear()
+    }
+  }
+
+  async #deliverReplyCompleted(record) {
+    if (!record.app_account_id || !this.replyCompletedProducer) return
+    try {
+      const event = await this.replyCompletedProducer.produce({
+        appAccountId: record.app_account_id,
+        executionId: record.execution_id,
+        threadId: record.thread_id,
+      })
+      this.log.info?.('[chat-event-producer]', JSON.stringify({
+        execution_id: record.execution_id,
+        thread_id: record.thread_id,
+        event_id: event.id || null,
+        status: 'delivered',
+      }))
+    } catch (error) {
+      this.log.warn?.('[chat-event-producer]', JSON.stringify({
+        execution_id: record.execution_id,
+        thread_id: record.thread_id,
+        status: 'delivery_failed',
+        error_code: error?.code || 'REPLY_COMPLETED_DELIVERY_FAILED',
+      }))
     }
   }
 }
