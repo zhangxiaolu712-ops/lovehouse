@@ -48,6 +48,7 @@ import fyi.b612.lovehouse.feature.settings.ToolCenterLabScreen
 import fyi.b612.lovehouse.feature.settings.McpOAuthResultScreen
 import fyi.b612.lovehouse.feature.shell.NavGlyph
 import fyi.b612.lovehouse.feature.shell.PlaceholderScreen
+import fyi.b612.lovehouse.feature.events.NotificationEventTargetResolver
 import fyi.b612.lovehouse.feature.events.ServerEventDetailScreen
 import fyi.b612.lovehouse.feature.events.ServerEventsScreen
 import kotlinx.coroutines.launch
@@ -214,22 +215,47 @@ private fun LoveHouseContent(
                 navDeepLink { uriPattern = "lovehouse://event/{eventId}?open_target={openTarget}" },
             ),
         ) { entry ->
-            ServerEventDetailScreen(
-                eventId = entry.arguments?.getString("eventId").orEmpty(),
-                autoOpenTarget = entry.arguments?.getBoolean("openTarget") ?: false,
-                repository = dependencies.serverEvents,
-                onOpenThread = { canonicalThreadId ->
-                    eventChatRoute(
-                        canonicalThreadId = canonicalThreadId,
-                        resolveLocalThreadId = chatStore::localThreadIdForCanonicalThread,
-                        encodeRouteSegment = Uri::encode,
-                    )?.let { route ->
-                        navController.navigate(route)
-                        true
-                    } ?: false
-                },
-                onBack = { navController.popBackStack() },
-            )
+            val eventId = entry.arguments?.getString("eventId").orEmpty()
+            val openTarget = entry.arguments?.getBoolean("openTarget") ?: false
+            if (openTarget) {
+                NotificationEventTargetResolver(
+                    eventId = eventId,
+                    repository = dependencies.serverEvents,
+                    resolveLocalThreadId = chatStore::localThreadIdForCanonicalThread,
+                    rehydrateThread = { localThreadId, canonicalThreadId ->
+                        chatStore.recoverPendingExecutionsOnce()
+                        chatStore.rehydrateThreadFromPersistence(localThreadId, canonicalThreadId)
+                    },
+                    onOpenChat = { localThreadId ->
+                        navController.navigate("chat/thread/${Uri.encode(localThreadId)}") {
+                            popUpTo(navController.graph.findStartDestination().id)
+                            launchSingleTop = true
+                        }
+                    },
+                    onFallback = {
+                        navController.navigate("events/${Uri.encode(eventId)}") {
+                            popUpTo(navController.graph.findStartDestination().id)
+                            launchSingleTop = true
+                        }
+                    },
+                )
+            } else {
+                ServerEventDetailScreen(
+                    eventId = eventId,
+                    repository = dependencies.serverEvents,
+                    onOpenThread = { canonicalThreadId ->
+                        eventChatRoute(
+                            canonicalThreadId = canonicalThreadId,
+                            resolveLocalThreadId = chatStore::localThreadIdForCanonicalThread,
+                            encodeRouteSegment = Uri::encode,
+                        )?.let { route ->
+                            navController.navigate(route)
+                            true
+                        } ?: false
+                    },
+                    onBack = { navController.popBackStack() },
+                )
+            }
         }
 
         composable(

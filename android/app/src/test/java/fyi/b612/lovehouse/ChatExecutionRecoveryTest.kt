@@ -181,6 +181,58 @@ class ChatExecutionRecoveryTest {
     }
 
     @Test
+    fun `current thread rehydrate replaces stale memory from SQLite without duplicating reply`() = runBlocking {
+        val executionId = "44444444-4444-4444-8444-444444444444"
+        val canonicalThreadId = fyi.b612.lovehouse.feature.chat.stableCodexThreadId()
+        val localThreadId = "agent-codex"
+        val userId = "user:$executionId"
+        val assistantId = "assistant:$executionId"
+        val repository = ExecutionRepository(
+            LocalChatMessage(
+                localMessageId = userId,
+                threadId = canonicalThreadId,
+                role = LocalChatRole.User,
+                sender = "owner",
+                content = "long request",
+                createdAtEpochMillis = 10L,
+                status = LocalChatDeliveryStatus.Sent,
+            ),
+            LocalChatExecution(
+                executionId = executionId,
+                localThreadId = localThreadId,
+                provider = "codex",
+                canonicalThreadId = canonicalThreadId,
+                userMessageId = userId,
+                assistantMessageId = assistantId,
+                status = LocalChatExecutionStatus.Completed,
+                createdAtEpochMillis = 10L,
+                updatedAtEpochMillis = 20L,
+            ),
+        )
+        val store = ChatSessionStore(messageRepository = repository)
+        repository.upsert(
+            LocalChatMessage(
+                localMessageId = assistantId,
+                threadId = canonicalThreadId,
+                role = LocalChatRole.Assistant,
+                sender = "codex",
+                content = "persisted final answer",
+                createdAtEpochMillis = 10L,
+                receivedAtEpochMillis = 20L,
+                status = LocalChatDeliveryStatus.Sent,
+            ),
+        )
+
+        assertFalse(store.messages(localThreadId).any { it.messageId == assistantId })
+        assertTrue(store.rehydrateThreadFromPersistence(localThreadId, canonicalThreadId))
+        assertTrue(store.rehydrateThreadFromPersistence(localThreadId, canonicalThreadId))
+
+        val visible = store.messages(localThreadId)
+        assertEquals(1, visible.count { it.messageId == assistantId })
+        assertEquals("persisted final answer", visible.single { it.messageId == assistantId }.body)
+    }
+
+    @Test
     fun `provider failure is recovered as failed without resending the turn`() = runBlocking {
         val executionId = "22222222-2222-4222-8222-222222222222"
         val execution = LocalChatExecution(

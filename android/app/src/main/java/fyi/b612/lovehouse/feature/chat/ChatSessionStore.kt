@@ -137,6 +137,34 @@ class ChatSessionStore(
         }.getOrNull() ?: return null
         return localThreadId.takeIf { thread(it) != null }
     }
+
+    suspend fun rehydrateThreadFromPersistence(
+        localThreadId: String,
+        canonicalThreadId: String,
+    ): Boolean {
+        if (thread(localThreadId) == null) return false
+        val persisted = withContext(Dispatchers.IO) {
+            messageRepository.messages(canonicalThreadId)
+        }.map(::persistedMessageUi)
+        val target = messages(localThreadId)
+        val currentById = target.associateBy(ChatMessageUi::messageId)
+        val persistedIds = persisted.mapTo(linkedSetOf(), ChatMessageUi::messageId)
+        val hydrated = persisted.map { message ->
+            currentById[message.messageId]?.let { current ->
+                message.copy(
+                    processEvents = current.processEvents,
+                    deliveryError = current.deliveryError,
+                )
+            } ?: message
+        }
+        val transient = target.filterNot { it.messageId in persistedIds }
+        target.clear()
+        target.addAll(hydrated + transient)
+        hydrated.lastOrNull()?.let { latest ->
+            updateThread(localThreadId) { it.copy(preview = latest.body, updatedAt = latest.time) }
+        }
+        return true
+    }
     fun persona(threadId: String): ChatPersona? = thread(threadId)?.personaId?.let { personaId ->
         personas.firstOrNull { it.personaId == personaId }
     }

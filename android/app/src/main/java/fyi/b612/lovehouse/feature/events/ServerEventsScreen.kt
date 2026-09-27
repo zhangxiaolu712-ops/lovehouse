@@ -175,6 +175,58 @@ fun ServerEventDetailScreen(
     }
 }
 
+internal sealed interface NotificationEventTargetResolution {
+    data class Chat(
+        val canonicalThreadId: String,
+        val localThreadId: String,
+    ) : NotificationEventTargetResolution
+
+    data object Fallback : NotificationEventTargetResolution
+}
+
+internal suspend fun resolveNotificationEventTarget(
+    eventId: String,
+    repository: ServerEventRepository,
+    resolveLocalThreadId: (String) -> String?,
+    rehydrateThread: suspend (localThreadId: String, canonicalThreadId: String) -> Boolean,
+): NotificationEventTargetResolution {
+    val event = (repository.get(eventId) as? ServerEventLoadResult.Found)?.event
+        ?: return NotificationEventTargetResolution.Fallback
+    if (event.kind != ServerEventKind.ReplyCompleted || event.threadId == null) {
+        return NotificationEventTargetResolution.Fallback
+    }
+    val localThreadId = resolveLocalThreadId(event.threadId)
+        ?: return NotificationEventTargetResolution.Fallback
+    if (!rehydrateThread(localThreadId, event.threadId)) {
+        return NotificationEventTargetResolution.Fallback
+    }
+    return NotificationEventTargetResolution.Chat(event.threadId, localThreadId)
+}
+
+@Composable
+internal fun NotificationEventTargetResolver(
+    eventId: String,
+    repository: ServerEventRepository,
+    resolveLocalThreadId: (String) -> String?,
+    rehydrateThread: suspend (localThreadId: String, canonicalThreadId: String) -> Boolean,
+    onOpenChat: (String) -> Unit,
+    onFallback: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LaunchedEffect(eventId, repository) {
+        when (val target = resolveNotificationEventTarget(
+            eventId = eventId,
+            repository = repository,
+            resolveLocalThreadId = resolveLocalThreadId,
+            rehydrateThread = rehydrateThread,
+        )) {
+            is NotificationEventTargetResolution.Chat -> onOpenChat(target.localThreadId)
+            NotificationEventTargetResolution.Fallback -> onFallback()
+        }
+    }
+    Box(modifier.fillMaxSize())
+}
+
 @Composable
 private fun EventDecisionPanel(
     event: ServerEvent,
