@@ -14,13 +14,17 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import fyi.b612.lovehouse.BuildConfig
 import fyi.b612.lovehouse.MainActivity
 import fyi.b612.lovehouse.R
+import fyi.b612.lovehouse.feature.settings.EncryptedAppAccountSessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 class LoveHouseFirebaseMessagingService : FirebaseMessagingService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -33,13 +37,37 @@ class LoveHouseFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val target = pushNotificationTarget(message.data) ?: return
-        showEventNotification(this, target)
+        val authoritative = runBlocking(Dispatchers.IO) {
+            withTimeoutOrNull(AUTHORITATIVE_FETCH_TIMEOUT_MS) {
+                when (val result = createNotificationEventRepository(applicationContext).get(target.eventId)) {
+                    is ServerEventLoadResult.Found -> result.event
+                    else -> null
+                }
+            }
+        }
+        if (authoritative != null) {
+            ServerEventPresentationState.notifyEventArrival()
+            if (shouldSuppressReplyCompletedNotification(authoritative, ServerEventPresentationState.state.value)) {
+                return
+            }
+        }
+        val displayTarget = authoritative?.let { PushNotificationTarget(it.id, it.kind.wireValue) } ?: target
+        showEventNotification(this, displayTarget)
     }
 
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
     }
+}
+
+internal fun createNotificationEventRepository(context: Context): ServerEventRepository {
+    val sessionStore = EncryptedAppAccountSessionStore(context.applicationContext)
+    return AndroidServerEventRepository(
+        baseUrl = BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
+        sessionCookie = { sessionStore.load()?.cookieHeader },
+        onAuthenticationRequired = {},
+    )
 }
 
 internal data class PushNotificationTarget(val eventId: String, val kind: String)
@@ -88,3 +116,4 @@ private fun showEventNotification(context: Context, target: PushNotificationTarg
 }
 
 private const val CHANNEL_ID = "lovehouse_events"
+private const val AUTHORITATIVE_FETCH_TIMEOUT_MS = 8_000L

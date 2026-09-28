@@ -91,7 +91,7 @@ class RemoteEventPushContractTest {
         assertTrue(navigation.contains("NotificationEventTargetResolver"))
         assertTrue(navigation.contains("rehydrateThreadFromPersistence"))
         assertTrue(events.contains("repository.get(eventId)"))
-        assertTrue(events.contains("event.kind != ServerEventKind.ReplyCompleted"))
+        assertTrue(events.contains("event.kind == ServerEventKind.ConfirmationRequired"))
     }
 
     @Test

@@ -135,6 +135,10 @@ import fyi.b612.lovehouse.feature.settings.ToolAvailability
 import fyi.b612.lovehouse.feature.settings.ToolCapability
 import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
 import fyi.b612.lovehouse.feature.settings.EffectiveToolSet
+import fyi.b612.lovehouse.feature.events.ChatConfirmationCard
+import fyi.b612.lovehouse.feature.events.ServerEventPresentationState
+import fyi.b612.lovehouse.feature.events.ServerEventRepository
+import fyi.b612.lovehouse.feature.events.pendingConfirmationForThread
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -349,6 +353,7 @@ fun ChatShellScreen(
     mediaAttachments: MediaAttachmentClient,
     chatConnections: ChatConnectionStore,
     chatConnectionProbe: ChatConnectionProbe,
+    serverEvents: ServerEventRepository,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -402,6 +407,19 @@ fun ChatShellScreen(
         isClaudeRuntime -> ClaudeRuntime
         isCodexRuntime -> CodexRuntime
         else -> null
+    }
+    val canonicalThreadId = runtimeConfig?.threadId
+    val eventFeed by serverEvents.feed.collectAsState()
+    val eventPresentation by ServerEventPresentationState.state.collectAsState()
+    val pendingConfirmation = pendingConfirmationForThread(eventFeed, canonicalThreadId)
+    DisposableEffect(canonicalThreadId) {
+        canonicalThreadId?.let(ServerEventPresentationState::setVisibleCanonicalThread)
+        onDispose {
+            canonicalThreadId?.let(ServerEventPresentationState::clearVisibleCanonicalThread)
+        }
+    }
+    LaunchedEffect(canonicalThreadId, eventPresentation.arrivalRevision) {
+        if (canonicalThreadId != null) serverEvents.refresh()
     }
     val baseCapabilityState by baseCapabilities.state.collectAsState()
     val unavailableComposerActions = composerUnavailableActions(
@@ -708,6 +726,13 @@ fun ChatShellScreen(
                         Text("↓  新消息", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = PersonaInk, fontSize = 9.sp)
                     }
                 }
+            }
+            pendingConfirmation?.let { event ->
+                ChatConfirmationCard(
+                    event = event,
+                    repository = serverEvents,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                )
             }
             actionNotice?.let { Text(it, Modifier.align(Alignment.CenterHorizontally).padding(vertical = 2.dp), color = PersonaMuted, fontSize = 8.sp) }
             if (selectedMessages.isNotEmpty()) MultiSelectBar(selectedMessages.size, onCancel = { selectedMessages = emptySet() }) {

@@ -181,6 +181,8 @@ internal sealed interface NotificationEventTargetResolution {
         val localThreadId: String,
     ) : NotificationEventTargetResolution
 
+    data class Confirmation(val eventId: String) : NotificationEventTargetResolution
+
     data object Fallback : NotificationEventTargetResolution
 }
 
@@ -192,6 +194,9 @@ internal suspend fun resolveNotificationEventTarget(
 ): NotificationEventTargetResolution {
     val event = (repository.get(eventId) as? ServerEventLoadResult.Found)?.event
         ?: return NotificationEventTargetResolution.Fallback
+    if (event.kind == ServerEventKind.ConfirmationRequired) {
+        return NotificationEventTargetResolution.Confirmation(event.id)
+    }
     if (event.kind != ServerEventKind.ReplyCompleted || event.threadId == null) {
         return NotificationEventTargetResolution.Fallback
     }
@@ -210,6 +215,7 @@ internal fun NotificationEventTargetResolver(
     resolveLocalThreadId: (String) -> String?,
     rehydrateThread: suspend (localThreadId: String, canonicalThreadId: String) -> Boolean,
     onOpenChat: (String) -> Unit,
+    onOpenConfirmation: (String) -> Unit,
     onFallback: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -221,10 +227,86 @@ internal fun NotificationEventTargetResolver(
             rehydrateThread = rehydrateThread,
         )) {
             is NotificationEventTargetResolution.Chat -> onOpenChat(target.localThreadId)
+            is NotificationEventTargetResolution.Confirmation -> onOpenConfirmation(target.eventId)
             NotificationEventTargetResolution.Fallback -> onFallback()
         }
     }
     Box(modifier.fillMaxSize())
+}
+
+@Composable
+fun ChatConfirmationCard(
+    event: ServerEvent,
+    repository: ServerEventRepository,
+    modifier: Modifier = Modifier,
+) {
+    var current by remember(event.id) { mutableStateOf(event) }
+    var feedback by remember(event.id) { mutableStateOf<String?>(null) }
+    var deciding by remember(event.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    EventGlassPanel(modifier) {
+        Text(current.safeSummary, color = LoveHouseGlass.Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        current.expiresAt?.let { Text("有效期至 $it", color = LoveHouseGlass.MutedInk, fontSize = 9.sp) }
+        if (current.canDecide) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        deciding = true
+                        scope.launch {
+                            feedback = applyChatConfirmationDecision(repository, current.id, ServerEventDecision.Denied) {
+                                current = it
+                            }
+                            deciding = false
+                        }
+                    },
+                    enabled = !deciding,
+                    modifier = Modifier.weight(1f),
+                ) { Text("拒绝") }
+                Button(
+                    onClick = {
+                        deciding = true
+                        scope.launch {
+                            feedback = applyChatConfirmationDecision(repository, current.id, ServerEventDecision.Approved) {
+                                current = it
+                            }
+                            deciding = false
+                        }
+                    },
+                    enabled = !deciding,
+                    modifier = Modifier.weight(1f),
+                ) { Text("允许") }
+            }
+        } else {
+            Text(current.statusLabel(), color = LoveHouseGlass.MutedInk, fontSize = 10.sp)
+        }
+        feedback?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 9.sp) }
+        Text("服务器决定为最终依据；本卡片不直接执行工具。", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
+    }
+}
+
+internal suspend fun applyChatConfirmationDecision(
+    repository: ServerEventRepository,
+    eventId: String,
+    decision: ServerEventDecision,
+    update: (ServerEvent) -> Unit = {},
+): String = when (val result = repository.decide(eventId, decision)) {
+    is ServerEventDecisionResult.Recorded -> {
+        update(result.event)
+        if (result.event.status == "approved") "已允许，决定已记录" else "已拒绝，决定已记录"
+    }
+    is ServerEventDecisionResult.ServerState -> {
+        update(result.event)
+        when (result.event.status) {
+            "expired" -> "该确认已过期"
+            "approved" -> "服务器已记录为允许"
+            "denied" -> "服务器已记录为拒绝"
+            else -> "服务器状态已刷新"
+        }
+    }
+    ServerEventDecisionResult.AuthenticationRequired -> "请先登录 LoveHouse App Account"
+    ServerEventDecisionResult.NotFound -> "该确认已不可用"
+    is ServerEventDecisionResult.Error -> result.message
 }
 
 @Composable

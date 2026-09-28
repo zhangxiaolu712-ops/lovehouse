@@ -49,6 +49,7 @@ import fyi.b612.lovehouse.feature.settings.McpOAuthResultScreen
 import fyi.b612.lovehouse.feature.shell.NavGlyph
 import fyi.b612.lovehouse.feature.shell.PlaceholderScreen
 import fyi.b612.lovehouse.feature.events.NotificationEventTargetResolver
+import fyi.b612.lovehouse.feature.events.ServerEventPresentationState
 import fyi.b612.lovehouse.feature.events.ServerEventDetailScreen
 import fyi.b612.lovehouse.feature.events.ServerEventsScreen
 import kotlinx.coroutines.launch
@@ -94,13 +95,24 @@ private fun LoveHouseContent(
         runCatching { dependencies.remoteEventPush.refreshRegistration() }
     }
     DisposableEffect(lifecycleOwner, dependencies.serverEvents) {
+        ServerEventPresentationState.setAppForeground(
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED),
+        )
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) {
-                applicationScope.launch { dependencies.serverEvents.refresh() }
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    ServerEventPresentationState.setAppForeground(true)
+                    applicationScope.launch { dependencies.serverEvents.refresh() }
+                }
+                Lifecycle.Event.ON_STOP -> ServerEventPresentationState.setAppForeground(false)
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            ServerEventPresentationState.setAppForeground(false)
+        }
     }
     NavHost(
         navController = navController,
@@ -143,6 +155,7 @@ private fun LoveHouseContent(
                 mediaAttachments = dependencies.mediaAttachments,
                 chatConnections = dependencies.chatConnections,
                 chatConnectionProbe = dependencies.chatConnectionProbe,
+                serverEvents = dependencies.serverEvents,
                 onBack = { navController.popBackStack() },
             )
         }
@@ -228,6 +241,12 @@ private fun LoveHouseContent(
                     },
                     onOpenChat = { localThreadId ->
                         navController.navigate("chat/thread/${Uri.encode(localThreadId)}") {
+                            popUpTo(navController.graph.findStartDestination().id)
+                            launchSingleTop = true
+                        }
+                    },
+                    onOpenConfirmation = { confirmationEventId ->
+                        navController.navigate("events/${Uri.encode(confirmationEventId)}") {
                             popUpTo(navController.graph.findStartDestination().id)
                             launchSingleTop = true
                         }

@@ -421,7 +421,12 @@ class ChatSessionStore(
             updateThread(localThreadId) { it.copy(preview = previewBody, updatedAt = "刚刚") }
             val selectedPersonaId = thread(localThreadId)?.personaId ?: runtime.personaId
             val pending = conversationPersonas.reanchorPending(localThreadId)
-            val snapshot = personaRuntimeSource.resolve(selectedPersonaId, requestedToolIds, pending)
+            val snapshot = personaRuntimeSource.resolveForThread(
+                selectedPersonaId,
+                requestedToolIds,
+                pending,
+                canonicalThreadId,
+            )
             val needsReanchor = pending || (snapshot != null &&
                 conversationPersonas.materializedPersonaVersion(localThreadId) != snapshot.personaVersion)
             val turnSnapshot = snapshot?.let {

@@ -71,6 +71,12 @@ fun Throwable.personaRuntimeMessage(): String = when ((this as? PersonaRuntimeEx
 
 interface PersonaRuntimeSource {
     suspend fun resolve(personaId: String, requestedToolIds: Set<String>, reanchorIntent: Boolean): PersonaRuntimeSnapshot?
+    suspend fun resolveForThread(
+        personaId: String,
+        requestedToolIds: Set<String>,
+        reanchorIntent: Boolean,
+        canonicalThreadId: String,
+    ): PersonaRuntimeSnapshot? = resolve(personaId, requestedToolIds, reanchorIntent)
     suspend fun profiles(): List<PersonaProfile> = emptyList()
     suspend fun profile(personaId: String): PersonaProfile? = null
     suspend fun materialize(profile: PersonaProfile): PersonaProfile = profile(profile.personaId) ?: save(profile)
@@ -119,6 +125,13 @@ class AppBackendPersonaRuntimeSource(
         personaId: String,
         requestedToolIds: Set<String>,
         reanchorIntent: Boolean,
+    ): PersonaRuntimeSnapshot? = resolveForThread(personaId, requestedToolIds, reanchorIntent, "")
+
+    override suspend fun resolveForThread(
+        personaId: String,
+        requestedToolIds: Set<String>,
+        reanchorIntent: Boolean,
+        canonicalThreadId: String,
     ): PersonaRuntimeSnapshot? = withContext(Dispatchers.IO) {
         if (sessionCookie() == null) throw PersonaRuntimeException(
             PersonaRuntimeFailure.Authentication,
@@ -138,8 +151,10 @@ class AppBackendPersonaRuntimeSource(
             error("所选 MCP Connection 已不属于当前 Persona 或已停用")
         }
         val grant = if (connectionIds.isNotEmpty()) {
-            request("POST", "${baseUrl.trimEnd('/')}/api/personas/$encodedId/runtime-grant",
-                JSONObject().toString())
+            val grantRequest = JSONObject().apply {
+                canonicalThreadId.takeIf(String::isNotBlank)?.let { put("thread_id", it) }
+            }
+            request("POST", "${baseUrl.trimEnd('/')}/api/personas/$encodedId/runtime-grant", grantRequest.toString())
                 ?: error("Persona 工具授权不可用")
         } else null
         if (grant != null) {
