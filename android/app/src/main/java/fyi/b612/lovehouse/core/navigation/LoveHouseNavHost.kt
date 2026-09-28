@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,6 +50,8 @@ import fyi.b612.lovehouse.feature.settings.McpOAuthResultScreen
 import fyi.b612.lovehouse.feature.shell.NavGlyph
 import fyi.b612.lovehouse.feature.shell.PlaceholderScreen
 import fyi.b612.lovehouse.feature.events.NotificationEventTargetResolver
+import fyi.b612.lovehouse.feature.events.NotificationIntentHandoff
+import fyi.b612.lovehouse.feature.events.notificationEventTargetRoute
 import fyi.b612.lovehouse.feature.events.ServerEventPresentationState
 import fyi.b612.lovehouse.feature.events.ServerEventDetailScreen
 import fyi.b612.lovehouse.feature.events.ServerEventsScreen
@@ -85,6 +88,14 @@ private fun LoveHouseContent(
             personaRuntimeSource = dependencies.personaRuntimeSource,
             claudeWebHistoryImporter = dependencies.claudeWebHistoryImporter,
         )
+    }
+    val notificationIntentTarget by NotificationIntentHandoff.pending.collectAsState()
+    LaunchedEffect(notificationIntentTarget?.deliveryId) {
+        val target = notificationIntentTarget ?: return@LaunchedEffect
+        navController.navigate(notificationEventTargetRoute(target.eventId)) {
+            launchSingleTop = true
+        }
+        NotificationIntentHandoff.consume(target.deliveryId)
     }
     LaunchedEffect(chatStore) {
         chatStore.recoverPendingExecutions()
