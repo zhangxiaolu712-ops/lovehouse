@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 
 import { estimateTokens } from './contextBreakdown.js'
 import { ChatRuntimeError } from './errors.js'
@@ -25,6 +26,7 @@ const ENV_ALLOWLIST = Object.freeze([
   'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
   'SYSTEMROOT', 'COMSPEC', 'TMPDIR', 'TMP', 'TEMP',
 ])
+const CONTROLLED_MCP_DESCRIPTOR = Symbol('controlled-mcp-descriptor')
 
 function narrowRuntimeEnv(source) {
   const result = {}
@@ -76,12 +78,29 @@ function mcpConfigArgs(toolContext) {
   ]
 }
 
+function controlledMcpServerKey(connectionIds) {
+  const scope = [...new Set(connectionIds)].sort().join('\0')
+  return `lovehouse_runtime_${createHash('sha256').update(scope).digest('hex').slice(0, 16)}`
+}
+
+function controlledMcpDescriptor(url, personaRuntime) {
+  const connectionIds = personaRuntime?.connection_ids || []
+  if (!url || !connectionIds.length || !personaRuntime?.execution_ticket) return null
+  return Object.freeze({
+    [CONTROLLED_MCP_DESCRIPTOR]: true,
+    serverKey: controlledMcpServerKey(connectionIds),
+    url,
+  })
+}
+
 function controlledMcpArgs(context) {
-  if (!context) return []
+  if (!context?.[CONTROLLED_MCP_DESCRIPTOR]) return []
+  const prefix = `mcp_servers.${context.serverKey}`
   return [
     '-c', 'approval_policy="never"',
-    '-c', `mcp_servers.lovehouse_account.url=${JSON.stringify(context.url)}`,
-    '-c', 'mcp_servers.lovehouse_account.env_http_headers={"X-LoveHouse-Execution-Ticket"="LOVEHOUSE_EXECUTION_TICKET","X-LoveHouse-Trace-Id"="LOVEHOUSE_TRACE_ID","X-LoveHouse-Provider"="LOVEHOUSE_PROVIDER_ROUTE"}',
+    '-c', `${prefix}.url=${JSON.stringify(context.url)}`,
+    '-c', `${prefix}.env_http_headers={"X-LoveHouse-Execution-Ticket"="LOVEHOUSE_EXECUTION_TICKET","X-LoveHouse-Trace-Id"="LOVEHOUSE_TRACE_ID","X-LoveHouse-Provider"="LOVEHOUSE_PROVIDER_ROUTE"}`,
+    '-c', `${prefix}.default_tools_approval_mode="approve"`,
   ]
 }
 
@@ -470,7 +489,7 @@ export class CodexCliRuntimeAdapter {
         stage: 'tool', status: 503,
       })
     }
-    const controlledMcp = connectionIds.length ? { url: this.appBackendMcpUrl } : null
+    const controlledMcp = controlledMcpDescriptor(this.appBackendMcpUrl, personaRuntime)
     const personaInstructions = personaRuntime
       ? [personaRuntime.instructions, personaRuntime.background].filter(Boolean).join('\n\n') : ''
     emitRuntimeProvenance('attachment_materialization_started', safeTrace)

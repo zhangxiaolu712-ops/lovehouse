@@ -100,15 +100,112 @@ test('Codex consumes the same Persona snapshot through developer instructions an
   })
   await adapter.streamEvents({ message: 'read', personaRuntime: {
     persona_id: 'housemate', persona_version: 4, instructions: 'Use marker LANTERN.',
-    background: 'This is the housemate context.', connection_ids: ['connection-a'],
+    background: 'This is the housemate context.', connection_ids: ['connection-b', 'connection-a'],
     execution_ticket: 'scoped-ticket-for-test', reanchor_intent: false,
   } })
   const args = calls[0].args.join(' ')
-  assert.match(args, /mcp_servers\.lovehouse_account\.url="https:\/\/app\.b612\.fyi\/api\/mcp\/runtime"/)
+  const serverKey = calls[0].args
+    .find(value => /^mcp_servers\.lovehouse_runtime_[a-f0-9]{16}\.url=/.test(value))
+    ?.match(/^mcp_servers\.([^.]+)\./)?.[1]
+  assert.match(serverKey, /^lovehouse_runtime_[a-f0-9]{16}$/)
+  assert.ok(calls[0].args.includes(`mcp_servers.${serverKey}.url="https://app.b612.fyi/api/mcp/runtime"`))
+  assert.ok(calls[0].args.includes(`mcp_servers.${serverKey}.default_tools_approval_mode="approve"`))
+  assert.equal(args.includes('mcp_servers.lovehouse_account'), false)
   assert.equal(args.includes('enabled_tools'), false)
+  assert.ok(calls[0].args.includes('approval_policy="never"'))
+  assert.ok(calls[0].args.includes('read-only'))
+  assert.ok(calls[0].args.includes('--ignore-user-config'))
   assert.equal(args.includes('scoped-ticket-for-test'), false)
   assert.equal(calls[0].options.env.LOVEHOUSE_EXECUTION_TICKET, 'scoped-ticket-for-test')
   assert.ok(calls[0].args.includes('developer_instructions="Use marker LANTERN.\\n\\nThis is the housemate context."'))
+})
+
+test('controlled MCP server keys are stable per granted Connection set and do not authorize legacy MCP', async () => {
+  const calls = []
+  const adapter = new CodexCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://app.b612.fyi/api/mcp/runtime',
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'ok' } },
+      { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 1 } },
+    ], { calls }),
+  })
+  const run = connectionIds => adapter.streamEvents({
+    message: 'read',
+    personaRuntime: {
+      persona_id: 'housemate', persona_version: 4, instructions: '', background: '',
+      connection_ids: connectionIds, execution_ticket: 'scoped-ticket-for-test', reanchor_intent: false,
+    },
+  })
+
+  await run(['connection-a', 'connection-b'])
+  await run(['connection-b', 'connection-a'])
+  await run(['connection-c'])
+  const serverKey = call => call.args
+    .find(value => /^mcp_servers\.lovehouse_runtime_[a-f0-9]{16}\.url=/.test(value))
+    ?.match(/^mcp_servers\.([^.]+)\./)?.[1]
+  assert.equal(serverKey(calls[0]), serverKey(calls[1]))
+  assert.notEqual(serverKey(calls[0]), serverKey(calls[2]))
+  for (const call of calls) {
+    assert.ok(call.args.includes(`mcp_servers.${serverKey(call)}.default_tools_approval_mode="approve"`))
+  }
+
+  const legacyCalls = []
+  const legacyAdapter = new CodexCliRuntimeAdapter({
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'ok' } },
+      { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 1 } },
+    ], { calls: legacyCalls }),
+  })
+  await legacyAdapter.streamEvents({
+    message: 'read engineering',
+    threadId: '7c814f9a-7588-4e35-b4b6-a216f172c012',
+    authorization: 'Bearer owner-secret-value',
+    allowedToolIds: ['builtin.engineering.read_current'],
+  })
+  assert.equal(legacyCalls[0].args.some(value => value.includes('default_tools_approval_mode')), false)
+  assert.ok(legacyCalls[0].args.includes('approval_policy="never"'))
+
+  const forged = adapter.startOrResume({
+    controlledMcp: {
+      serverKey: 'arbitrary_server',
+      url: 'https://app.b612.fyi/api/mcp/runtime',
+    },
+  })
+  assert.equal(forged.args.some(value => value.startsWith('mcp_servers.')), false)
+  assert.equal(forged.args.some(value => value.includes('default_tools_approval_mode')), false)
+})
+
+test('controlled MCP is not injected without a complete Runtime Grant handoff', async () => {
+  const calls = []
+  const adapter = new CodexCliRuntimeAdapter({
+    appBackendMcpUrl: 'https://app.b612.fyi/api/mcp/runtime',
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'ok' } },
+      { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 1 } },
+    ], { calls }),
+  })
+  await assert.rejects(adapter.streamEvents({
+    message: 'read',
+    personaRuntime: {
+      persona_id: 'housemate', persona_version: 4, instructions: '', background: '',
+      connection_ids: ['connection-a'], reanchor_intent: false,
+    },
+  }), /Controlled MCP connection is unavailable/)
+  assert.equal(calls.length, 0)
+
+  await adapter.streamEvents({
+    message: 'plain chat',
+    personaRuntime: {
+      persona_id: 'housemate', persona_version: 4, instructions: '', background: '',
+      connection_ids: [], reanchor_intent: false,
+    },
+  })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].args.some(value => value.startsWith('mcp_servers.')), false)
+  assert.equal(calls[0].args.some(value => value.includes('default_tools_approval_mode')), false)
 })
 
 test('Codex refuses a controlled MCP ticket at an arbitrary endpoint', () => {
