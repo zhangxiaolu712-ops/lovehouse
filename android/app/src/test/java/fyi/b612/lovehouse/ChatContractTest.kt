@@ -40,6 +40,10 @@ import fyi.b612.lovehouse.feature.chat.resolveRequestedToolIds
 import fyi.b612.lovehouse.feature.chat.rejectionReason
 import fyi.b612.lovehouse.feature.chat.transitionVoiceComposer
 import fyi.b612.lovehouse.feature.chat.toolProcessEventId
+import fyi.b612.lovehouse.feature.chat.processTimelineHasOutgoingConnector
+import fyi.b612.lovehouse.feature.chat.processTimelineTitle
+import fyi.b612.lovehouse.feature.chat.processTimelineIsFailed
+import fyi.b612.lovehouse.feature.chat.toggleProcessTimelineExpansion
 import fyi.b612.lovehouse.feature.chat.STT_UNAVAILABLE_MESSAGE
 import fyi.b612.lovehouse.feature.chat.RemoteTaskMocks
 import fyi.b612.lovehouse.feature.settings.ToolAvailability
@@ -526,6 +530,33 @@ class ChatContractTest {
 
         assertEquals("最终回答", restored.body)
         assertEquals(timeline, restored.processEvents)
+    }
+
+    @Test
+    fun `timeline items default collapsed and expand independently`() {
+        val thinking = ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, "多行\n思考")
+        val tool = ChatProcessEvent("tool-call:one", ChatProcessKind.ToolResult, "调用 recall", ChatProcessStatus.Succeeded, "结果摘要")
+        var expanded = emptySet<String>()
+
+        assertTrue(expanded.isEmpty())
+        expanded = toggleProcessTimelineExpansion(expanded, thinking)
+        assertEquals(setOf("thinking"), expanded)
+        expanded = toggleProcessTimelineExpansion(expanded, tool)
+        assertEquals(setOf("thinking", "tool-call:one"), expanded)
+        expanded = toggleProcessTimelineExpansion(expanded, thinking)
+        assertEquals(setOf("tool-call:one"), expanded)
+        assertEquals("思考过程", processTimelineTitle(thinking))
+        assertEquals("调用 recall", processTimelineTitle(tool))
+    }
+
+    @Test
+    fun `timeline connector stops after final node and empty detail does not expand`() {
+        assertTrue(processTimelineHasOutgoingConnector(0, 2))
+        assertFalse(processTimelineHasOutgoingConnector(1, 2))
+        val noDetail = ChatProcessEvent("workflow", ChatProcessKind.WorkflowStatus, "执行过程", ChatProcessStatus.Running)
+        assertTrue(toggleProcessTimelineExpansion(emptySet(), noDetail).isEmpty())
+        assertFalse(processTimelineIsFailed(ChatProcessEvent("success", ChatProcessKind.ToolResult, "成功", ChatProcessStatus.Succeeded)))
+        assertTrue(processTimelineIsFailed(ChatProcessEvent("error", ChatProcessKind.ToolError, "失败", ChatProcessStatus.Failed)))
     }
 
     @Test

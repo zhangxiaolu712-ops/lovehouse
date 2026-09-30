@@ -88,6 +88,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.Dp
@@ -106,6 +107,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
@@ -1058,52 +1060,104 @@ private fun PersonaTopBar(thread: ChatThreadSummary, onBack: () -> Unit, onMore:
     }
 }
 
-@Composable private fun ProcessTimeline(events: List<ChatProcessEvent>) {
-    var expanded by remember { mutableStateOf(false) }
-    val thinking = events.any { it.kind == ChatProcessKind.Thinking || it.kind == ChatProcessKind.ReasoningStatus }
-    val running = events.any { it.status == ChatProcessStatus.Running }
-    val title = when {
-        thinking -> "思考过程"
-        events.any { it.kind == ChatProcessKind.ToolCall || it.kind == ChatProcessKind.ToolResult || it.kind == ChatProcessKind.ToolError } -> "工具调用"
-        else -> "执行过程"
-    }
+internal fun processTimelineTitle(event: ChatProcessEvent): String = when (event.kind) {
+    ChatProcessKind.Thinking -> "思考过程"
+    ChatProcessKind.ReasoningStatus -> "思考状态"
+    else -> event.title
+}
+
+internal fun processTimelineHasOutgoingConnector(index: Int, eventCount: Int): Boolean =
+    index >= 0 && index < eventCount - 1
+
+internal fun processTimelineIsFailed(event: ChatProcessEvent): Boolean =
+    event.status == ChatProcessStatus.Failed
+
+internal fun toggleProcessTimelineExpansion(
+    expandedEventIds: Set<String>,
+    event: ChatProcessEvent,
+): Set<String> {
+    if (event.detail.isNullOrBlank()) return expandedEventIds
+    return if (event.id in expandedEventIds) expandedEventIds - event.id else expandedEventIds + event.id
+}
+
+@Composable internal fun ProcessTimeline(events: List<ChatProcessEvent>) {
+    var expandedEventIds by remember { mutableStateOf(emptySet<String>()) }
     Column(
-        Modifier.padding(top = 5.dp, bottom = 4.dp).animateContentSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        Modifier.padding(top = 5.dp, bottom = 4.dp),
     ) {
-        Row(
-            Modifier.clip(RoundedCornerShape(8.dp)).clickable { expanded = !expanded }.padding(vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            LoveHouseIconView(
-                if (thinking) LoveHouseIcon.Thinking else LoveHouseIcon.Wrench,
-                null,
-                Modifier.size(if (thinking) 16.dp else 14.dp),
-                PersonaMuted,
-                LoveHouseIconOpticalSize.Compact,
-            )
-            Text(title, Modifier.padding(start = 7.dp), color = PersonaInk.copy(alpha = .78f), fontSize = 10.sp)
-            if (running) BreathingDots()
-            LoveHouseIconView(
-                if (expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
-                null,
-                Modifier.padding(start = 5.dp).size(11.dp),
-                PersonaMuted,
-                LoveHouseIconOpticalSize.Compact,
-            )
-        }
-        if (expanded) events.forEach { event ->
-            Row(Modifier.padding(start = 2.dp), verticalAlignment = Alignment.Top) {
+        events.forEachIndexed { index, event ->
+            val expanded = event.id in expandedEventIds
+            val hasDetail = !event.detail.isNullOrBlank()
+            val failed = processTimelineIsFailed(event)
+            val connectorColor = PersonaMuted.copy(alpha = .28f)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .animateContentSize()
+                    .drawBehind {
+                        val connectorX = 7.dp.toPx()
+                        val nodeCenterY = 7.dp.toPx()
+                        if (index > 0) {
+                            drawLine(
+                                color = connectorColor,
+                                start = androidx.compose.ui.geometry.Offset(connectorX, 0f),
+                                end = androidx.compose.ui.geometry.Offset(connectorX, nodeCenterY),
+                                strokeWidth = 1.dp.toPx(),
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                        if (processTimelineHasOutgoingConnector(index, events.size)) {
+                            drawLine(
+                                color = connectorColor,
+                                start = androidx.compose.ui.geometry.Offset(connectorX, nodeCenterY),
+                                end = androidx.compose.ui.geometry.Offset(connectorX, size.height),
+                                strokeWidth = 1.dp.toPx(),
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                    }
+                    .testTag("process-timeline-item:${event.id}")
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = hasDetail) {
+                        expandedEventIds = toggleProcessTimelineExpansion(expandedEventIds, event)
+                    }
+                    .padding(bottom = if (processTimelineHasOutgoingConnector(index, events.size)) 5.dp else 0.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
                 LoveHouseIconView(
                     if (event.kind == ChatProcessKind.Thinking || event.kind == ChatProcessKind.ReasoningStatus) LoveHouseIcon.Thinking else LoveHouseIcon.Wrench,
                     null,
-                    Modifier.padding(top = 1.dp).size(13.dp),
-                    if (event.status == ChatProcessStatus.Failed) MaterialTheme.colorScheme.error.copy(alpha = .74f) else PersonaMuted,
+                    Modifier.size(14.dp),
+                    if (failed) MaterialTheme.colorScheme.error.copy(alpha = .74f) else PersonaMuted,
                     LoveHouseIconOpticalSize.Compact,
                 )
                 Column(Modifier.padding(start = 7.dp).widthIn(max = 260.dp)) {
-                    Text(event.title, color = PersonaInk.copy(alpha = .76f), fontSize = 9.sp)
-                    event.detail?.let { detail -> Text(detail, Modifier.padding(top = 2.dp), color = PersonaMuted, fontSize = 8.5.sp, lineHeight = 12.sp) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(processTimelineTitle(event), color = PersonaInk.copy(alpha = .76f), fontSize = 9.sp)
+                        if (event.status == ChatProcessStatus.Running) BreathingDots()
+                        if (hasDetail) {
+                            LoveHouseIconView(
+                                if (expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
+                                null,
+                                Modifier.padding(start = 5.dp).size(11.dp),
+                                PersonaMuted,
+                                LoveHouseIconOpticalSize.Compact,
+                            )
+                        }
+                    }
+                    AnimatedVisibility(
+                        visible = expanded,
+                        enter = fadeIn(tween(120)) + expandVertically(),
+                        exit = fadeOut(tween(90)) + shrinkVertically(),
+                    ) {
+                        Text(
+                            event.detail.orEmpty(),
+                            Modifier.padding(top = 3.dp).testTag("process-timeline-detail:${event.id}"),
+                            color = PersonaMuted,
+                            fontSize = 8.5.sp,
+                            lineHeight = 12.sp,
+                        )
+                    }
                 }
             }
         }
