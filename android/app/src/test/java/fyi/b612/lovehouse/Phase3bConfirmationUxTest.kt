@@ -61,20 +61,73 @@ class Phase3bConfirmationUxTest {
     }
 
     @Test
-    fun `confirmation notification fetches Event and resolves directly to actionable target`() = runBlocking {
+    fun `confirmation notification maps authoritative thread to existing Chat`() = runBlocking {
         val event = confirmation("event-a", "canonical-a")
         val repository = RecordingRepository(event)
         var mappingCalls = 0
+        var rehydrated: Pair<String, String>? = null
 
         val result = resolveNotificationEventTarget(
             eventId = event.id,
             repository = repository,
-            resolveLocalThreadId = { mappingCalls += 1; null },
-            rehydrateThread = { _, _ -> error("confirmation must not rehydrate Chat") },
+            resolveLocalThreadId = { canonical ->
+                mappingCalls += 1
+                "local-a".takeIf { canonical == "canonical-a" }
+            },
+            rehydrateThread = { local, canonical ->
+                rehydrated = local to canonical
+                true
+            },
         )
 
         assertEquals(1, repository.getCalls)
-        assertEquals(0, mappingCalls)
+        assertEquals(1, mappingCalls)
+        assertEquals("local-a" to "canonical-a", rehydrated)
+        assertEquals(NotificationEventTargetResolution.Chat("canonical-a", "local-a"), result)
+    }
+
+    @Test
+    fun `confirmation without authoritative thread falls back to actionable Event detail`() = runBlocking {
+        val event = confirmation("event-a", null)
+        val repository = RecordingRepository(event)
+
+        val result = resolveNotificationEventTarget(
+            eventId = event.id,
+            repository = repository,
+            resolveLocalThreadId = { error("missing thread must not be mapped") },
+            rehydrateThread = { _, _ -> error("missing thread must not be rehydrated") },
+        )
+
+        assertEquals(NotificationEventTargetResolution.Confirmation(event.id), result)
+    }
+
+    @Test
+    fun `confirmation mapping failure falls back to actionable Event detail`() = runBlocking {
+        val event = confirmation("event-a", "canonical-a")
+        val repository = RecordingRepository(event)
+
+        val result = resolveNotificationEventTarget(
+            eventId = event.id,
+            repository = repository,
+            resolveLocalThreadId = { null },
+            rehydrateThread = { _, _ -> error("missing mapping must not be rehydrated") },
+        )
+
+        assertEquals(NotificationEventTargetResolution.Confirmation(event.id), result)
+    }
+
+    @Test
+    fun `confirmation rehydrate failure falls back to actionable Event detail`() = runBlocking {
+        val event = confirmation("event-a", "canonical-a")
+        val repository = RecordingRepository(event)
+
+        val result = resolveNotificationEventTarget(
+            eventId = event.id,
+            repository = repository,
+            resolveLocalThreadId = { "local-a" },
+            rehydrateThread = { _, _ -> false },
+        )
+
         assertEquals(NotificationEventTargetResolution.Confirmation(event.id), result)
     }
 
@@ -113,7 +166,7 @@ class Phase3bConfirmationUxTest {
         assertFalse(runtime.contains("thread_id\", personaId"))
     }
 
-    private fun confirmation(id: String, threadId: String) = ServerEvent(
+    private fun confirmation(id: String, threadId: String?) = ServerEvent(
         id = id,
         kind = ServerEventKind.ConfirmationRequired,
         rawKind = "confirmation_required",

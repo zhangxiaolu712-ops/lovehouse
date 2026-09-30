@@ -194,16 +194,18 @@ internal suspend fun resolveNotificationEventTarget(
 ): NotificationEventTargetResolution {
     val event = (repository.get(eventId) as? ServerEventLoadResult.Found)?.event
         ?: return NotificationEventTargetResolution.Fallback
-    if (event.kind == ServerEventKind.ConfirmationRequired) {
-        return NotificationEventTargetResolution.Confirmation(event.id)
+    val fallback = when (event.kind) {
+        ServerEventKind.ConfirmationRequired -> NotificationEventTargetResolution.Confirmation(event.id)
+        ServerEventKind.ReplyCompleted -> NotificationEventTargetResolution.Fallback
+        ServerEventKind.Unknown -> return NotificationEventTargetResolution.Fallback
     }
-    if (event.kind != ServerEventKind.ReplyCompleted || event.threadId == null) {
-        return NotificationEventTargetResolution.Fallback
+    if (event.threadId == null) {
+        return fallback
     }
     val localThreadId = resolveLocalThreadId(event.threadId)
-        ?: return NotificationEventTargetResolution.Fallback
+        ?: return fallback
     if (!rehydrateThread(localThreadId, event.threadId)) {
-        return NotificationEventTargetResolution.Fallback
+        return fallback
     }
     return NotificationEventTargetResolution.Chat(event.threadId, localThreadId)
 }
