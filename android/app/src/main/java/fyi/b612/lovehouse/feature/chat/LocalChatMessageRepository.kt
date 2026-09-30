@@ -38,12 +38,14 @@ data class LocalChatMessage(
     val runtime: String? = null,
     val adapterId: String? = null,
     val attachments: List<ChatAttachment> = emptyList(),
+    val processEvents: List<ChatProcessEvent> = emptyList(),
 )
 
 interface LocalChatMessageRepository {
     fun messages(threadId: String): List<LocalChatMessage>
     fun upsert(message: LocalChatMessage)
     fun upsert(messages: List<LocalChatMessage>) = messages.forEach(::upsert)
+    fun replaceProcessEvents(threadId: String, assistantMessageId: String, events: List<ChatProcessEvent>) = Unit
     fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? = null
     fun pendingExecutions(): List<LocalChatExecution> = emptyList()
     fun upsertExecution(execution: LocalChatExecution) = Unit
@@ -53,6 +55,7 @@ object NoOpLocalChatMessageRepository : LocalChatMessageRepository {
     override fun messages(threadId: String): List<LocalChatMessage> = emptyList()
     override fun upsert(message: LocalChatMessage) = Unit
     override fun upsert(messages: List<LocalChatMessage>) = Unit
+    override fun replaceProcessEvents(threadId: String, assistantMessageId: String, events: List<ChatProcessEvent>) = Unit
     override fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? = null
     override fun pendingExecutions(): List<LocalChatExecution> = emptyList()
     override fun upsertExecution(execution: LocalChatExecution) = Unit
@@ -67,40 +70,59 @@ class SQLiteLocalChatMessageRepository(
     internal fun close() = database.close()
 
     @Synchronized
-    override fun messages(threadId: String): List<LocalChatMessage> = buildList {
-        database.readableDatabase.query(
-            TABLE_MESSAGES,
-            MESSAGE_COLUMNS,
-            "thread_id = ?",
-            arrayOf(threadId),
-            null,
-            null,
-            "created_at_epoch_ms ASC, rowid ASC",
-        ).use { cursor ->
-            while (cursor.moveToNext()) {
-                val messageId = cursor.getString(cursor.getColumnIndexOrThrow("local_message_id"))
-                add(
-                    LocalChatMessage(
-                        localMessageId = messageId,
-                        threadId = cursor.getString(cursor.getColumnIndexOrThrow("thread_id")),
-                        role = LocalChatRole.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("role"))),
-                        sender = cursor.getString(cursor.getColumnIndexOrThrow("sender")),
-                        content = cursor.getString(cursor.getColumnIndexOrThrow("content")),
-                        createdAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("created_at_epoch_ms")),
-                        receivedAtEpochMillis = cursor.getColumnIndexOrThrow("received_at_epoch_ms").let { index ->
-                            if (cursor.isNull(index)) null else cursor.getLong(index)
-                        },
-                        status = LocalChatDeliveryStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status"))),
-                        runtime = cursor.getColumnIndexOrThrow("runtime").let { index ->
-                            if (cursor.isNull(index)) null else cursor.getString(index)
-                        },
-                        adapterId = cursor.getColumnIndexOrThrow("adapter_id").let { index ->
-                            if (cursor.isNull(index)) null else cursor.getString(index)
-                        },
-                        attachments = readAttachments(database.readableDatabase, messageId),
-                    ),
-                )
+    override fun messages(threadId: String): List<LocalChatMessage> {
+        val processEventsByMessage = readProcessEvents(database.readableDatabase, threadId)
+        return buildList {
+            database.readableDatabase.query(
+                TABLE_MESSAGES,
+                MESSAGE_COLUMNS,
+                "thread_id = ?",
+                arrayOf(threadId),
+                null,
+                null,
+                "created_at_epoch_ms ASC, rowid ASC",
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val messageId = cursor.getString(cursor.getColumnIndexOrThrow("local_message_id"))
+                    add(
+                        LocalChatMessage(
+                            localMessageId = messageId,
+                            threadId = cursor.getString(cursor.getColumnIndexOrThrow("thread_id")),
+                            role = LocalChatRole.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("role"))),
+                            sender = cursor.getString(cursor.getColumnIndexOrThrow("sender")),
+                            content = cursor.getString(cursor.getColumnIndexOrThrow("content")),
+                            createdAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("created_at_epoch_ms")),
+                            receivedAtEpochMillis = cursor.getColumnIndexOrThrow("received_at_epoch_ms").let { index ->
+                                if (cursor.isNull(index)) null else cursor.getLong(index)
+                            },
+                            status = LocalChatDeliveryStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status"))),
+                            runtime = cursor.getColumnIndexOrThrow("runtime").let { index ->
+                                if (cursor.isNull(index)) null else cursor.getString(index)
+                            },
+                            adapterId = cursor.getColumnIndexOrThrow("adapter_id").let { index ->
+                                if (cursor.isNull(index)) null else cursor.getString(index)
+                            },
+                            attachments = readAttachments(database.readableDatabase, messageId),
+                            processEvents = processEventsByMessage[messageId].orEmpty(),
+                        ),
+                    )
+                }
             }
+        }
+    }
+
+    @Synchronized
+    override fun replaceProcessEvents(
+        threadId: String,
+        assistantMessageId: String,
+        events: List<ChatProcessEvent>,
+    ) {
+        database.writableDatabase.beginTransaction()
+        try {
+            replaceProcessEvents(database.writableDatabase, threadId, assistantMessageId, events)
+            database.writableDatabase.setTransactionSuccessful()
+        } finally {
+            database.writableDatabase.endTransaction()
         }
     }
 
@@ -226,6 +248,62 @@ class SQLiteLocalChatMessageRepository(
         ).also { rowId -> check(rowId != -1L) { "Could not persist local chat message" } }
         db.delete(TABLE_ATTACHMENTS, "local_message_id = ?", arrayOf(message.localMessageId))
         message.attachments.forEachIndexed { index, attachment -> writeAttachment(db, message.localMessageId, index, attachment) }
+        if (message.processEvents.isNotEmpty()) {
+            replaceProcessEvents(db, message.threadId, message.localMessageId, message.processEvents)
+        }
+    }
+
+    private fun replaceProcessEvents(
+        db: SQLiteDatabase,
+        threadId: String,
+        assistantMessageId: String,
+        events: List<ChatProcessEvent>,
+    ) {
+        db.delete(TABLE_PROCESS_EVENTS, "thread_id = ? AND assistant_message_id = ?", arrayOf(threadId, assistantMessageId))
+        events.forEachIndexed { position, event ->
+            db.insertOrThrow(TABLE_PROCESS_EVENTS, null, ContentValues().apply {
+                put("thread_id", threadId)
+                put("assistant_message_id", assistantMessageId)
+                put("event_id", event.id)
+                put("position", position)
+                put("kind", event.kind.name)
+                put("title", event.title)
+                put("status", event.status.name)
+                event.detail?.let { put("detail", it) } ?: putNull("detail")
+            })
+        }
+    }
+
+    private fun readProcessEvents(db: SQLiteDatabase, threadId: String): Map<String, List<ChatProcessEvent>> {
+        val events = linkedMapOf<String, MutableList<ChatProcessEvent>>()
+        db.query(
+            TABLE_PROCESS_EVENTS,
+            PROCESS_EVENT_COLUMNS,
+            "thread_id = ?",
+            arrayOf(threadId),
+            null,
+            null,
+            "assistant_message_id ASC, position ASC",
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val kind = runCatching {
+                    ChatProcessKind.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("kind")))
+                }.getOrNull() ?: continue
+                val status = runCatching {
+                    ChatProcessStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status")))
+                }.getOrNull() ?: continue
+                val assistantMessageId = cursor.getString(cursor.getColumnIndexOrThrow("assistant_message_id"))
+                val detailIndex = cursor.getColumnIndexOrThrow("detail")
+                events.getOrPut(assistantMessageId, ::mutableListOf).add(ChatProcessEvent(
+                    id = cursor.getString(cursor.getColumnIndexOrThrow("event_id")),
+                    kind = kind,
+                    title = cursor.getString(cursor.getColumnIndexOrThrow("title")),
+                    status = status,
+                    detail = if (cursor.isNull(detailIndex)) null else cursor.getString(detailIndex),
+                ))
+            }
+        }
+        return events
     }
 
     private fun writeAttachment(db: SQLiteDatabase, messageId: String, position: Int, attachment: ChatAttachment) {
@@ -310,6 +388,7 @@ class SQLiteLocalChatMessageRepository(
             createMessagesTable(db)
             createAttachmentsTable(db)
             createExecutionsTable(db)
+            createProcessEventsTable(db)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -329,6 +408,10 @@ class SQLiteLocalChatMessageRepository(
             if (migratedVersion == 3 && newVersion >= 4) {
                 createExecutionsTable(db)
                 migratedVersion = 4
+            }
+            if (migratedVersion == 4 && newVersion >= 5) {
+                createProcessEventsTable(db)
+                migratedVersion = 5
             }
             if (migratedVersion != newVersion) {
                 error("A non-destructive chat history migration is required from version $oldVersion to $newVersion")
@@ -408,6 +491,25 @@ class SQLiteLocalChatMessageRepository(
             db.execSQL("CREATE INDEX IF NOT EXISTS chat_executions_status_idx ON $TABLE_EXECUTIONS(status, updated_at_epoch_ms)")
         }
 
+        private fun createProcessEventsTable(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_PROCESS_EVENTS (
+                    assistant_message_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    detail TEXT,
+                    PRIMARY KEY (assistant_message_id, event_id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS chat_process_events_thread_idx ON $TABLE_PROCESS_EVENTS(thread_id, assistant_message_id, position)")
+        }
+
         private fun migratePreviewAttachments(db: SQLiteDatabase) {
             db.execSQL("ALTER TABLE $TABLE_ATTACHMENTS RENAME TO chat_message_attachments_preview_v2")
             db.execSQL("DROP INDEX IF EXISTS chat_attachments_message_idx")
@@ -437,10 +539,11 @@ class SQLiteLocalChatMessageRepository(
 
     private companion object {
         const val DATABASE_NAME = "lovehouse_chat.db"
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
         const val TABLE_MESSAGES = "chat_messages"
         const val TABLE_ATTACHMENTS = "chat_message_attachments"
         const val TABLE_EXECUTIONS = "chat_executions"
+        const val TABLE_PROCESS_EVENTS = "chat_process_events"
         val MESSAGE_COLUMNS = arrayOf(
             "local_message_id",
             "thread_id",
@@ -457,6 +560,9 @@ class SQLiteLocalChatMessageRepository(
             "execution_id", "local_thread_id", "provider", "canonical_thread_id",
             "user_message_id", "assistant_message_id", "status", "last_error",
             "persona_version", "reanchor_intent", "created_at_epoch_ms", "updated_at_epoch_ms",
+        )
+        val PROCESS_EVENT_COLUMNS = arrayOf(
+            "assistant_message_id", "event_id", "position", "kind", "title", "status", "detail",
         )
     }
 }

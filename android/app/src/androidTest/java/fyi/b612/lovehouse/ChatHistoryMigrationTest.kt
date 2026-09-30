@@ -7,6 +7,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import fyi.b612.lovehouse.feature.chat.ChatAttachmentLifecycle
 import fyi.b612.lovehouse.feature.chat.ChatMediaAttachment
+import fyi.b612.lovehouse.feature.chat.ChatProcessEvent
+import fyi.b612.lovehouse.feature.chat.ChatProcessKind
+import fyi.b612.lovehouse.feature.chat.ChatProcessStatus
 import fyi.b612.lovehouse.feature.chat.LocalChatDeliveryStatus
 import fyi.b612.lovehouse.feature.chat.LocalChatExecution
 import fyi.b612.lovehouse.feature.chat.LocalChatExecutionStatus
@@ -103,6 +106,43 @@ class ChatHistoryMigrationTest {
         assertEquals("11111111-1111-4111-8111-111111111111", reopened.pendingExecutions().single().executionId)
         assertEquals("thread", reopened.localThreadIdForCanonicalThread("canonical-thread"))
         assertEquals(null, reopened.localThreadIdForCanonicalThread("missing-canonical-thread"))
+        assertTrue(reopened.messages("thread").all { it.processEvents.isEmpty() })
+        reopened.close()
+        context.deleteDatabase(databaseName)
+    }
+
+    @Test
+    fun processTimelinePersistsPerAssistantAcrossColdReopenWithoutDuplication() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val databaseName = "chat-process-timeline-${System.nanoTime()}.db"
+        context.deleteDatabase(databaseName)
+        val firstAssistantId = "assistant:execution-one"
+        val secondAssistantId = "assistant:execution-two"
+        val firstTimeline = listOf(
+            ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, "让我仔细想想"),
+            ChatProcessEvent("reasoning", ChatProcessKind.ReasoningStatus, "思考状态", ChatProcessStatus.Running, "正在核对"),
+            ChatProcessEvent("tool-call:pending", ChatProcessKind.ToolCall, "读取 LivingRoom", ChatProcessStatus.Running, "准备读取"),
+            ChatProcessEvent("tool-call:one", ChatProcessKind.ToolResult, "读取 LivingRoom", ChatProcessStatus.Succeeded, "读取完成"),
+            ChatProcessEvent("workflow", ChatProcessKind.WorkflowStatus, "执行状态", ChatProcessStatus.Running, "整理回答"),
+        )
+        val secondTimeline = listOf(
+            ChatProcessEvent("tool-call:two", ChatProcessKind.ToolError, "读取 LivingRoom", ChatProcessStatus.Failed, "已拒绝"),
+        )
+        val repository = SQLiteLocalChatMessageRepository(context, databaseName)
+        repository.replaceProcessEvents("thread", firstAssistantId, firstTimeline)
+        repository.replaceProcessEvents("thread", secondAssistantId, secondTimeline)
+        repository.upsert(listOf(
+            LocalChatMessage(firstAssistantId, "thread", LocalChatRole.Assistant, "claude", "first answer", 1L, status = LocalChatDeliveryStatus.Sent),
+            LocalChatMessage(secondAssistantId, "thread", LocalChatRole.Assistant, "codex", "second answer", 2L, status = LocalChatDeliveryStatus.Sent),
+        ))
+        repository.close()
+
+        val reopened = SQLiteLocalChatMessageRepository(context, databaseName)
+        val messages = reopened.messages("thread")
+        assertEquals(listOf(firstAssistantId, secondAssistantId), messages.map(LocalChatMessage::localMessageId))
+        assertEquals(firstTimeline, messages[0].processEvents)
+        assertEquals(secondTimeline, messages[1].processEvents)
+        assertEquals(1, messages[0].processEvents.count { it.id == "thinking" })
         reopened.close()
         context.deleteDatabase(databaseName)
     }

@@ -39,6 +39,7 @@ import fyi.b612.lovehouse.feature.chat.mergeThinkingText
 import fyi.b612.lovehouse.feature.chat.resolveRequestedToolIds
 import fyi.b612.lovehouse.feature.chat.rejectionReason
 import fyi.b612.lovehouse.feature.chat.transitionVoiceComposer
+import fyi.b612.lovehouse.feature.chat.toolProcessEventId
 import fyi.b612.lovehouse.feature.chat.STT_UNAVAILABLE_MESSAGE
 import fyi.b612.lovehouse.feature.chat.RemoteTaskMocks
 import fyi.b612.lovehouse.feature.settings.ToolAvailability
@@ -128,7 +129,7 @@ class ChatContractTest {
     }
 
     @Test
-    fun `claude preserves web thread runtime boundary and does not persist process events`() = runBlocking {
+    fun `claude preserves web thread runtime boundary and persists visible process events`() = runBlocking {
         val repository = DurableLocalMessages()
         var observedConfig: ChatRuntimeConfig? = null
         val client = object : fyi.b612.lovehouse.feature.chat.CodexChatClient {
@@ -165,6 +166,7 @@ class ChatContractTest {
         assertEquals(ClaudeRuntime, observedConfig)
         assertEquals(2, repository.messages(ClaudeRuntime.threadId).size)
         assertEquals("Claude reply", repository.messages(ClaudeRuntime.threadId).last().content)
+        assertEquals("safe summary", repository.messages(ClaudeRuntime.threadId).last().processEvents.single().detail)
         assertEquals(listOf(attachment), repository.messages(ClaudeRuntime.threadId).first().attachments)
     }
 
@@ -460,6 +462,70 @@ class ChatContractTest {
 
         assertEquals("第一轮", firstTurn)
         assertEquals("第二轮", secondTurn)
+    }
+
+    @Test
+    fun `same named tool calls use call id identity and remain distinct`() {
+        val firstId = toolProcessEventId("read_livingroom", "call-one")
+        val secondId = toolProcessEventId("read_livingroom", "call-two")
+        var events = emptyList<ChatProcessEvent>()
+        events = mergeProcessEvent(events, ChatProcessEvent(firstId, ChatProcessKind.ToolCall, "读取", ChatProcessStatus.Running))
+        events = mergeProcessEvent(events, ChatProcessEvent(secondId, ChatProcessKind.ToolCall, "读取", ChatProcessStatus.Running))
+        events = mergeProcessEvent(events, ChatProcessEvent(firstId, ChatProcessKind.ToolResult, "读取", ChatProcessStatus.Succeeded))
+
+        assertEquals(listOf("tool-call:call-one", "tool-call:call-two"), events.map(ChatProcessEvent::id))
+        assertEquals(listOf(ChatProcessStatus.Succeeded, ChatProcessStatus.Running), events.map(ChatProcessEvent::status))
+        assertEquals("tool:read_livingroom", toolProcessEventId("read_livingroom", null))
+    }
+
+    @Test
+    fun `visible process timeline never enters provider request payload`() {
+        val visibleOnly = "VISIBLE_THINKING_MUST_STAY_LOCAL"
+        val message = LocalChatMessage(
+            localMessageId = "assistant:execution",
+            threadId = ClaudeRuntime.threadId,
+            role = LocalChatRole.Assistant,
+            sender = "claude",
+            content = "final answer",
+            createdAtEpochMillis = 1L,
+            status = LocalChatDeliveryStatus.Sent,
+            processEvents = listOf(
+                ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, visibleOnly),
+            ),
+        )
+        val payload = buildChatPayload(ClaudeRuntime, "next user turn", emptySet())
+
+        assertEquals(visibleOnly, message.processEvents.single().detail)
+        assertFalse(payload.contains(visibleOnly))
+        assertFalse(payload.contains("processEvents"))
+        assertFalse(payload.contains("process_events"))
+        assertFalse(payload.contains("recent_history"))
+    }
+
+    @Test
+    fun `cold store reconstruction restores final answer and visible timeline from persistence`() {
+        val repository = DurableLocalMessages()
+        val timeline = listOf(
+            ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, "完整可见思考"),
+            ChatProcessEvent("reasoning", ChatProcessKind.ReasoningStatus, "思考状态", ChatProcessStatus.Running, "正在核对"),
+            ChatProcessEvent("tool-call:one", ChatProcessKind.ToolResult, "读取", ChatProcessStatus.Succeeded, "完成"),
+        )
+        repository.upsert(LocalChatMessage(
+            localMessageId = "assistant:cold",
+            threadId = ClaudeRuntime.threadId,
+            role = LocalChatRole.Assistant,
+            sender = "claude",
+            content = "最终回答",
+            createdAtEpochMillis = 1L,
+            status = LocalChatDeliveryStatus.Sent,
+            processEvents = timeline,
+        ))
+
+        val coldStore = ChatSessionStore(messageRepository = repository)
+        val restored = coldStore.messages(ClaudeRuntime.threadId).single { it.messageId == "assistant:cold" }
+
+        assertEquals("最终回答", restored.body)
+        assertEquals(timeline, restored.processEvents)
     }
 
     @Test

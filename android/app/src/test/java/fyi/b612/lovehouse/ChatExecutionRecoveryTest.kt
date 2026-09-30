@@ -3,6 +3,9 @@ package fyi.b612.lovehouse
 import fyi.b612.lovehouse.feature.chat.ChatExecutionRemoteSnapshot
 import fyi.b612.lovehouse.feature.chat.ChatExecutionRemoteStatus
 import fyi.b612.lovehouse.feature.chat.ChatSessionStore
+import fyi.b612.lovehouse.feature.chat.ChatProcessEvent
+import fyi.b612.lovehouse.feature.chat.ChatProcessKind
+import fyi.b612.lovehouse.feature.chat.ChatProcessStatus
 import fyi.b612.lovehouse.feature.chat.CodexChatClient
 import fyi.b612.lovehouse.feature.chat.LocalChatDeliveryStatus
 import fyi.b612.lovehouse.feature.chat.LocalChatExecution
@@ -26,12 +29,20 @@ class ChatExecutionRecoveryTest {
     ) : LocalChatMessageRepository {
         private val messages = linkedMapOf(message.localMessageId to message)
         private val executions = linkedMapOf(execution.executionId to execution)
+        private val timelines = linkedMapOf<String, List<ChatProcessEvent>>()
 
         override fun messages(threadId: String): List<LocalChatMessage> =
-            messages.values.filter { it.threadId == threadId }.sortedBy { it.createdAtEpochMillis }
+            messages.values.filter { it.threadId == threadId }
+                .sortedBy { it.createdAtEpochMillis }
+                .map { it.copy(processEvents = timelines[it.localMessageId] ?: it.processEvents) }
 
         override fun upsert(message: LocalChatMessage) {
             messages[message.localMessageId] = message
+            if (message.processEvents.isNotEmpty()) timelines[message.localMessageId] = message.processEvents
+        }
+
+        override fun replaceProcessEvents(threadId: String, assistantMessageId: String, events: List<ChatProcessEvent>) {
+            timelines[assistantMessageId] = events
         }
 
         override fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? =
@@ -169,6 +180,10 @@ class ChatExecutionRecoveryTest {
             )
         }
         val store = ChatSessionStore(codexClient = client, messageRepository = repository, now = { 20L })
+        val visibleTimeline = listOf(
+            ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, "visible reasoning"),
+        )
+        repository.replaceProcessEvents(ClaudeRuntime.threadId, assistantId, visibleTimeline)
 
         store.recoverPendingExecutionsOnce()
         store.recoverPendingExecutionsOnce()
@@ -176,6 +191,8 @@ class ChatExecutionRecoveryTest {
         val saved = repository.messages(ClaudeRuntime.threadId)
         assertEquals(1, saved.count { it.localMessageId == assistantId })
         assertEquals("final answer", saved.single { it.localMessageId == assistantId }.content)
+        assertEquals(visibleTimeline, saved.single { it.localMessageId == assistantId }.processEvents)
+        assertEquals(visibleTimeline, store.messages(ClaudeRuntime.threadId).single { it.messageId == assistantId }.processEvents)
         assertEquals(LocalChatDeliveryStatus.Sent, saved.single { it.localMessageId == userId }.status)
         assertTrue(repository.pendingExecutions().isEmpty())
     }

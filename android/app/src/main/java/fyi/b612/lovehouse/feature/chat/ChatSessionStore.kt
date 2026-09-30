@@ -152,7 +152,7 @@ class ChatSessionStore(
         val hydrated = persisted.map { message ->
             currentById[message.messageId]?.let { current ->
                 message.copy(
-                    processEvents = current.processEvents,
+                    processEvents = message.processEvents.ifEmpty { current.processEvents },
                     deliveryError = current.deliveryError,
                 )
             } ?: message
@@ -395,6 +395,7 @@ class ChatSessionStore(
             val updated = mergeProcessEvent(processEvents, event)
             processEvents.clear()
             processEvents.addAll(updated)
+            messageRepository.replaceProcessEvents(canonicalThreadId, assistantId, processEvents.toList())
             val current = messages(localThreadId).firstOrNull { it.messageId == assistantId }
             if (current != null) {
                 replaceMessage(localThreadId, assistantId, current.copy(processEvents = processEvents.toList()))
@@ -494,6 +495,7 @@ class ChatSessionStore(
                 status = LocalChatDeliveryStatus.Sent,
                 runtime = result.evidence.runtime.takeIf(String::isNotBlank),
                 adapterId = result.evidence.adapterId?.takeIf(String::isNotBlank),
+                processEvents = processEvents.toList(),
             )
             withContext(Dispatchers.IO) { messageRepository.upsert(listOf(user, assistant)) }
             withContext(Dispatchers.IO) {
@@ -540,6 +542,7 @@ class ChatSessionStore(
                     createdAtEpochMillis = createdAt,
                     receivedAtEpochMillis = now(),
                     status = LocalChatDeliveryStatus.Failed,
+                    processEvents = processEvents.toList(),
                 )
                 runCatching { withContext(Dispatchers.IO) { messageRepository.upsert(failedAssistant) } }
                 replaceMessage(
@@ -699,7 +702,11 @@ class ChatSessionStore(
             ))
         }
         user?.let { replaceMessage(execution.localThreadId, it.localMessageId, persistedMessageUi(it)) }
-        replaceMessage(execution.localThreadId, assistant.localMessageId, persistedMessageUi(assistant))
+        val persistedAssistant = withContext(Dispatchers.IO) {
+            messageRepository.messages(execution.canonicalThreadId)
+                .firstOrNull { it.localMessageId == execution.assistantMessageId }
+        } ?: assistant
+        replaceMessage(execution.localThreadId, assistant.localMessageId, persistedMessageUi(persistedAssistant))
         updateThread(execution.localThreadId) { it.copy(preview = text, updatedAt = "刚刚") }
         execution.personaVersion?.let { version ->
             conversationPersonas.setMaterializedPersonaVersion(execution.localThreadId, version)
@@ -887,6 +894,7 @@ class ChatSessionStore(
             runtime = message.runtime,
             adapterId = message.adapterId,
             attachments = message.attachments,
+            processEvents = message.processEvents,
         )
     }
 

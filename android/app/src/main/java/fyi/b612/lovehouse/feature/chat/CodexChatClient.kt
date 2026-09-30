@@ -54,6 +54,9 @@ internal fun mergeThinkingText(
     else -> null
 }
 
+internal fun toolProcessEventId(name: String, callId: String?): String =
+    callId?.takeIf(String::isNotBlank)?.let { "tool-call:$it" } ?: "tool:$name"
+
 data class CodexChatResult(
     val text: String,
     val evidence: CodexRuntimeEvidence,
@@ -302,16 +305,19 @@ class HttpCodexChatClient(
                         onText(text)
                     }
                     "tool_call" -> jsonString(json, "name")?.let { name ->
-                        toolCalls[name] = CodexToolCallEvidence(name, "running")
-                        onProcess(ChatProcessEvent("tool:$name", ChatProcessKind.ToolCall, toolTitle(name), ChatProcessStatus.Running, jsonString(json, "summary")))
+                        val eventId = toolProcessEventId(name, jsonString(json, "call_id"))
+                        toolCalls[eventId] = CodexToolCallEvidence(name, "running")
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolCall, toolTitle(name), ChatProcessStatus.Running, jsonString(json, "summary")))
                     }
                     "tool_result" -> jsonString(json, "name")?.let { name ->
-                        toolCalls[name] = CodexToolCallEvidence(name, "success")
-                        onProcess(ChatProcessEvent("tool:$name", ChatProcessKind.ToolResult, toolTitle(name), ChatProcessStatus.Succeeded, jsonString(json, "summary")))
+                        val eventId = toolProcessEventId(name, jsonString(json, "call_id"))
+                        toolCalls[eventId] = CodexToolCallEvidence(name, "success")
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolResult, toolTitle(name), ChatProcessStatus.Succeeded, jsonString(json, "summary")))
                     }
                     "tool_error" -> jsonString(json, "name")?.let { name ->
-                        toolCalls[name] = CodexToolCallEvidence(name, "rejected")
-                        onProcess(ChatProcessEvent("tool:$name", ChatProcessKind.ToolError, toolTitle(name), ChatProcessStatus.Failed, jsonString(json, "message")))
+                        val eventId = toolProcessEventId(name, jsonString(json, "call_id"))
+                        toolCalls[eventId] = CodexToolCallEvidence(name, "rejected")
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolError, toolTitle(name), ChatProcessStatus.Failed, jsonString(json, "message")))
                     }
                     "reasoning_status" -> jsonString(json, "summary")?.takeIf(String::isNotBlank)?.let { summary ->
                         onProcess(ChatProcessEvent("reasoning", ChatProcessKind.ReasoningStatus, "思考状态", ChatProcessStatus.Running, summary))
