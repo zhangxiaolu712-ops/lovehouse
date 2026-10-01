@@ -64,8 +64,13 @@ object NoOpLocalChatMessageRepository : LocalChatMessageRepository {
 class SQLiteLocalChatMessageRepository(
     context: Context,
     databaseName: String = DATABASE_NAME,
-) : LocalChatMessageRepository {
+    private val nowEpochMillis: () -> Long = System::currentTimeMillis,
+) : LocalChatMessageRepository, ToolDetailCacheRepository {
     private val database = ChatHistoryDatabase(context.applicationContext, databaseName)
+
+    init {
+        cleanupExpired(nowEpochMillis())
+    }
 
     internal fun close() = database.close()
 
@@ -225,6 +230,130 @@ class SQLiteLocalChatMessageRepository(
             values,
             SQLiteDatabase.CONFLICT_REPLACE,
         ).also { rowId -> check(rowId != -1L) { "Could not persist local chat execution" } }
+    }
+
+    @Synchronized
+    override fun upsert(
+        threadId: String,
+        assistantMessageId: String,
+        eventId: String,
+        detail: ToolDetailEnvelope,
+    ): CachedToolDetail? {
+        if (threadId.isBlank() || assistantMessageId.isBlank() || !hasValidToolDetailIdentity(eventId, detail)) return null
+        val now = nowEpochMillis()
+        val db = database.writableDatabase
+        db.beginTransaction()
+        return try {
+            cleanupExpired(db, now)
+            val existing = readToolDetail(db, assistantMessageId, eventId, now)
+            if (existing != null && existing.threadId != threadId) return null
+            val merged = if (existing == null) detail else mergeToolDetails(existing.detail, detail) ?: return null
+            if (!hasValidToolDetailIdentity(eventId, merged)) return null
+            val payload = serializeToolDetailEnvelope(merged)
+            if (payload.toByteArray(Charsets.UTF_8).size > MAX_TOOL_DETAIL_BYTES) return null
+            val createdAt = existing?.createdAtEpochMillis ?: now
+            val expiresAt = existing?.expiresAtEpochMillis ?: toolDetailExpiresAt(createdAt)
+            val values = ContentValues().apply {
+                put("thread_id", threadId)
+                put("assistant_message_id", assistantMessageId)
+                put("event_id", eventId)
+                put("call_id", merged.callId)
+                put("detail_kind", merged.detailKind())
+                put("schema_version", merged.schemaVersion)
+                put("safe_payload", payload)
+                put("created_at_epoch_ms", createdAt)
+                put("expires_at_epoch_ms", expiresAt)
+                put("truncated", if (merged.truncated) 1 else 0)
+            }
+            db.insertWithOnConflict(TABLE_TOOL_DETAILS, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+                .also { rowId -> check(rowId != -1L) { "Could not persist safe tool detail" } }
+            db.setTransactionSuccessful()
+            CachedToolDetail(threadId, assistantMessageId, eventId, merged, createdAt, expiresAt)
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    @Synchronized
+    override fun detail(
+        assistantMessageId: String,
+        eventId: String,
+    ): CachedToolDetail? {
+        val now = nowEpochMillis()
+        val db = database.writableDatabase
+        cleanupExpired(db, now)
+        return readToolDetail(db, assistantMessageId, eventId, now)
+    }
+
+    @Synchronized
+    override fun deleteForAssistant(assistantMessageId: String): Int =
+        database.writableDatabase.delete(
+            TABLE_TOOL_DETAILS,
+            "assistant_message_id = ?",
+            arrayOf(assistantMessageId),
+        )
+
+    @Synchronized
+    override fun deleteForThread(threadId: String): Int =
+        database.writableDatabase.delete(TABLE_TOOL_DETAILS, "thread_id = ?", arrayOf(threadId))
+
+    @Synchronized
+    override fun cleanupExpired(nowEpochMillis: Long): Int =
+        cleanupExpired(database.writableDatabase, nowEpochMillis)
+
+    private fun cleanupExpired(db: SQLiteDatabase, nowEpochMillis: Long): Int =
+        db.delete(TABLE_TOOL_DETAILS, "expires_at_epoch_ms <= ?", arrayOf(nowEpochMillis.toString()))
+
+    private fun readToolDetail(
+        db: SQLiteDatabase,
+        assistantMessageId: String,
+        eventId: String,
+        nowEpochMillis: Long,
+    ): CachedToolDetail? = db.query(
+        TABLE_TOOL_DETAILS,
+        TOOL_DETAIL_COLUMNS,
+        "assistant_message_id = ? AND event_id = ? AND expires_at_epoch_ms > ?",
+        arrayOf(assistantMessageId, eventId, nowEpochMillis.toString()),
+        null,
+        null,
+        null,
+        "1",
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val callId = cursor.getString(cursor.getColumnIndexOrThrow("call_id"))
+        val payload = cursor.getString(cursor.getColumnIndexOrThrow("safe_payload"))
+        val parsed = parseStoredToolDetailEnvelope(payload, callId) ?: run {
+            db.delete(
+                TABLE_TOOL_DETAILS,
+                "assistant_message_id = ? AND event_id = ?",
+                arrayOf(assistantMessageId, eventId),
+            )
+            return@use null
+        }
+        if (!hasValidToolDetailIdentity(eventId, parsed)
+            || parsed.detailKind() != cursor.getString(cursor.getColumnIndexOrThrow("detail_kind"))
+            || parsed.schemaVersion != cursor.getInt(cursor.getColumnIndexOrThrow("schema_version"))
+        ) {
+            db.delete(
+                TABLE_TOOL_DETAILS,
+                "assistant_message_id = ? AND event_id = ?",
+                arrayOf(assistantMessageId, eventId),
+            )
+            return@use null
+        }
+        CachedToolDetail(
+            threadId = cursor.getString(cursor.getColumnIndexOrThrow("thread_id")),
+            assistantMessageId = cursor.getString(cursor.getColumnIndexOrThrow("assistant_message_id")),
+            eventId = cursor.getString(cursor.getColumnIndexOrThrow("event_id")),
+            detail = parsed,
+            createdAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("created_at_epoch_ms")),
+            expiresAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("expires_at_epoch_ms")),
+        )
+    }
+
+    private fun ToolDetailEnvelope.detailKind(): String = when (this) {
+        is ToolDetailEnvelope.GenericTool -> "generic_tool"
+        is ToolDetailEnvelope.Command -> "command"
     }
 
     private fun write(db: SQLiteDatabase, message: LocalChatMessage) {
@@ -389,6 +518,7 @@ class SQLiteLocalChatMessageRepository(
             createAttachmentsTable(db)
             createExecutionsTable(db)
             createProcessEventsTable(db)
+            createToolDetailsTable(db)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -412,6 +542,10 @@ class SQLiteLocalChatMessageRepository(
             if (migratedVersion == 4 && newVersion >= 5) {
                 createProcessEventsTable(db)
                 migratedVersion = 5
+            }
+            if (migratedVersion == 5 && newVersion >= 6) {
+                createToolDetailsTable(db)
+                migratedVersion = 6
             }
             if (migratedVersion != newVersion) {
                 error("A non-destructive chat history migration is required from version $oldVersion to $newVersion")
@@ -510,6 +644,28 @@ class SQLiteLocalChatMessageRepository(
             db.execSQL("CREATE INDEX IF NOT EXISTS chat_process_events_thread_idx ON $TABLE_PROCESS_EVENTS(thread_id, assistant_message_id, position)")
         }
 
+        private fun createToolDetailsTable(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_TOOL_DETAILS (
+                    thread_id TEXT NOT NULL,
+                    assistant_message_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    call_id TEXT NOT NULL,
+                    detail_kind TEXT NOT NULL CHECK(detail_kind IN ('generic_tool', 'command')),
+                    schema_version INTEGER NOT NULL,
+                    safe_payload TEXT NOT NULL,
+                    created_at_epoch_ms INTEGER NOT NULL,
+                    expires_at_epoch_ms INTEGER NOT NULL,
+                    truncated INTEGER NOT NULL CHECK(truncated IN (0, 1)),
+                    PRIMARY KEY (assistant_message_id, event_id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS chat_tool_details_thread_idx ON $TABLE_TOOL_DETAILS(thread_id, assistant_message_id)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS chat_tool_details_expiry_idx ON $TABLE_TOOL_DETAILS(expires_at_epoch_ms)")
+        }
+
         private fun migratePreviewAttachments(db: SQLiteDatabase) {
             db.execSQL("ALTER TABLE $TABLE_ATTACHMENTS RENAME TO chat_message_attachments_preview_v2")
             db.execSQL("DROP INDEX IF EXISTS chat_attachments_message_idx")
@@ -539,11 +695,13 @@ class SQLiteLocalChatMessageRepository(
 
     private companion object {
         const val DATABASE_NAME = "lovehouse_chat.db"
-        const val DATABASE_VERSION = 5
+        const val DATABASE_VERSION = 6
         const val TABLE_MESSAGES = "chat_messages"
         const val TABLE_ATTACHMENTS = "chat_message_attachments"
         const val TABLE_EXECUTIONS = "chat_executions"
         const val TABLE_PROCESS_EVENTS = "chat_process_events"
+        const val TABLE_TOOL_DETAILS = "chat_tool_details"
+        const val MAX_TOOL_DETAIL_BYTES = 256 * 1024
         val MESSAGE_COLUMNS = arrayOf(
             "local_message_id",
             "thread_id",
@@ -563,6 +721,10 @@ class SQLiteLocalChatMessageRepository(
         )
         val PROCESS_EVENT_COLUMNS = arrayOf(
             "assistant_message_id", "event_id", "position", "kind", "title", "status", "detail",
+        )
+        val TOOL_DETAIL_COLUMNS = arrayOf(
+            "thread_id", "assistant_message_id", "event_id", "call_id", "detail_kind",
+            "schema_version", "safe_payload", "created_at_epoch_ms", "expires_at_epoch_ms", "truncated",
         )
     }
 }

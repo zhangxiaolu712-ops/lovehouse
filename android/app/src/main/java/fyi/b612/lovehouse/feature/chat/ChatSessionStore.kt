@@ -78,6 +78,8 @@ class ChatSessionStore(
     private val codexClient: CodexChatClient = HttpCodexChatClient(),
     private val messageRepository: LocalChatMessageRepository = NoOpLocalChatMessageRepository,
     private val now: () -> Long = System::currentTimeMillis,
+    private val toolDetailCache: ToolDetailCacheRepository =
+        (messageRepository as? ToolDetailCacheRepository) ?: NoOpToolDetailCacheRepository,
     private val conversationPersonas: ConversationPersonaStore = InMemoryConversationPersonaStore(),
     private val personaRuntimeSource: PersonaRuntimeSource = NoOpPersonaRuntimeSource,
     private val claudeWebHistoryImporter: ClaudeWebHistoryImporter? = null,
@@ -239,6 +241,11 @@ class ChatSessionStore(
         return saved
     }
     fun messages(threadId: String) = messagesByThread.getOrPut(threadId) { mutableStateListOf() }
+
+    suspend fun toolDetail(assistantMessageId: String, eventId: String): ToolDetailEnvelope? =
+        withContext(Dispatchers.IO) {
+            toolDetailCache.detail(assistantMessageId, eventId)?.detail
+        }
     fun isSending(threadId: String): Boolean = (runningExecutionsByThread[threadId] ?: 0) > 0
     fun members(threadId: String) = membersByThread.getOrPut(threadId) { mutableStateListOf() }
     fun background(threadId: String): String = backgrounds[threadId] ?: "green"
@@ -394,7 +401,13 @@ class ChatSessionStore(
         var execution: LocalChatExecution? = null
         val processEvents = mutableListOf<ChatProcessEvent>()
         fun updateProcess(event: ChatProcessEvent) {
-            val updated = mergeProcessEvent(processEvents, event)
+            val cachedEvent = event.toolDetail?.let { detail ->
+                val cached = runCatching {
+                    toolDetailCache.upsert(canonicalThreadId, assistantId, event.id, detail)
+                }.getOrNull()
+                cached?.let { event.copy(toolDetail = it.detail) } ?: event
+            } ?: event
+            val updated = mergeProcessEvent(processEvents, cachedEvent)
             processEvents.clear()
             processEvents.addAll(updated)
             messageRepository.replaceProcessEvents(canonicalThreadId, assistantId, processEvents.toList())
