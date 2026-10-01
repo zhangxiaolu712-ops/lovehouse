@@ -3,6 +3,7 @@ package fyi.b612.lovehouse
 import fyi.b612.lovehouse.feature.chat.ToolDetailEnvelope
 import fyi.b612.lovehouse.feature.chat.ToolDetailField
 import fyi.b612.lovehouse.feature.chat.ToolDetailValue
+import fyi.b612.lovehouse.feature.chat.structuredToolDetailValue
 import fyi.b612.lovehouse.feature.chat.toolDetailPresentation
 import fyi.b612.lovehouse.feature.chat.toolDetailValueText
 import org.junit.Assert.assertEquals
@@ -105,6 +106,75 @@ class ToolDetailUiContractTest {
         assertTrue(genericError.isError)
         assertTrue(genericError.truncated)
         assertTrue(commandError.isError)
+    }
+
+    @Test
+    fun `valid JSON object text becomes provider-neutral nested structure`() {
+        val original = ToolDetailValue.ObjectValue(
+            listOf(
+                ToolDetailField("type", ToolDetailValue.Text("text")),
+                ToolDetailField(
+                    "text",
+                    ToolDetailValue.Text(
+                        """{"items":[{"id":1},{"id":2}],"ok":true,"missing":null}""",
+                    ),
+                ),
+            ),
+        )
+        val detail = generic(result = ToolDetailValue.ListValue(listOf(original)))
+
+        val presentation = toolDetailPresentation(detail)
+        val item = (presentation.response as ToolDetailValue.ListValue).items.single()
+            as ToolDetailValue.ObjectValue
+        val parsed = item.fields.single { it.key == "text" }.value as ToolDetailValue.ObjectValue
+        val items = parsed.fields.single { it.key == "items" }.value as ToolDetailValue.ListValue
+
+        assertEquals(2, items.items.size)
+        assertEquals(ToolDetailValue.BooleanValue(true), parsed.fields.single { it.key == "ok" }.value)
+        assertEquals(ToolDetailValue.NullValue, parsed.fields.single { it.key == "missing" }.value)
+        assertEquals(original, (detail.result as ToolDetailValue.ListValue).items.single())
+        assertEquals(CREATED_AT, detail.createdAt)
+    }
+
+    @Test
+    fun `valid JSON array text exposes every nested item`() {
+        val value = structuredToolDetailValue(
+            ToolDetailValue.Text("""[1,"two",{"nested":[true,false,3]}]"""),
+        ) as ToolDetailValue.ListValue
+
+        assertEquals(3, value.items.size)
+        val nested = value.items[2] as ToolDetailValue.ObjectValue
+        val nestedItems = nested.fields.single().value as ToolDetailValue.ListValue
+        assertEquals(3, nestedItems.items.size)
+    }
+
+    @Test
+    fun `invalid JSON and natural text remain plain text`() {
+        val invalid = ToolDetailValue.Text("{not valid json}")
+        val natural = ToolDetailValue.Text("A normal response with { braces } inside.")
+
+        assertEquals(invalid, structuredToolDetailValue(invalid))
+        assertEquals(natural, structuredToolDetailValue(natural))
+    }
+
+    @Test
+    fun `unknown MCP JSON result uses generic renderer without tool-name handling`() {
+        val json = """{"forecast":[{"day":1},{"day":2},{"day":3}],"source":"future"}"""
+        val presentation = toolDetailPresentation(generic(result = ToolDetailValue.Text(json)))
+        val result = presentation.response as ToolDetailValue.ObjectValue
+        val forecast = result.fields.single { it.key == "forecast" }.value as ToolDetailValue.ListValue
+
+        assertEquals(3, forecast.items.size)
+        assertEquals("future", toolDetailValueText(result.fields.single { it.key == "source" }.value))
+    }
+
+    @Test
+    fun `long bounded JSON remains structured while oversized candidate stays text`() {
+        val bounded = ToolDetailValue.Text("""{"content":"${"x".repeat(40_000)}"}""")
+        val oversized = ToolDetailValue.Text("""{"content":"${"x".repeat(70_000)}"}""")
+
+        assertTrue(structuredToolDetailValue(bounded) is ToolDetailValue.ObjectValue)
+        assertEquals(oversized, structuredToolDetailValue(oversized))
     }
 
     private fun generic(

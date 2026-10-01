@@ -55,6 +55,34 @@ function successEvents({ sessionId = SESSION_ID, text = '你好。', reasoning =
   ]
 }
 
+function streamedToolEvents({ index, id, name, input, inputParts, result = 'done', includeCompletedBlock = true }) {
+  return [
+    {
+      type: 'stream_event', session_id: SESSION_ID,
+      event: {
+        type: 'content_block_start', index,
+        content_block: { type: 'tool_use', id, name, input: {} },
+      },
+    },
+    ...inputParts.map(partialJson => ({
+      type: 'stream_event', session_id: SESSION_ID,
+      event: { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: partialJson } },
+    })),
+    {
+      type: 'stream_event', session_id: SESSION_ID,
+      event: { type: 'content_block_stop', index },
+    },
+    ...(includeCompletedBlock ? [{
+      type: 'assistant', session_id: SESSION_ID,
+      message: { content: [{ type: 'tool_use', id, name, input }] },
+    }] : []),
+    {
+      type: 'user', session_id: SESSION_ID,
+      message: { content: [{ type: 'tool_result', tool_use_id: id, content: result, is_error: false }] },
+    },
+  ]
+}
+
 test('Claude CLI implements the shared runtime contract without requiring MCP', () => {
   const adapter = new ClaudeCliRuntimeAdapter({ spawnImpl: fakeSpawn([]) })
   assert.equal(assertRuntimeAdapter(adapter), adapter)
@@ -425,6 +453,105 @@ test('Claude tool lifecycle carries only normalized typed detail on the same cal
   assert.match(JSON.stringify(events[1].data.tool_detail), /\/secret/)
   assert.match(JSON.stringify(events[1].data.tool_detail), /secret body/)
   assert.equal('raw_payload' in events[1].data.tool_detail, false)
+})
+
+test('Claude assembles streamed MCP inputs before preserving wake recall and remember results', async () => {
+  const events = []
+  const calls = [
+    {
+      index: 0, id: 'wake-call', name: 'wake_up',
+      input: { soft_limit: 3, token_budget: 1_200 },
+      inputParts: ['{"soft_limit":3,', '"token_budget":1200}'],
+    },
+    {
+      index: 1, id: 'recall-call', name: 'recall',
+      input: { query: 'safe fixture', limit: 2 },
+      inputParts: ['{"query":"safe ', 'fixture","limit":2}'],
+    },
+    {
+      index: 2, id: 'remember-call', name: 'remember',
+      input: { content: 'safe fixture', ai_importance: 2, human_importance: 3 },
+      inputParts: ['{"content":"safe fixture",', '"ai_importance":2,"human_importance":3}'],
+    },
+  ]
+  const adapter = new ClaudeCliRuntimeAdapter({
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn([
+      { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      ...calls.flatMap(streamedToolEvents),
+      ...successEvents().slice(1),
+    ]),
+  })
+
+  await adapter.streamEvents({
+    message: 'use safe fixtures', history: [], onRuntimeBinding() {}, onText() {},
+    onEvent(event, data) { if (event.startsWith('tool_')) events.push({ event, data }) },
+  })
+
+  assert.equal(events.filter(item => item.event === 'tool_call').length, 3)
+  const completed = events.filter(item => item.event === 'tool_result')
+  assert.deepEqual(completed.map(item => item.data.call_id), calls.map(item => item.id))
+  for (const [index, item] of completed.entries()) {
+    assert.equal(item.data.call_id, calls[index].id)
+    assert.deepEqual(
+      item.data.tool_detail.arguments.fields.map(field => field.key),
+      Object.keys(calls[index].input),
+    )
+    assert.equal(item.data.tool_detail.result.text, 'done')
+  }
+})
+
+test('Claude input JSON deltas populate the result even without a completed assistant tool block', async () => {
+  const events = []
+  const adapter = new ClaudeCliRuntimeAdapter({
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn([
+      { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      ...streamedToolEvents({
+        index: 0, id: 'delta-only-call', name: 'future_tool',
+        input: { alpha: 1, nested: { beta: true } },
+        inputParts: ['{"alpha":1,"nested":', '{"beta":true}}'],
+        includeCompletedBlock: false,
+      }),
+      ...successEvents().slice(1),
+    ]),
+  })
+
+  await adapter.streamEvents({
+    message: 'delta fixture', history: [], onRuntimeBinding() {}, onText() {},
+    onEvent(event, data) { if (event === 'tool_result') events.push(data) },
+  })
+
+  assert.equal(events.length, 1)
+  assert.deepEqual(events[0].tool_detail.arguments.fields.map(field => field.key), ['alpha', 'nested'])
+})
+
+test('Claude streamed MCP input still applies redaction and argument bounds', async () => {
+  const events = []
+  const input = { content: 'x'.repeat(40 * 1024), access_token: 'fixture-secret-value' }
+  const inputJson = JSON.stringify(input)
+  const adapter = new ClaudeCliRuntimeAdapter({
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn([
+      { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      ...streamedToolEvents({
+        index: 0, id: 'bounded-call', name: 'remember', input,
+        inputParts: [inputJson.slice(0, 5_000), inputJson.slice(5_000)],
+      }),
+      ...successEvents().slice(1),
+    ]),
+  })
+
+  await adapter.streamEvents({
+    message: 'bounded fixture', history: [], onRuntimeBinding() {}, onText() {},
+    onEvent(event, data) { if (event === 'tool_result') events.push(data) },
+  })
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0].call_id, 'bounded-call')
+  assert.equal(events[0].tool_detail.truncated, true)
+  assert.equal(JSON.stringify(events[0]).includes('fixture-secret-value'), false)
+  assert.ok(Buffer.byteLength(JSON.stringify(events[0].tool_detail.arguments), 'utf8') <= 32 * 1024)
 })
 
 test('Claude same-name interleaved tools keep input and result isolated by call id', async () => {

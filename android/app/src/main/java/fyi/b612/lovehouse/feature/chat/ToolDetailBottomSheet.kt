@@ -34,11 +34,17 @@ import androidx.compose.ui.unit.sp
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIcon
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconOpticalSize
 import fyi.b612.lovehouse.core.designsystem.LoveHouseIconView
+import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
 
 private val ToolDetailInk = Color(0xFF3E4847)
 private val ToolDetailMuted = Color(0xFF7F8B88)
 private val ToolDetailAccent = Color(0xFF718E87)
 private const val TOOL_DETAIL_TEXT_PREVIEW_CHARS = 420
+private const val TOOL_DETAIL_JSON_MAX_BYTES = 64 * 1024
+private const val TOOL_DETAIL_JSON_MAX_DEPTH = 8
+private const val TOOL_DETAIL_JSON_MAX_ENTRIES = 256
 
 internal data class ToolDetailPresentation(
     val request: ToolDetailValue?,
@@ -61,23 +67,81 @@ internal data class ToolDetailSheetState(
 
 internal fun toolDetailPresentation(detail: ToolDetailEnvelope): ToolDetailPresentation = when (detail) {
     is ToolDetailEnvelope.GenericTool -> ToolDetailPresentation(
-        request = detail.arguments,
-        response = detail.result,
+        request = detail.arguments?.let(::structuredToolDetailValue),
+        response = detail.result?.let(::structuredToolDetailValue),
         isError = detail.isError == true,
         truncated = detail.truncated,
     )
     is ToolDetailEnvelope.Command -> ToolDetailPresentation(
         request = detail.command?.let { command ->
-            ToolDetailValue.ObjectValue(listOf(ToolDetailField("command", ToolDetailValue.Text(command))))
+            ToolDetailValue.ObjectValue(
+                listOf(ToolDetailField("command", structuredToolDetailValue(ToolDetailValue.Text(command)))),
+            )
         },
         response = listOfNotNull(
-            detail.output?.let { ToolDetailField("output", ToolDetailValue.Text(it)) },
+            detail.output?.let { ToolDetailField("output", structuredToolDetailValue(ToolDetailValue.Text(it))) },
             detail.exitCode?.let { ToolDetailField("exit_code", ToolDetailValue.NumberValue(it.toDouble())) },
             detail.status?.let { ToolDetailField("status", ToolDetailValue.Text(it)) },
         ).takeIf { it.isNotEmpty() }?.let(ToolDetailValue::ObjectValue),
         isError = detail.status == "failed" || (detail.exitCode != null && detail.exitCode != 0),
         truncated = detail.truncated,
     )
+}
+
+internal fun structuredToolDetailValue(value: ToolDetailValue): ToolDetailValue = when (value) {
+    is ToolDetailValue.Text -> parseStructuredJson(value.text) ?: value
+    is ToolDetailValue.ListValue -> ToolDetailValue.ListValue(value.items.map(::structuredToolDetailValue))
+    is ToolDetailValue.ObjectValue -> ToolDetailValue.ObjectValue(
+        value.fields.map { it.copy(value = structuredToolDetailValue(it.value)) },
+    )
+    else -> value
+}
+
+private fun parseStructuredJson(text: String): ToolDetailValue? {
+    val candidate = text.trim()
+    if (!((candidate.startsWith('{') && candidate.endsWith('}'))
+            || (candidate.startsWith('[') && candidate.endsWith(']')))
+        || candidate.toByteArray(Charsets.UTF_8).size > TOOL_DETAIL_JSON_MAX_BYTES
+    ) return null
+    return runCatching {
+        val tokener = JSONTokener(candidate)
+        val parsed = tokener.nextValue()
+        if (tokener.nextClean() != 0.toChar()) return@runCatching null
+        if (parsed !is JSONObject && parsed !is JSONArray) return@runCatching null
+        jsonDetailValue(parsed, JsonRenderBudget())
+    }.getOrNull()
+}
+
+private data class JsonRenderBudget(var entries: Int = 0)
+
+private fun jsonDetailValue(value: Any?, budget: JsonRenderBudget, depth: Int = 0): ToolDetailValue? {
+    if (depth > TOOL_DETAIL_JSON_MAX_DEPTH || ++budget.entries > TOOL_DETAIL_JSON_MAX_ENTRIES) return null
+    return when (value) {
+        null, JSONObject.NULL -> ToolDetailValue.NullValue
+        is String -> ToolDetailValue.Text(value)
+        is Boolean -> ToolDetailValue.BooleanValue(value)
+        is Number -> ToolDetailValue.NumberValue(value.toDouble())
+        is JSONObject -> {
+            val fields = buildList {
+                val keys = value.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val fieldValue = jsonDetailValue(value.get(key), budget, depth + 1) ?: return null
+                    add(ToolDetailField(key, fieldValue))
+                }
+            }
+            ToolDetailValue.ObjectValue(fields)
+        }
+        is JSONArray -> {
+            val items = buildList {
+                for (index in 0 until value.length()) {
+                    add(jsonDetailValue(value.get(index), budget, depth + 1) ?: return null)
+                }
+            }
+            ToolDetailValue.ListValue(items)
+        }
+        else -> null
+    }
 }
 
 internal fun toolDetailValueText(value: ToolDetailValue): String? = when (value) {

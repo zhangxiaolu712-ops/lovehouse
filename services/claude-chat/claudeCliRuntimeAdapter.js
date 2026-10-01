@@ -10,6 +10,7 @@ import { unknownQuota } from '../codex-chat/runtimeContract.js'
 import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
 import {
+  TOOL_DETAIL_LIMITS,
   normalizeClaudeToolInput,
   normalizeClaudeToolResult,
 } from '../chat-runtime/toolDetailEnvelope.js'
@@ -183,6 +184,14 @@ function toolResultId(block) {
   return block?.type === 'tool_result' && typeof block.tool_use_id === 'string'
     ? block.tool_use_id.slice(0, 128)
     : null
+}
+
+function toolDetailHasArguments(detail) {
+  const value = detail?.arguments
+  if (!value) return false
+  if (value.type === 'object') return Array.isArray(value.fields) && value.fields.length > 0
+  if (value.type === 'list') return Array.isArray(value.items) && value.items.length > 0
+  return value.type !== 'null' && value.type !== 'omitted'
 }
 
 export class ClaudeCliRuntimeAdapter {
@@ -418,6 +427,7 @@ export class ClaudeCliRuntimeAdapter {
     emitRuntimeProvenance('persona_runtime_materialized', invocationTrace)
     emitRuntimeProvenance('provider_invocation', invocationTrace)
     const tools = new Map()
+    const streamedToolInputs = new Map()
     let reportedSessionId = ''
     let reportedModel = ''
     let assistantFallbackText = ''
@@ -458,6 +468,9 @@ export class ClaudeCliRuntimeAdapter {
           if (inner?.type === 'content_block_start' && descriptor) {
             const toolDetail = normalizeClaudeToolInput(inner.content_block)
             tools.set(descriptor.call_id, { descriptor, toolDetail })
+            if (Number.isInteger(inner.index)) {
+              streamedToolInputs.set(inner.index, { callId: descriptor.call_id, partialJson: '', overflow: false })
+            }
             emitRuntimeProvenance('provider_tool_event', {
               ...invocationTrace, call_id: descriptor.call_id, tool_name: descriptor.name, status: 'started',
             })
@@ -465,6 +478,40 @@ export class ClaudeCliRuntimeAdapter {
               ...descriptor, status: 'running', lifecycle: 'started',
               ...(toolDetail ? { tool_detail: toolDetail } : {}),
             })
+          }
+          if (inner?.type === 'content_block_delta' && delta?.type === 'input_json_delta'
+            && typeof delta.partial_json === 'string' && Number.isInteger(inner.index)) {
+            const pending = streamedToolInputs.get(inner.index)
+            if (pending && !pending.overflow) {
+              const partialJson = pending.partialJson + delta.partial_json
+              if (Buffer.byteLength(partialJson, 'utf8') <= TOOL_DETAIL_LIMITS.envelope) {
+                pending.partialJson = partialJson
+              } else {
+                pending.partialJson = ''
+                pending.overflow = true
+              }
+            }
+          }
+          if (inner?.type === 'content_block_stop' && Number.isInteger(inner.index)) {
+            const pending = streamedToolInputs.get(inner.index)
+            streamedToolInputs.delete(inner.index)
+            if (pending && !pending.overflow && pending.partialJson) {
+              try {
+                const input = JSON.parse(pending.partialJson)
+                const known = tools.get(pending.callId)
+                const refreshed = normalizeClaudeToolInput({ type: 'tool_use', id: pending.callId, input })
+                if (known && refreshed) {
+                  tools.set(pending.callId, {
+                    ...known,
+                    toolDetail: known.toolDetail?.created_at
+                      ? { ...refreshed, created_at: known.toolDetail.created_at }
+                      : refreshed,
+                  })
+                }
+              } catch {
+                // The completed assistant block remains the authoritative fallback for malformed/incomplete deltas.
+              }
+            }
           }
           return
         }
@@ -490,16 +537,25 @@ export class ClaudeCliRuntimeAdapter {
               })
             }
             const descriptor = toolDescriptor(block)
-            if (descriptor && !tools.has(descriptor.call_id)) {
+            if (descriptor) {
               const toolDetail = normalizeClaudeToolInput(block)
-              tools.set(descriptor.call_id, { descriptor, toolDetail })
-              emitRuntimeProvenance('provider_tool_event', {
-                ...invocationTrace, call_id: descriptor.call_id, tool_name: descriptor.name, status: 'started',
-              })
-              onEvent('tool_call', {
-                ...descriptor, status: 'running', lifecycle: 'started',
-                ...(toolDetail ? { tool_detail: toolDetail } : {}),
-              })
+              const known = tools.get(descriptor.call_id)
+              const refreshed = known?.toolDetail?.created_at && toolDetail
+                ? { ...toolDetail, created_at: known.toolDetail.created_at }
+                : toolDetail
+              const resolved = toolDetailHasArguments(known?.toolDetail) && !toolDetailHasArguments(refreshed)
+                ? known.toolDetail
+                : refreshed
+              tools.set(descriptor.call_id, { descriptor, toolDetail: resolved })
+              if (!known) {
+                emitRuntimeProvenance('provider_tool_event', {
+                  ...invocationTrace, call_id: descriptor.call_id, tool_name: descriptor.name, status: 'started',
+                })
+                onEvent('tool_call', {
+                  ...descriptor, status: 'running', lifecycle: 'started',
+                  ...(resolved ? { tool_detail: resolved } : {}),
+                })
+              }
             }
           }
           return

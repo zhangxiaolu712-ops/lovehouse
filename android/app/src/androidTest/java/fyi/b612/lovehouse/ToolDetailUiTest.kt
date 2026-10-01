@@ -94,6 +94,50 @@ class ToolDetailUiTest {
         compose.onNodeWithText("详细内容已过期或不可用").assertIsDisplayed()
     }
 
+    @Test
+    fun jsonStringResultRendersEveryNestedItemWithoutToolSpecificUi() {
+        val detail = ToolDetailEnvelope.GenericTool(
+            schemaVersion = 1,
+            callId = "future-json-call",
+            createdAt = "2026-10-01T00:00:00.000Z",
+            truncated = false,
+            originalLength = 80,
+            arguments = ToolDetailValue.ObjectValue(emptyList()),
+            result = ToolDetailValue.ListValue(
+                listOf(
+                    ToolDetailValue.ObjectValue(
+                        listOf(
+                            ToolDetailField("type", ToolDetailValue.Text("text")),
+                            ToolDetailField(
+                                "text",
+                                ToolDetailValue.Text(
+                                    """{"items":[{"label":"first"},{"label":"second"},{"label":"third"}]}""",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            isError = false,
+        )
+
+        compose.setContent {
+            MaterialTheme {
+                ToolDetailBottomSheet(
+                    state = loadedState("future_unknown_mcp_tool", detail),
+                    visualContext = visualContext,
+                    onDismiss = {},
+                )
+            }
+        }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("items").assertIsDisplayed()
+        compose.onNodeWithText("first").assertIsDisplayed()
+        compose.onNodeWithText("second").assertIsDisplayed()
+        compose.onNodeWithText("third").assertIsDisplayed()
+    }
+
     private fun loadedState(title: String, detail: ToolDetailEnvelope) = ToolDetailSheetState(
         request = ToolDetailSheetRequest("assistant:one", "tool-call:${detail.callId}", title),
         loading = false,
