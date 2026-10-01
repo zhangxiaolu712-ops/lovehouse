@@ -10,6 +10,10 @@ import { unknownQuota } from '../codex-chat/runtimeContract.js'
 import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
 import {
+  normalizeClaudeToolInput,
+  normalizeClaudeToolResult,
+} from '../chat-runtime/toolDetailEnvelope.js'
+import {
   emitRuntimeProvenance,
   normalizeRuntimeTrace,
   runtimeFailureCategory,
@@ -452,11 +456,15 @@ export class ClaudeCliRuntimeAdapter {
           }
           const descriptor = toolDescriptor(inner?.content_block)
           if (inner?.type === 'content_block_start' && descriptor) {
-            tools.set(descriptor.call_id, descriptor)
+            const toolDetail = normalizeClaudeToolInput(inner.content_block)
+            tools.set(descriptor.call_id, { descriptor, toolDetail })
             emitRuntimeProvenance('provider_tool_event', {
               ...invocationTrace, call_id: descriptor.call_id, tool_name: descriptor.name, status: 'started',
             })
-            onEvent('tool_call', { ...descriptor, status: 'running', lifecycle: 'started' })
+            onEvent('tool_call', {
+              ...descriptor, status: 'running', lifecycle: 'started',
+              ...(toolDetail ? { tool_detail: toolDetail } : {}),
+            })
           }
           return
         }
@@ -483,11 +491,15 @@ export class ClaudeCliRuntimeAdapter {
             }
             const descriptor = toolDescriptor(block)
             if (descriptor && !tools.has(descriptor.call_id)) {
-              tools.set(descriptor.call_id, descriptor)
+              const toolDetail = normalizeClaudeToolInput(block)
+              tools.set(descriptor.call_id, { descriptor, toolDetail })
               emitRuntimeProvenance('provider_tool_event', {
                 ...invocationTrace, call_id: descriptor.call_id, tool_name: descriptor.name, status: 'started',
               })
-              onEvent('tool_call', { ...descriptor, status: 'running', lifecycle: 'started' })
+              onEvent('tool_call', {
+                ...descriptor, status: 'running', lifecycle: 'started',
+                ...(toolDetail ? { tool_detail: toolDetail } : {}),
+              })
             }
           }
           return
@@ -496,9 +508,11 @@ export class ClaudeCliRuntimeAdapter {
           for (const block of event.message?.content || []) {
             const callId = toolResultId(block)
             if (!callId) continue
-            const descriptor = tools.get(callId) || {
+            const known = tools.get(callId)
+            const descriptor = known?.descriptor || {
               call_id: callId, tool_type: 'claude_tool', name: 'tool',
             }
+            const toolDetail = normalizeClaudeToolResult(block, known?.toolDetail)
             const failed = block.is_error === true
             emitRuntimeProvenance('provider_tool_event', {
               ...invocationTrace,
@@ -512,6 +526,7 @@ export class ClaudeCliRuntimeAdapter {
               status: failed ? 'failed' : 'success',
               lifecycle: 'completed',
               summary: `${descriptor.name} ${failed ? 'failed' : 'completed'}`,
+              ...(toolDetail ? { tool_detail: toolDetail } : {}),
             })
           }
           return

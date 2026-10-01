@@ -69,7 +69,9 @@ internal fun mergeProcessEvent(
     event: ChatProcessEvent,
 ): List<ChatProcessEvent> {
     val index = events.indexOfFirst { it.id == event.id }
-    return if (index < 0) events + event else events.toMutableList().also { it[index] = event }
+    if (index < 0) return events + event
+    val merged = if (event.toolDetail == null) event.copy(toolDetail = events[index].toolDetail) else event
+    return events.toMutableList().also { it[index] = merged }
 }
 
 class ChatSessionStore(

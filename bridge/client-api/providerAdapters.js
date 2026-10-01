@@ -2,6 +2,7 @@ import { ClientApiError, normalizeClientApiError } from './errors.js'
 import {
   GLOBAL_CHAT_ATTACHMENT_CAPABILITIES,
 } from './attachmentCapabilities.js'
+import { validateToolDetailEnvelope } from '../../services/chat-runtime/toolDetailEnvelope.js'
 
 function providerErrorCode(message = '') {
   if (/(?:quota|credit|usage limit|out of extra usage|rate limit)/i.test(message)) {
@@ -224,8 +225,12 @@ function safeRuntimeEvent(event, data, profile) {
     }
   }
   if (['tool_call', 'tool_result', 'tool_error'].includes(event)) {
+    const callId = typeof data?.call_id === 'string' ? data.call_id.slice(0, 128) : 'unknown'
+    const toolDetail = callId === 'unknown'
+      ? null
+      : validateToolDetailEnvelope(data?.tool_detail, callId)
     return {
-      call_id: typeof data?.call_id === 'string' ? data.call_id.slice(0, 128) : 'unknown',
+      call_id: callId,
       tool_type: profile.toolTypes.includes(data?.tool_type)
         ? data.tool_type
         : profile.toolTypes[0],
@@ -237,6 +242,7 @@ function safeRuntimeEvent(event, data, profile) {
       ...(event === 'tool_call'
         ? {}
         : { summary: typeof data?.summary === 'string' ? data.summary.slice(0, 500) : null }),
+      ...(toolDetail ? { tool_detail: toolDetail } : {}),
     }
   }
   if (event === 'usage') {

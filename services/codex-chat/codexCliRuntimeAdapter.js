@@ -7,6 +7,7 @@ import { unknownQuota } from './runtimeContract.js'
 import { normalizeToolPreferenceIds, toolById } from '../../bridge/tool-center/catalog.js'
 import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
+import { normalizeCodexCommand } from '../chat-runtime/toolDetailEnvelope.js'
 import {
   emitRuntimeProvenance,
   normalizeRuntimeTrace,
@@ -568,7 +569,12 @@ export class CodexCliRuntimeAdapter {
           if (descriptor) {
             const lifecycle = event.type === 'item.started' ? 'started' : 'updated'
             if (lifecycle === 'started') startedTools.add(descriptor.call_id)
-            onEvent('tool_call', { ...descriptor, status: 'running', lifecycle })
+            const toolDetail = event.item?.type === 'command_execution'
+              ? normalizeCodexCommand(event.item) : null
+            onEvent('tool_call', {
+              ...descriptor, status: 'running', lifecycle,
+              ...(toolDetail ? { tool_detail: toolDetail } : {}),
+            })
           }
           return
         }
@@ -592,12 +598,20 @@ export class CodexCliRuntimeAdapter {
           if (descriptor) {
             if (!startedTools.has(descriptor.call_id)) {
               startedTools.add(descriptor.call_id)
+              const startedDetail = event.item?.type === 'command_execution'
+                ? normalizeCodexCommand(event.item) : null
               onEvent('tool_call', {
                 ...descriptor, status: 'running', lifecycle: 'started',
+                ...(startedDetail ? { tool_detail: startedDetail } : {}),
               })
             }
             const outcome = toolOutcome(event.item, descriptor)
-            onEvent(outcome.status === 'failed' ? 'tool_error' : 'tool_result', outcome)
+            const toolDetail = event.item?.type === 'command_execution'
+              ? normalizeCodexCommand(event.item) : null
+            onEvent(outcome.status === 'failed' ? 'tool_error' : 'tool_result', {
+              ...outcome,
+              ...(toolDetail ? { tool_detail: toolDetail } : {}),
+            })
           }
           return
         }

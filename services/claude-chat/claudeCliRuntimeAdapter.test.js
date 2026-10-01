@@ -391,7 +391,7 @@ test('raw Claude thinking is streamed separately while reasoning summaries stay 
   assert.equal(JSON.stringify(events).includes('hidden chain'), false)
 })
 
-test('Claude tool lifecycle is normalized without exposing inputs or result bodies', async () => {
+test('Claude tool lifecycle carries only normalized typed detail on the same call id', async () => {
   const events = []
   const adapter = new ClaudeCliRuntimeAdapter({
     createSessionId: () => SESSION_ID,
@@ -419,8 +419,41 @@ test('Claude tool lifecycle is normalized without exposing inputs or result bodi
   })
   assert.deepEqual(events.slice(0, 2).map(item => item.event), ['tool_call', 'tool_result'])
   assert.deepEqual(events.slice(0, 2).map(item => item.data.lifecycle), ['started', 'completed'])
-  assert.equal(JSON.stringify(events).includes('/secret'), false)
-  assert.equal(JSON.stringify(events).includes('secret body'), false)
+  assert.deepEqual(events.slice(0, 2).map(item => item.data.call_id), ['tool-1', 'tool-1'])
+  assert.equal(events[0].data.tool_detail.detail_kind, 'generic_tool')
+  assert.equal(events[1].data.tool_detail.detail_kind, 'generic_tool')
+  assert.match(JSON.stringify(events[1].data.tool_detail), /\/secret/)
+  assert.match(JSON.stringify(events[1].data.tool_detail), /secret body/)
+  assert.equal('raw_payload' in events[1].data.tool_detail, false)
+})
+
+test('Claude same-name interleaved tools keep input and result isolated by call id', async () => {
+  const events = []
+  const adapter = new ClaudeCliRuntimeAdapter({
+    createSessionId: () => SESSION_ID,
+    spawnImpl: fakeSpawn([
+      { type: 'system', subtype: 'init', session_id: SESSION_ID },
+      { type: 'assistant', session_id: SESSION_ID, message: { content: [
+        { type: 'tool_use', id: 'call-a', name: 'Read', input: { path: '/a' } },
+        { type: 'tool_use', id: 'call-b', name: 'Read', input: { path: '/b' } },
+      ] } },
+      { type: 'user', session_id: SESSION_ID, message: { content: [
+        { type: 'tool_result', tool_use_id: 'call-b', content: 'result-b', is_error: false },
+        { type: 'tool_result', tool_use_id: 'call-a', content: 'result-a', is_error: false },
+      ] } },
+      ...successEvents().slice(1),
+    ]),
+  })
+  await adapter.streamEvents({
+    message: 'read twice', history: [], onRuntimeBinding() {}, onText() {},
+    onEvent(event, data) { if (event.startsWith('tool_')) events.push({ event, data }) },
+  })
+  const completed = events.filter(item => item.event === 'tool_result')
+  assert.deepEqual(completed.map(item => item.data.call_id), ['call-b', 'call-a'])
+  assert.match(JSON.stringify(completed[0].data.tool_detail), /\/b|result-b/)
+  assert.doesNotMatch(JSON.stringify(completed[0].data.tool_detail), /\/a|result-a/)
+  assert.match(JSON.stringify(completed[1].data.tool_detail), /\/a|result-a/)
+  assert.doesNotMatch(JSON.stringify(completed[1].data.tool_detail), /\/b|result-b/)
 })
 
 test('resume uses provider session separately and recovers with bounded thread context when missing', async () => {

@@ -1138,8 +1138,8 @@ test('Codex adapter does not forward Login auth and preserves the sidecar SSE co
         'event: quota\ndata: {"status":"unknown","remaining":null,"unit":null,"reset_at":null,"source":"codex_cli_unavailable"}',
         'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"codex_native_thread","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"reasoning":{"enabled":true,"available":true,"status":"completed","summary":"Native summary","source":"codex_native_thread","active_context":true,"resumes_with_thread":true,"compaction":"codex_native"},"estimated_tokens":2}',
         'event: session\ndata: {"session_id":"22222222-2222-4222-8222-222222222222"}',
-        'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","lifecycle":"updated","command":"must-not-pass"}',
-        'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","aggregated_output":"must-not-pass"}',
+        'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","lifecycle":"updated","command":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":12,"command":"pwd","unknown":"drop"}}',
+        'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","aggregated_output":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":16,"command":"pwd","output":"/tmp","exit_code":0,"status":"completed","raw_payload":"drop"}}',
         'event: text\ndata: {"text":"hello"}',
         'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"codex_cli"}',
         'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"cached_input_tokens":2,"actual_output_tokens":4,"reasoning_output_tokens":1,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_cached_input_tokens":82,"cumulative_output_tokens":24,"cumulative_reasoning_output_tokens":6,"cumulative_total_tokens":127,"previous_cumulative_input_tokens":100,"previous_cumulative_cached_input_tokens":80,"previous_cumulative_output_tokens":20,"previous_cumulative_reasoning_output_tokens":5,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
@@ -1168,6 +1168,9 @@ test('Codex adapter does not forward Login auth and preserves the sidecar SSE co
     'reasoning_status', 'usage',
   ])
   assert.equal(JSON.stringify(events).includes('must-not-pass'), false)
+  assert.equal(events[3].data.tool_detail.command, 'pwd')
+  assert.equal(events[4].data.tool_detail.output, '/tmp')
+  assert.equal(events[4].data.tool_detail.raw_payload, undefined)
   assert.equal(JSON.stringify(events).includes('session_id'), false)
   assert.equal(events[0].data.capabilities.reasoning_summary, 'detailed')
   assert.equal(events[2].data.reasoning.summary, 'Native summary')
@@ -1187,8 +1190,8 @@ test('Claude CLI adapter uses the same safe stream contract without exposing its
         'event: runtime_status\ndata: {"status":"ready","runtime_type":"claude_cli","adapter_id":"claude-cli-v1","capabilities":{"streaming_text":true,"reasoning_summary":"conditional","tool_events":true,"actual_usage":true,"quota":false,"context_breakdown":"basic","mcp_required":false}}',
         'event: session\ndata: {"session_id":"22222222-2222-4222-8222-222222222222"}',
         'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"claude_cli"}',
-        'event: tool_call\ndata: {"call_id":"tool-1","tool_type":"claude_tool","name":"Read","status":"running","lifecycle":"started","input":{"path":"must-not-pass"}}',
-        'event: tool_result\ndata: {"call_id":"tool-1","tool_type":"claude_tool","name":"Read","status":"success","lifecycle":"completed","summary":"Read completed","content":"must-not-pass"}',
+        'event: tool_call\ndata: {"call_id":"tool-1","tool_type":"claude_tool","name":"Read","status":"running","lifecycle":"started","input":{"path":"must-not-pass"},"tool_detail":{"schema_version":1,"call_id":"wrong-call","detail_kind":"generic_tool","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":1,"arguments":{"type":"object","fields":[]}}}',
+        'event: tool_result\ndata: {"call_id":"tool-1","tool_type":"claude_tool","name":"Read","status":"success","lifecycle":"completed","summary":"Read completed","content":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"tool-1","detail_kind":"generic_tool","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":4,"result":{"type":"text","text":"safe"},"provider_event":"drop"}}',
         'event: usage\ndata: {"estimated_input_tokens":10,"actual_input_tokens":12,"cached_input_tokens":4,"actual_output_tokens":5,"reasoning_output_tokens":null,"total_tokens":17,"usage_source":"claude_cli","baseline_status":"known"}',
         'event: quota\ndata: {"status":"unknown","remaining":null,"unit":null,"reset_at":null,"source":"claude_cli_unavailable"}',
         'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"claude_native_session","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"reasoning":{"enabled":true,"available":false,"status":"unavailable","summary":null,"source":"claude_native_session","active_context":true,"resumes_with_thread":true,"compaction":"claude_native"},"estimated_tokens":2}',
@@ -1221,6 +1224,9 @@ test('Claude CLI adapter uses the same safe stream contract without exposing its
   assert.equal(events[0].data.runtime_type, 'claude_cli')
   assert.equal(events[0].data.adapter_id, 'claude-cli-v1')
   assert.equal(events[2].data.tool_type, 'claude_tool')
+  assert.equal(events[2].data.tool_detail, undefined)
+  assert.deepEqual(events[3].data.tool_detail.result, { type: 'text', text: 'safe' })
+  assert.equal(events[3].data.tool_detail.provider_event, undefined)
   assert.equal(events[4].data.usage_source, 'claude_cli')
   assert.equal(events[6].data.reasoning.source, 'claude_native_session')
   assert.equal(events[6].data.reasoning.compaction, 'claude_native')

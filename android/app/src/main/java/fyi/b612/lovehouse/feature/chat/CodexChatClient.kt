@@ -5,7 +5,9 @@ import fyi.b612.lovehouse.BuildConfig
 import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
 import java.util.UUID
+import org.json.JSONObject
 
 data class CodexRuntimeEvidence(
     val runtime: String,
@@ -42,7 +44,51 @@ data class ChatProcessEvent(
     val title: String,
     val status: ChatProcessStatus,
     val detail: String? = null,
+    val toolDetail: ToolDetailEnvelope? = null,
 )
+
+sealed class ToolDetailValue {
+    data class Text(val text: String) : ToolDetailValue()
+    data class NumberValue(val value: Double) : ToolDetailValue()
+    data class BooleanValue(val value: Boolean) : ToolDetailValue()
+    data object NullValue : ToolDetailValue()
+    data class ListValue(val items: List<ToolDetailValue>) : ToolDetailValue()
+    data class ObjectValue(val fields: List<ToolDetailField>) : ToolDetailValue()
+    data class Omitted(val reason: String) : ToolDetailValue()
+}
+
+data class ToolDetailField(val key: String, val value: ToolDetailValue)
+
+sealed class ToolDetailEnvelope {
+    abstract val schemaVersion: Int
+    abstract val callId: String
+    abstract val createdAt: String
+    abstract val truncated: Boolean
+    abstract val originalLength: Int
+
+    data class GenericTool(
+        override val schemaVersion: Int,
+        override val callId: String,
+        override val createdAt: String,
+        override val truncated: Boolean,
+        override val originalLength: Int,
+        val arguments: ToolDetailValue?,
+        val result: ToolDetailValue?,
+        val isError: Boolean?,
+    ) : ToolDetailEnvelope()
+
+    data class Command(
+        override val schemaVersion: Int,
+        override val callId: String,
+        override val createdAt: String,
+        override val truncated: Boolean,
+        override val originalLength: Int,
+        val command: String?,
+        val output: String?,
+        val exitCode: Int?,
+        val status: String?,
+    ) : ToolDetailEnvelope()
+}
 
 internal fun mergeThinkingText(
     current: String,
@@ -56,6 +102,102 @@ internal fun mergeThinkingText(
 
 internal fun toolProcessEventId(name: String, callId: String?): String =
     callId?.takeIf(String::isNotBlank)?.let { "tool-call:$it" } ?: "tool:$name"
+
+internal fun toolDetailProcessEventId(detail: ToolDetailEnvelope): String = "tool-call:${detail.callId}"
+
+private fun parseToolDetailValue(value: JSONObject, depth: Int = 0): ToolDetailValue? {
+    if (depth > 6) return null
+    return when (value.optString("type")) {
+        "text" -> value.optionalString("text")?.let(ToolDetailValue::Text)
+        "number" -> if (value.has("value") && value.opt("value") is Number) {
+            ToolDetailValue.NumberValue(value.getDouble("value"))
+        } else null
+        "boolean" -> if (value.has("value") && value.opt("value") is Boolean) {
+            ToolDetailValue.BooleanValue(value.getBoolean("value"))
+        } else null
+        "null" -> ToolDetailValue.NullValue
+        "omitted" -> ToolDetailValue.Omitted("内容已省略")
+        "list" -> value.optJSONArray("items")?.let { items ->
+            if (items.length() > 128) return null
+            val parsed = (0 until items.length()).map { index ->
+                items.optJSONObject(index)?.let { parseToolDetailValue(it, depth + 1) }
+            }
+            if (parsed.all { it != null }) ToolDetailValue.ListValue(parsed.filterNotNull()) else null
+        }
+        "object" -> value.optJSONArray("fields")?.let { fields ->
+            if (fields.length() > 128) return null
+            val parsed = (0 until fields.length()).map { index ->
+                fields.optJSONObject(index)?.let { field ->
+                    val key = field.optString("key", "")
+                    val fieldValue = field.optJSONObject("value")?.let { parseToolDetailValue(it, depth + 1) }
+                    if (key.isNotBlank() && fieldValue != null) ToolDetailField(key, fieldValue) else null
+                }
+            }
+            if (parsed.all { it != null }) ToolDetailValue.ObjectValue(parsed.filterNotNull()) else null
+        }
+        else -> null
+    }
+}
+
+internal fun parseToolDetailEnvelope(json: String, expectedCallId: String?): ToolDetailEnvelope? = runCatching {
+    val root = JSONObject(json)
+    val detail = root.optJSONObject("tool_detail") ?: return@runCatching null
+    if (detail.toString().toByteArray(Charsets.UTF_8).size > 256 * 1024) return@runCatching null
+    val schemaVersion = detail.optInt("schema_version", -1)
+    val callId = detail.optString("call_id", "")
+    val createdAt = detail.optString("created_at", "")
+    val truncated = detail.opt("truncated") as? Boolean ?: return@runCatching null
+    val originalLength = detail.optInt("original_length", -1)
+    if (schemaVersion != 1 || callId.isBlank() || callId.toByteArray(Charsets.UTF_8).size > 128
+        || runCatching { Instant.parse(createdAt) }.isFailure
+        || originalLength < 0 || expectedCallId.isNullOrBlank() || callId != expectedCallId
+    ) return@runCatching null
+    when (detail.optString("detail_kind")) {
+        "generic_tool" -> {
+            val argumentsJson = detail.optJSONObject("arguments")
+            val resultJson = detail.optJSONObject("result")
+            if ((argumentsJson?.toString()?.toByteArray(Charsets.UTF_8)?.size ?: 0) > 32 * 1024
+                || (resultJson?.toString()?.toByteArray(Charsets.UTF_8)?.size ?: 0) > 64 * 1024
+            ) return@runCatching null
+            ToolDetailEnvelope.GenericTool(
+                schemaVersion = schemaVersion,
+                callId = callId,
+                createdAt = createdAt,
+                truncated = truncated,
+                originalLength = originalLength,
+                arguments = argumentsJson?.let(::parseToolDetailValue),
+                result = resultJson?.let(::parseToolDetailValue),
+                isError = (detail.opt("is_error") as? Boolean),
+            ).takeIf {
+                (!detail.has("arguments") || it.arguments != null) && (!detail.has("result") || it.result != null)
+            }
+        }
+        "command" -> {
+            val command = detail.optionalString("command")
+            val output = detail.optionalString("output")
+            if ((command?.toByteArray(Charsets.UTF_8)?.size ?: 0) > 8 * 1024
+                || (output?.toByteArray(Charsets.UTF_8)?.size ?: 0) > 32 * 1024
+            ) return@runCatching null
+            val status = detail.optionalString("status")
+                ?.takeIf { it in setOf("in_progress", "completed", "failed", "running", "success") }
+            ToolDetailEnvelope.Command(
+                schemaVersion = schemaVersion,
+                callId = callId,
+                createdAt = createdAt,
+                truncated = truncated,
+                originalLength = originalLength,
+                command = command,
+                output = output,
+                exitCode = (detail.opt("exit_code") as? Number)?.toInt(),
+                status = status,
+            )
+        }
+        else -> null
+    }
+}.getOrNull()
+
+private fun JSONObject.optionalString(key: String): String? =
+    if (!has(key) || isNull(key)) null else optString(key)
 
 data class CodexChatResult(
     val text: String,
@@ -305,19 +447,25 @@ class HttpCodexChatClient(
                         onText(text)
                     }
                     "tool_call" -> jsonString(json, "name")?.let { name ->
-                        val eventId = toolProcessEventId(name, jsonString(json, "call_id"))
+                        val callId = jsonString(json, "call_id")
+                        val eventId = toolProcessEventId(name, callId)
+                        val toolDetail = parseToolDetailEnvelope(json, callId)
                         toolCalls[eventId] = CodexToolCallEvidence(name, "running")
-                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolCall, toolTitle(name), ChatProcessStatus.Running, jsonString(json, "summary")))
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolCall, toolTitle(name), ChatProcessStatus.Running, jsonString(json, "summary"), toolDetail))
                     }
                     "tool_result" -> jsonString(json, "name")?.let { name ->
-                        val eventId = toolProcessEventId(name, jsonString(json, "call_id"))
+                        val callId = jsonString(json, "call_id")
+                        val eventId = toolProcessEventId(name, callId)
+                        val toolDetail = parseToolDetailEnvelope(json, callId)
                         toolCalls[eventId] = CodexToolCallEvidence(name, "success")
-                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolResult, toolTitle(name), ChatProcessStatus.Succeeded, jsonString(json, "summary")))
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolResult, toolTitle(name), ChatProcessStatus.Succeeded, jsonString(json, "summary"), toolDetail))
                     }
                     "tool_error" -> jsonString(json, "name")?.let { name ->
-                        val eventId = toolProcessEventId(name, jsonString(json, "call_id"))
+                        val callId = jsonString(json, "call_id")
+                        val eventId = toolProcessEventId(name, callId)
+                        val toolDetail = parseToolDetailEnvelope(json, callId)
                         toolCalls[eventId] = CodexToolCallEvidence(name, "rejected")
-                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolError, toolTitle(name), ChatProcessStatus.Failed, jsonString(json, "message")))
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolError, toolTitle(name), ChatProcessStatus.Failed, jsonString(json, "message"), toolDetail))
                     }
                     "reasoning_status" -> jsonString(json, "summary")?.takeIf(String::isNotBlank)?.let { summary ->
                         onProcess(ChatProcessEvent("reasoning", ChatProcessKind.ReasoningStatus, "思考状态", ChatProcessStatus.Running, summary))

@@ -308,7 +308,7 @@ test('Codex runtime failure still removes every materialized attachment', async 
   assert.deepEqual(await fs.readdir(directory), [])
 })
 
-test('real Codex 0.146 JSONL shape maps text, safe tool events, usage and unavailable reasoning', async () => {
+test('real Codex 0.146 JSONL shape maps text, typed command detail, usage and unavailable reasoning', async () => {
   const calls = []
   const emitted = []
   let text = ''
@@ -348,14 +348,16 @@ test('real Codex 0.146 JSONL shape maps text, safe tool events, usage and unavai
   assert.deepEqual(emitted.map(item => item.event), [
     'tool_call', 'tool_call', 'tool_result', 'usage', 'reasoning_status',
   ])
-  assert.deepEqual(emitted[0].data, {
-    call_id: 'item_1', tool_type: 'command', name: 'shell', status: 'running', lifecycle: 'started',
-  })
+  assert.equal(emitted[0].data.call_id, 'item_1')
+  assert.equal(emitted[0].data.lifecycle, 'started')
+  assert.equal(emitted[0].data.tool_detail.command, '/bin/bash -lc printenv SECRET')
   assert.equal(emitted[1].data.lifecycle, 'updated')
   assert.equal(emitted[2].data.lifecycle, 'completed')
   assert.match(emitted[2].data.summary, /^Command completed/)
-  assert.equal(JSON.stringify(emitted).includes('printenv'), false)
-  assert.equal(JSON.stringify(emitted).includes('must-not-leak'), false)
+  assert.equal(emitted[2].data.tool_detail.output, 'must-not-leak')
+  assert.equal(emitted[2].data.tool_detail.exit_code, 0)
+  assert.equal('stdout' in emitted[2].data.tool_detail, false)
+  assert.equal('stderr' in emitted[2].data.tool_detail, false)
   assert.equal(emitted[3].data.actual_input_tokens, 32062)
   assert.equal(emitted[3].data.actual_output_tokens, 52)
   assert.equal(emitted[3].data.total_tokens, 32114)
@@ -405,7 +407,7 @@ test('user-visible Codex reasoning item is passed as a bounded redacted summary,
   assert.equal(reasoningEvents[2].data.summary, 'Checking Bearer [redacted] before answering.')
 })
 
-test('failed tool becomes tool_error without exposing its command or output', async () => {
+test('failed command becomes tool_error with bounded typed command detail', async () => {
   const emitted = []
   const adapter = new CodexCliRuntimeAdapter({
     spawnImpl: fakeSpawn([
@@ -423,9 +425,11 @@ test('failed tool becomes tool_error without exposing its command or output', as
     onEvent(event, data) { emitted.push({ event, data }) },
   })
   assert.deepEqual(emitted.slice(0, 2).map(item => item.event), ['tool_call', 'tool_error'])
+  assert.equal(emitted[1].data.tool_detail.call_id, 'tool-1')
+  assert.equal(emitted[1].data.tool_detail.command, 'secret command')
+  assert.equal(emitted[1].data.tool_detail.output, 'secret output')
+  assert.equal(emitted[1].data.tool_detail.exit_code, 1)
   assert.deepEqual(emitted.slice(0, 2).map(item => item.data.lifecycle), ['started', 'completed'])
-  assert.equal(JSON.stringify(emitted).includes('secret command'), false)
-  assert.equal(JSON.stringify(emitted).includes('secret output'), false)
 })
 
 test('file and MCP tool items preserve native started, updated and completed lifecycle', async () => {
