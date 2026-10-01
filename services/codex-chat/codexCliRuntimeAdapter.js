@@ -7,7 +7,12 @@ import { unknownQuota } from './runtimeContract.js'
 import { normalizeToolPreferenceIds, toolById } from '../../bridge/tool-center/catalog.js'
 import { SecureAttachmentMaterializer } from '../chat-runtime/secureAttachmentMaterializer.js'
 import { normalizeControlledMcpUrl } from '../chat-runtime/controlledMcpEndpoint.js'
-import { normalizeCodexCommand } from '../chat-runtime/toolDetailEnvelope.js'
+import {
+  normalizeCodexCommand,
+  normalizeCodexFileChange,
+  normalizeCodexMcpTool,
+  normalizeCodexWebSearch,
+} from '../chat-runtime/toolDetailEnvelope.js'
 import {
   emitRuntimeProvenance,
   normalizeRuntimeTrace,
@@ -239,6 +244,14 @@ function toolOutcome(item, descriptor) {
     lifecycle: 'completed',
     summary,
   }
+}
+
+function normalizeCodexToolDetail(item, prior = null) {
+  if (item?.type === 'command_execution') return normalizeCodexCommand(item)
+  if (item?.type === 'mcp_tool_call') return normalizeCodexMcpTool(item, prior)
+  if (item?.type === 'file_change') return normalizeCodexFileChange(item, prior)
+  if (item?.type === 'web_search') return normalizeCodexWebSearch(item, prior)
+  return null
 }
 
 function reasoningSummary(item) {
@@ -542,6 +555,7 @@ export class CodexCliRuntimeAdapter {
     let usage = null
     let reasoningSeen = false
     let turnFailed = null
+    const toolDetails = new Map()
 
     try {
       await this.sendMessage({
@@ -569,8 +583,10 @@ export class CodexCliRuntimeAdapter {
           if (descriptor) {
             const lifecycle = event.type === 'item.started' ? 'started' : 'updated'
             if (lifecycle === 'started') startedTools.add(descriptor.call_id)
-            const toolDetail = event.item?.type === 'command_execution'
-              ? normalizeCodexCommand(event.item) : null
+            const toolDetail = normalizeCodexToolDetail(
+              event.item, toolDetails.get(descriptor.call_id) || null,
+            )
+            if (toolDetail) toolDetails.set(descriptor.call_id, toolDetail)
             onEvent('tool_call', {
               ...descriptor, status: 'running', lifecycle,
               ...(toolDetail ? { tool_detail: toolDetail } : {}),
@@ -598,16 +614,20 @@ export class CodexCliRuntimeAdapter {
           if (descriptor) {
             if (!startedTools.has(descriptor.call_id)) {
               startedTools.add(descriptor.call_id)
-              const startedDetail = event.item?.type === 'command_execution'
-                ? normalizeCodexCommand(event.item) : null
+              const startedDetail = normalizeCodexToolDetail(
+                event.item, toolDetails.get(descriptor.call_id) || null,
+              )
+              if (startedDetail) toolDetails.set(descriptor.call_id, startedDetail)
               onEvent('tool_call', {
                 ...descriptor, status: 'running', lifecycle: 'started',
                 ...(startedDetail ? { tool_detail: startedDetail } : {}),
               })
             }
             const outcome = toolOutcome(event.item, descriptor)
-            const toolDetail = event.item?.type === 'command_execution'
-              ? normalizeCodexCommand(event.item) : null
+            const toolDetail = normalizeCodexToolDetail(
+              event.item, toolDetails.get(descriptor.call_id) || null,
+            )
+            if (toolDetail) toolDetails.set(descriptor.call_id, toolDetail)
             onEvent(outcome.status === 'failed' ? 'tool_error' : 'tool_result', {
               ...outcome,
               ...(toolDetail ? { tool_detail: toolDetail } : {}),

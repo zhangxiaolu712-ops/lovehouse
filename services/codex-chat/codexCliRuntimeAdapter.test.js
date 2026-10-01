@@ -467,6 +467,78 @@ test('file and MCP tool items preserve native started, updated and completed lif
   assert.equal(tools.at(-1).data.name, 'lovehouse.wake_up')
 })
 
+test('Codex 0.151 MCP, file change and web search shapes emit safe generic detail by stable item id', async () => {
+  const emitted = []
+  const adapter = new CodexCliRuntimeAdapter({
+    spawnImpl: fakeSpawn([
+      { type: 'thread.started', thread_id: SESSION_ID },
+      { type: 'item.started', item: {
+        id: 'mcp-1', type: 'mcp_tool_call', server: 'dynamic-a', tool: 'same_name',
+        arguments: { city: 'Shanghai', nested: { units: 'metric' } }, status: 'in_progress',
+      } },
+      { type: 'item.started', item: {
+        id: 'mcp-2', type: 'mcp_tool_call', server: 'dynamic-b', tool: 'same_name',
+        arguments: { city: 'Beijing' }, status: 'in_progress',
+      } },
+      { type: 'item.updated', item: {
+        id: 'mcp-1', type: 'mcp_tool_call', server: 'dynamic-a', tool: 'same_name',
+        status: 'in_progress',
+      } },
+      { type: 'item.completed', item: {
+        id: 'mcp-2', type: 'mcp_tool_call', server: 'dynamic-b', tool: 'same_name',
+        status: 'completed', result: {
+          content: [{ type: 'text', text: 'second' }],
+          structured_content: { items: [2, 3] }, _meta: { token: 'drop-me' },
+        },
+      } },
+      { type: 'item.completed', item: {
+        id: 'mcp-1', type: 'mcp_tool_call', server: 'dynamic-a', tool: 'same_name',
+        status: 'completed', result: {
+          content: [{ type: 'text', text: 'first' }],
+          structured_content: { items: [1] },
+        },
+      } },
+      { type: 'item.completed', item: {
+        id: 'file-1', type: 'file_change',
+        changes: [{ path: '/tmp/report.txt', kind: 'update', diff: 'drop-me' }],
+        status: 'completed',
+      } },
+      { type: 'item.completed', item: {
+        id: 'web-1', type: 'web_search', query: 'provider-neutral query',
+        results: [{ title: 'not-in-exec-contract' }],
+      } },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Done.' } },
+      { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } },
+    ]),
+  })
+  await adapter.streamEvents({
+    message: 'use tools', history: [], onRuntimeBinding() {}, onText() {},
+    onEvent(event, data) { emitted.push({ event, data }) },
+  })
+
+  const mcp1 = emitted.filter(item => item.data?.call_id === 'mcp-1')
+  const mcp2 = emitted.filter(item => item.data?.call_id === 'mcp-2')
+  assert.deepEqual(mcp1.map(item => item.data.lifecycle), ['started', 'updated', 'completed'])
+  assert.deepEqual(mcp2.map(item => item.data.lifecycle), ['started', 'completed'])
+  assert.equal(mcp1[0].data.tool_detail.call_id, 'mcp-1')
+  assert.equal(mcp2[0].data.tool_detail.call_id, 'mcp-2')
+  assert.equal(mcp1[0].data.tool_detail.created_at, mcp1.at(-1).data.tool_detail.created_at)
+  assert.equal(mcp2[0].data.tool_detail.created_at, mcp2.at(-1).data.tool_detail.created_at)
+  assert.match(JSON.stringify(mcp1.at(-1).data.tool_detail), /Shanghai|metric|first/)
+  assert.match(JSON.stringify(mcp2.at(-1).data.tool_detail), /Beijing|second/)
+  assert.doesNotMatch(JSON.stringify(mcp2.at(-1).data.tool_detail), /drop-me|_meta/)
+
+  const file = emitted.filter(item => item.data?.call_id === 'file-1')
+  assert.deepEqual(file.map(item => item.event), ['tool_call', 'tool_result'])
+  assert.match(JSON.stringify(file.at(-1).data.tool_detail), /report\.txt|update|completed/)
+  assert.doesNotMatch(JSON.stringify(file.at(-1).data.tool_detail), /drop-me|diff/)
+
+  const web = emitted.filter(item => item.data?.call_id === 'web-1')
+  assert.deepEqual(web.map(item => item.event), ['tool_call', 'tool_result'])
+  assert.match(JSON.stringify(web.at(-1).data.tool_detail), /provider-neutral query/)
+  assert.doesNotMatch(JSON.stringify(web.at(-1).data.tool_detail), /not-in-exec-contract|results/)
+})
+
 test('confirmed missing resume recovers with bounded context but keeps caller thread identity outside adapter', async () => {
   const calls = []
   let invocation = 0

@@ -5,6 +5,9 @@ import {
   normalizeClaudeToolInput,
   normalizeClaudeToolResult,
   normalizeCodexCommand,
+  normalizeCodexFileChange,
+  normalizeCodexMcpTool,
+  normalizeCodexWebSearch,
   TOOL_DETAIL_LIMITS,
   validateToolDetailEnvelope,
 } from './toolDetailEnvelope.js'
@@ -78,6 +81,63 @@ test('Codex command uses bounded output and does not invent stdout or stderr', (
   assert.equal('extra' in detail, false)
 })
 
+test('Codex MCP lifecycle merges nested arguments and allowlisted result on the same call id', () => {
+  const started = normalizeCodexMcpTool({
+    type: 'mcp_tool_call', id: 'mcp-1', status: 'in_progress',
+    arguments: { city: 'Shanghai', options: { units: 'metric' }, api_key: 'hidden' },
+  }, null, NOW)
+  const completed = normalizeCodexMcpTool({
+    type: 'mcp_tool_call', id: 'mcp-1', status: 'completed',
+    result: {
+      content: [
+        { type: 'text', text: 'done', annotations: { token: 'must-drop' }, raw: 'must-drop' },
+        { type: 'image', data: 'must-drop' },
+      ],
+      structured_content: { items: [{ id: 1 }, { id: 2 }] },
+      _meta: { token: 'must-drop' },
+      raw_payload: 'must-drop',
+    },
+  }, started, NOW)
+  assert.equal(completed.call_id, 'mcp-1')
+  assert.equal(completed.created_at, started.created_at)
+  assert.match(serialized(completed), /Shanghai|metric|done/)
+  assert.doesNotMatch(serialized(completed), /hidden|must-drop|raw_payload|_meta/)
+  assert.deepEqual(validateToolDetailEnvelope(completed, 'mcp-1'), completed)
+})
+
+test('Codex MCP error is bounded and sensitive values are redacted', () => {
+  const detail = normalizeCodexMcpTool({
+    type: 'mcp_tool_call', id: 'mcp-error', status: 'failed',
+    arguments: { query: 'safe' }, error: { message: 'Bearer hidden-token failed' },
+  }, null, NOW)
+  assert.equal(detail.is_error, true)
+  assert.match(serialized(detail), /Bearer \[REDACTED\]/)
+  assert.doesNotMatch(serialized(detail), /hidden-token/)
+})
+
+test('Codex file change only keeps verified path kind and status fields', () => {
+  const detail = normalizeCodexFileChange({
+    type: 'file_change', id: 'file-1', status: 'completed',
+    changes: [
+      { path: '/tmp/a.txt', kind: 'add', diff: 'must-drop' },
+      { path: '/tmp/b.txt', kind: 'update', before: 'must-drop' },
+      { path: '/tmp/c.txt', kind: 'unknown' },
+    ],
+    patch: 'must-drop',
+  }, null, NOW)
+  assert.match(serialized(detail), /a\.txt|b\.txt|completed/)
+  assert.doesNotMatch(serialized(detail), /c\.txt|diff|before|patch|must-drop/)
+})
+
+test('Codex web search keeps the verified query and does not invent results', () => {
+  const detail = normalizeCodexWebSearch({
+    type: 'web_search', id: 'web-1', query: 'safe query', results: [{ title: 'must-drop' }],
+  }, null, NOW)
+  assert.match(serialized(detail), /safe query/)
+  assert.equal('result' in detail, false)
+  assert.doesNotMatch(serialized(detail), /must-drop|results/)
+})
+
 test('Bridge validator reconstructs allowlisted fields and drops unknown or malformed envelopes', () => {
   const detail = normalizeCodexCommand({
     type: 'command_execution', id: 'cmd-2', command: 'pwd', aggregated_output: '/tmp',
@@ -101,4 +161,7 @@ test('missing call ids drop detail instead of creating a name-based identity', (
   assert.equal(normalizeClaudeToolInput({ type: 'tool_use', input: { safe: true } }, NOW), null)
   assert.equal(normalizeClaudeToolResult({ type: 'tool_result', content: 'done' }, null, NOW), null)
   assert.equal(normalizeCodexCommand({ type: 'command_execution', command: 'pwd' }, NOW), null)
+  assert.equal(normalizeCodexMcpTool({ type: 'mcp_tool_call', arguments: { safe: true } }, null, NOW), null)
+  assert.equal(normalizeCodexFileChange({ type: 'file_change', changes: [] }, null, NOW), null)
+  assert.equal(normalizeCodexWebSearch({ type: 'web_search', query: 'safe' }, null, NOW), null)
 })

@@ -126,6 +126,29 @@ function common(callId, detailKind, now) {
   }
 }
 
+function genericEnvelope(callId, { argumentsValue, resultValue, isError = false } = {}, prior = null, now = () => new Date()) {
+  const base = common(callId, 'generic_tool', now)
+  if (!base) return null
+  const previous = prior?.detail_kind === 'generic_tool' && prior.call_id === base.call_id ? prior : null
+  const argumentsDetail = argumentsValue === undefined
+    ? null : boundedSafeValue(argumentsValue, TOOL_DETAIL_LIMITS.genericArguments)
+  const resultDetail = resultValue === undefined
+    ? null : boundedSafeValue(resultValue, TOOL_DETAIL_LIMITS.genericResult)
+  const envelope = {
+    ...base,
+    created_at: previous?.created_at || base.created_at,
+    truncated: Boolean(previous?.truncated)
+      || argumentsDetail?.truncated === true || resultDetail?.truncated === true,
+    original_length: (argumentsDetail?.originalLength
+      ?? (Number.isInteger(previous?.original_length) ? previous.original_length : 0))
+      + (resultDetail?.originalLength || 0),
+    ...(argumentsDetail ? { arguments: argumentsDetail.value } : previous?.arguments ? { arguments: previous.arguments } : {}),
+    ...(resultDetail ? { result: resultDetail.value } : previous?.result ? { result: previous.result } : {}),
+    ...(isError || previous?.is_error === true ? { is_error: true } : {}),
+  }
+  return byteLength(JSON.stringify(envelope)) <= TOOL_DETAIL_LIMITS.envelope ? envelope : null
+}
+
 export function normalizeClaudeToolInput(block, now = () => new Date()) {
   if (block?.type !== 'tool_use') return null
   const base = common(block.id, 'generic_tool', now)
@@ -177,6 +200,76 @@ export function normalizeCodexCommand(item, now = () => new Date()) {
     ...(COMMAND_STATUSES.has(item.status) ? { status: item.status } : {}),
   }
   return byteLength(JSON.stringify(envelope)) <= TOOL_DETAIL_LIMITS.envelope ? envelope : null
+}
+
+export function normalizeCodexMcpTool(item, prior = null, now = () => new Date()) {
+  if (item?.type !== 'mcp_tool_call') return null
+  const content = Array.isArray(item.result?.content)
+    ? item.result.content.flatMap(block => {
+        if (!block || typeof block !== 'object' || Array.isArray(block)) return []
+        if (block.type === 'text' && typeof block.text === 'string') {
+          return [{ type: 'text', text: block.text }]
+        }
+        if (block.type === 'resource_link' && typeof block.name === 'string' && typeof block.uri === 'string') {
+          return [{
+            type: 'resource_link', name: block.name, uri: block.uri,
+            ...(typeof block.title === 'string' ? { title: block.title } : {}),
+            ...(typeof block.description === 'string' ? { description: block.description } : {}),
+            ...(typeof block.mimeType === 'string' ? { mime_type: block.mimeType } : {}),
+            ...(Number.isSafeInteger(block.size) && block.size >= 0 ? { size: block.size } : {}),
+          }]
+        }
+        if (block.type === 'resource' && block.resource && typeof block.resource === 'object'
+          && typeof block.resource.uri === 'string') {
+          return [{
+            type: 'resource',
+            resource: {
+              uri: block.resource.uri,
+              ...(typeof block.resource.mimeType === 'string' ? { mime_type: block.resource.mimeType } : {}),
+              ...(typeof block.resource.text === 'string' ? { text: block.resource.text } : {}),
+            },
+          }]
+        }
+        return []
+      })
+    : null
+  const result = item.result && typeof item.result === 'object' && !Array.isArray(item.result)
+    ? {
+        ...(content ? { content } : {}),
+        ...(item.result.structured_content !== undefined
+          ? { structured_content: item.result.structured_content } : {}),
+      }
+    : item.error && typeof item.error === 'object' && typeof item.error.message === 'string'
+      ? { error: item.error.message }
+      : undefined
+  return genericEnvelope(item.id, {
+    ...(item.arguments !== undefined ? { argumentsValue: item.arguments } : {}),
+    ...(result !== undefined ? { resultValue: result } : {}),
+    isError: item.status === 'failed' || Boolean(item.error),
+  }, prior, now)
+}
+
+export function normalizeCodexFileChange(item, prior = null, now = () => new Date()) {
+  if (item?.type !== 'file_change') return null
+  const changes = Array.isArray(item.changes)
+    ? item.changes.flatMap(change => {
+        if (!change || typeof change.path !== 'string'
+          || !['add', 'delete', 'update'].includes(change.kind)) return []
+        return [{ path: change.path, kind: change.kind }]
+      })
+    : []
+  return genericEnvelope(item.id, {
+    argumentsValue: { changes },
+    ...(typeof item.status === 'string' ? { resultValue: { status: item.status } } : {}),
+    isError: item.status === 'failed',
+  }, prior, now)
+}
+
+export function normalizeCodexWebSearch(item, prior = null, now = () => new Date()) {
+  if (item?.type !== 'web_search' || typeof item.query !== 'string') return null
+  return genericEnvelope(item.id, {
+    argumentsValue: { query: item.query },
+  }, prior, now)
 }
 
 function validateSafeValue(value, depth = 0) {
