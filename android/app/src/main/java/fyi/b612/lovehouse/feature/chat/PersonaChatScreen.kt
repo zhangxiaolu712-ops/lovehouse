@@ -444,6 +444,7 @@ fun ChatShellScreen(
     var openedBundle by remember { mutableStateOf<ChatMessageUi?>(null) }
     var actionNotice by remember { mutableStateOf<String?>(null) }
     var expandedActionMessageId by remember(threadId) { mutableStateOf<String?>(null) }
+    var toolDetailSheet by remember(threadId) { mutableStateOf<ToolDetailSheetState?>(null) }
     var followLatest by remember(threadId) { mutableStateOf(true) }
     var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
@@ -702,6 +703,22 @@ fun ChatShellScreen(
                             onForward = { forwardingIds = setOf(message.messageId); panel = PersonaPanel.ForwardTarget },
                             onOpenBundle = { openedBundle = message; panel = PersonaPanel.ForwardBundle },
                             onOpenWorkflow = { message.taskId?.let { openWorkflowTaskId = it } },
+                            onOpenToolDetail = { event ->
+                                val request = ToolDetailSheetRequest(message.messageId, event.id, processTimelineTitle(event))
+                                toolDetailSheet = ToolDetailSheetState(request = request)
+                                chatScope.launch {
+                                    val detail = try {
+                                        store.toolDetail(request.assistantMessageId, request.eventId)
+                                    } catch (error: CancellationException) {
+                                        throw error
+                                    } catch (_: Throwable) {
+                                        null
+                                    }
+                                    if (toolDetailSheet?.request == request) {
+                                        toolDetailSheet = ToolDetailSheetState(request = request, loading = false, detail = detail)
+                                    }
+                                }
+                            },
                             onAction = { action ->
                                 actionNotice = when (action) {
                                     "复制" -> { clipboard.setText(AnnotatedString(message.body)); "已复制" }
@@ -826,6 +843,13 @@ fun ChatShellScreen(
                     },
                 )
             }
+        }
+        toolDetailSheet?.let { state ->
+            ToolDetailBottomSheet(
+                state = state,
+                visualContext = visualContext,
+                onDismiss = { toolDetailSheet = null },
+            )
         }
     }
 }
@@ -1080,14 +1104,24 @@ internal fun toggleProcessTimelineExpansion(
     return if (event.id in expandedEventIds) expandedEventIds - event.id else expandedEventIds + event.id
 }
 
-@Composable internal fun ProcessTimeline(events: List<ChatProcessEvent>) {
+private fun ChatProcessEvent.isToolTimelineEvent(): Boolean = when (kind) {
+    ChatProcessKind.ToolCall, ChatProcessKind.ToolResult, ChatProcessKind.ToolError -> true
+    else -> false
+}
+
+@Composable internal fun ProcessTimeline(
+    events: List<ChatProcessEvent>,
+    onOpenToolDetail: (ChatProcessEvent) -> Unit = {},
+) {
     var expandedEventIds by remember { mutableStateOf(emptySet<String>()) }
     Column(
         Modifier.padding(top = 5.dp, bottom = 4.dp),
     ) {
         events.forEachIndexed { index, event ->
             val expanded = event.id in expandedEventIds
-            val hasDetail = !event.detail.isNullOrBlank()
+            val toolEvent = event.isToolTimelineEvent()
+            val hasInlineDetail = !toolEvent && !event.detail.isNullOrBlank()
+            val interactive = toolEvent || hasInlineDetail
             val failed = processTimelineIsFailed(event)
             val connectorColor = PersonaMuted.copy(alpha = .28f)
             Row(
@@ -1118,8 +1152,9 @@ internal fun toggleProcessTimelineExpansion(
                     }
                     .testTag("process-timeline-item:${event.id}")
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(enabled = hasDetail) {
-                        expandedEventIds = toggleProcessTimelineExpansion(expandedEventIds, event)
+                    .clickable(enabled = interactive) {
+                        if (toolEvent) onOpenToolDetail(event)
+                        else expandedEventIds = toggleProcessTimelineExpansion(expandedEventIds, event)
                     }
                     .padding(bottom = if (processTimelineHasOutgoingConnector(index, events.size)) 5.dp else 0.dp),
                 verticalAlignment = Alignment.Top,
@@ -1135,9 +1170,9 @@ internal fun toggleProcessTimelineExpansion(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(processTimelineTitle(event), color = PersonaInk.copy(alpha = .76f), fontSize = 9.sp)
                         if (event.status == ChatProcessStatus.Running) BreathingDots()
-                        if (hasDetail) {
+                        if (interactive) {
                             LoveHouseIconView(
-                                if (expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
+                                if (!toolEvent && expanded) LoveHouseIcon.Collapse else LoveHouseIcon.Expand,
                                 null,
                                 Modifier.padding(start = 5.dp).size(11.dp),
                                 PersonaMuted,
@@ -1146,7 +1181,7 @@ internal fun toggleProcessTimelineExpansion(
                         }
                     }
                     AnimatedVisibility(
-                        visible = expanded,
+                        visible = hasInlineDetail && expanded,
                         enter = fadeIn(tween(120)) + expandVertically(),
                         exit = fadeOut(tween(90)) + shrinkVertically(),
                     ) {
@@ -1192,6 +1227,7 @@ private fun BreathingDots() {
     onForward: () -> Unit,
     onOpenBundle: () -> Unit,
     onOpenWorkflow: () -> Unit,
+    onOpenToolDetail: (ChatProcessEvent) -> Unit,
     onAction: (String) -> Unit,
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.mine) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Top) {
@@ -1212,7 +1248,7 @@ private fun BreathingDots() {
                 if (!message.mine) Text(message.time, color = PersonaMuted, fontSize = 7.5.sp)
             }
             if (!message.mine && message.processEvents.isNotEmpty()) {
-                ProcessTimeline(message.processEvents)
+                ProcessTimeline(message.processEvents, onOpenToolDetail)
             }
             val bubbleModifier = Modifier.combinedClickable(
                 onClick = {

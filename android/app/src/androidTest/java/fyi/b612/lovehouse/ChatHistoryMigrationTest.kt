@@ -324,6 +324,8 @@ class ChatHistoryMigrationTest {
         val reopened = SQLiteLocalChatMessageRepository(context, databaseName, nowEpochMillis = { clock })
         val restored = reopened.detail(assistantId, eventId)
         assertEquals(completed.detail, restored?.detail)
+        assertEquals(initial.createdAtEpochMillis, restored?.createdAtEpochMillis)
+        assertEquals(initial.expiresAtEpochMillis, restored?.expiresAtEpochMillis)
         assertEquals(1, reopened.messages("thread").single().processEvents.size)
         reopened.close()
 

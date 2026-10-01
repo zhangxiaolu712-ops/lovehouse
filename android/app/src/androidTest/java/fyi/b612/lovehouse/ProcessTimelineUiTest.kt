@@ -10,6 +10,7 @@ import fyi.b612.lovehouse.feature.chat.ChatProcessKind
 import fyi.b612.lovehouse.feature.chat.ChatProcessStatus
 import fyi.b612.lovehouse.feature.chat.ProcessTimeline
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -18,7 +19,7 @@ class ProcessTimelineUiTest {
     val compose = createComposeRule()
 
     @Test
-    fun itemsDefaultCollapsedExpandIndependentlyAndConnectorTracksMeasuredHeight() {
+    fun thinkingExpandsInlineWhileToolOpensDetailByStableEventIdentity() {
         val thinking = ChatProcessEvent(
             id = "thinking",
             kind = ChatProcessKind.Thinking,
@@ -33,7 +34,12 @@ class ProcessTimelineUiTest {
             status = ChatProcessStatus.Succeeded,
             detail = "读取完成",
         )
-        compose.setContent { MaterialTheme { ProcessTimeline(listOf(thinking, tool)) } }
+        var openedToolId: String? = null
+        compose.setContent {
+            MaterialTheme {
+                ProcessTimeline(listOf(thinking, tool)) { openedToolId = it.id }
+            }
+        }
 
         compose.onNodeWithTag("process-timeline-detail:thinking").assertDoesNotExist()
         compose.onNodeWithTag("process-timeline-detail:tool-call:one").assertDoesNotExist()
@@ -51,11 +57,12 @@ class ProcessTimelineUiTest {
         compose.onNodeWithTag("process-timeline-item:tool-call:one").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("process-timeline-detail:thinking").assertIsDisplayed()
-        compose.onNodeWithTag("process-timeline-detail:tool-call:one").assertIsDisplayed()
+        compose.onNodeWithTag("process-timeline-detail:tool-call:one").assertDoesNotExist()
+        assertEquals("tool-call:one", openedToolId)
 
         compose.onNodeWithTag("process-timeline-item:thinking").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("process-timeline-detail:thinking").assertDoesNotExist()
-        compose.onNodeWithTag("process-timeline-detail:tool-call:one").assertIsDisplayed()
+        compose.onNodeWithTag("process-timeline-detail:tool-call:one").assertDoesNotExist()
     }
 }
