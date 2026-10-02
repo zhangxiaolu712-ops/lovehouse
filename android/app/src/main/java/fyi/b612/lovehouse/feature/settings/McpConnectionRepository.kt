@@ -33,6 +33,7 @@ data class McpBackendConnection(
     val boundIdentityIds: List<String> = emptyList(),
     val tools: List<McpDiscoveredTool> = emptyList(),
     val displayName: String? = null,
+    val note: String? = null,
 )
 
 data class McpToolService(
@@ -41,12 +42,78 @@ data class McpToolService(
     val displayName: String?,
     val connectionCount: Int,
     val connectedConnectionCount: Int,
+    val note: String? = null,
+    val enabled: Boolean = true,
 )
 
 data class McpDiscoveredTool(
     val name: String,
     val description: String? = null,
+    val toolId: String? = null,
+    val inputSchema: String? = null,
 )
+
+enum class McpToolPolicyDecision { DENY, ASK, ALLOW }
+
+enum class McpToolPolicyScopeType {
+    PERSONA_CONNECTION_TOOL,
+    PERSONA_CONNECTION,
+    ACCOUNT_CONNECTION_TOOL,
+    ACCOUNT_CONNECTION,
+    ACCOUNT,
+}
+
+data class McpToolPolicyRecord(
+    val id: String,
+    val scopeType: McpToolPolicyScopeType,
+    val decision: McpToolPolicyDecision,
+    val policyRevision: Long,
+    val personaId: String? = null,
+    val connectionId: String? = null,
+    val toolId: String? = null,
+)
+
+data class McpToolPolicyState(
+    val policyRevision: Long,
+    val policies: List<McpToolPolicyRecord>,
+)
+
+data class McpToolPolicyDraft(
+    val scopeType: McpToolPolicyScopeType,
+    val decision: McpToolPolicyDecision,
+    val personaId: String? = null,
+    val connectionId: String? = null,
+    val toolId: String? = null,
+) {
+    companion object {
+        fun accountConnectionTool(
+            connectionId: String,
+            toolId: String,
+            decision: McpToolPolicyDecision,
+        ) = McpToolPolicyDraft(
+            scopeType = McpToolPolicyScopeType.ACCOUNT_CONNECTION_TOOL,
+            decision = decision,
+            connectionId = connectionId,
+            toolId = toolId,
+        )
+    }
+}
+
+data class McpToolPolicyMutation(
+    val policyRevision: Long,
+    val policy: McpToolPolicyRecord,
+)
+
+data class McpToolServiceUpdate(val displayName: String?, val note: String?)
+
+data class McpConnectionUpdate(
+    val displayName: String? = null,
+    val note: String? = null,
+    val enabled: Boolean? = null,
+    val updateMetadata: Boolean = false,
+)
+
+enum class McpToolServiceDeleteResult { Deleted, AlreadyAbsent, HasConnections }
 
 data class McpEffectiveConnection(
     val connectionId: String,
@@ -91,6 +158,18 @@ interface McpConnectionRepository {
     suspend fun registry(): List<McpBackendConnection>
     suspend fun toolServices(): List<McpToolService> = emptyList()
     suspend fun serviceConnections(toolServiceId: String): List<McpBackendConnection> = emptyList()
+    suspend fun connectionTools(connectionId: String): List<McpDiscoveredTool> = emptyList()
+    suspend fun toolPolicies(): McpToolPolicyState = McpToolPolicyState(0, emptyList())
+    suspend fun putToolPolicy(draft: McpToolPolicyDraft): McpToolPolicyMutation =
+        error("Tool Policy 尚未接入")
+    suspend fun deleteToolPolicy(policyId: String): McpToolPolicyMutation =
+        error("Tool Policy 尚未接入")
+    suspend fun updateToolService(toolServiceId: String, update: McpToolServiceUpdate): McpToolService =
+        error("Tool Service 更新尚未接入")
+    suspend fun deleteToolService(toolServiceId: String): McpToolServiceDeleteResult =
+        error("Tool Service 删除尚未接入")
+    suspend fun updateConnection(connectionId: String, update: McpConnectionUpdate): McpBackendConnection =
+        error("MCP Connection 更新尚未接入")
     suspend fun connect(serverUrl: String): McpConnectionStart
     suspend fun delete(connectionId: String): McpConnectionDeleteResult
     suspend fun bindIdentity(toolServiceId: String, identityId: String, connectionId: String)
@@ -101,6 +180,27 @@ interface McpConnectionRepository {
 
 internal fun appBackendMcpEndpoint(baseUrl: String, path: String): String =
     "${baseUrl.trimEnd('/')}/api/mcp/${path.trimStart('/')}"
+
+internal fun mcpToolPolicyFields(draft: McpToolPolicyDraft): Map<String, Any> = buildMap {
+    put("scope_type", draft.scopeType.name)
+    put("policy", draft.decision.name)
+    draft.personaId?.let { put("persona_id", it) }
+    draft.connectionId?.let { put("connection_id", it) }
+    draft.toolId?.let { put("tool_id", it) }
+}
+
+internal fun mcpToolServiceUpdateFields(update: McpToolServiceUpdate): Map<String, Any?> = mapOf(
+    "display_name" to update.displayName,
+    "note" to update.note,
+)
+
+internal fun mcpConnectionUpdateFields(update: McpConnectionUpdate): Map<String, Any?> = buildMap {
+    if (update.updateMetadata) {
+        put("display_name", update.displayName)
+        put("note", update.note)
+    }
+    update.enabled?.let { put("enabled", it) }
+}
 
 internal fun opaqueMcpServerEndpoint(value: String): String? = value.takeIf(String::isNotBlank)
 
@@ -196,6 +296,8 @@ class AppBackendMcpConnectionRepository(
                     displayName = service.firstString("display_name"),
                     connectionCount = service.firstInt("connections") ?: 0,
                     connectedConnectionCount = service.firstInt("connected_connections") ?: 0,
+                    note = service.firstString("note"),
+                    enabled = if (service.has("enabled")) service.optBoolean("enabled") else true,
                 ))
             }
         }
@@ -205,6 +307,65 @@ class AppBackendMcpConnectionRepository(
         request("GET", appBackendMcpEndpoint(baseUrl, "tool-services/${encodePathSegment(toolServiceId)}/connections"))
             .optJSONArray("connections")
             .toConnections()
+
+    override suspend fun connectionTools(connectionId: String): List<McpDiscoveredTool> {
+        val payload = request(
+            "GET",
+            appBackendMcpEndpoint(baseUrl, "connections/${encodePathSegment(connectionId)}/tools"),
+        )
+        check(payload.optString("status") == "ok") { "App Backend 未返回可用工具" }
+        return payload.optJSONArray("tools").toAuthoritativeTools()
+    }
+
+    override suspend fun toolPolicies(): McpToolPolicyState =
+        request("GET", appBackendMcpEndpoint(baseUrl, "tool-policies")).toToolPolicyState()
+
+    override suspend fun putToolPolicy(draft: McpToolPolicyDraft): McpToolPolicyMutation {
+        val payload = request(
+            method = "PUT",
+            endpoint = appBackendMcpEndpoint(baseUrl, "tool-policies"),
+            body = JSONObject(mcpToolPolicyFields(draft)).toString(),
+        )
+        return McpToolPolicyMutation(payload.optLong("policy_revision"), payload.toToolPolicyRecord())
+    }
+
+    override suspend fun deleteToolPolicy(policyId: String): McpToolPolicyMutation {
+        val payload = request(
+            "DELETE",
+            appBackendMcpEndpoint(baseUrl, "tool-policies/${encodePathSegment(policyId)}"),
+        )
+        val policy = payload.optJSONObject("policy") ?: error("App Backend 未返回已删除的 Tool Policy")
+        return McpToolPolicyMutation(payload.optLong("policy_revision"), policy.toToolPolicyRecord())
+    }
+
+    override suspend fun updateToolService(
+        toolServiceId: String,
+        update: McpToolServiceUpdate,
+    ): McpToolService = request(
+        method = "PATCH",
+        endpoint = appBackendMcpEndpoint(baseUrl, "tool-services/${encodePathSegment(toolServiceId)}"),
+        body = JSONObject(mcpToolServiceUpdateFields(update)).toString(),
+    ).toToolService()
+
+    override suspend fun deleteToolService(toolServiceId: String): McpToolServiceDeleteResult = try {
+        request("DELETE", appBackendMcpEndpoint(baseUrl, "tool-services/${encodePathSegment(toolServiceId)}"))
+        McpToolServiceDeleteResult.Deleted
+    } catch (error: McpHttpException) {
+        when (error.errorCode) {
+            "MCP_TOOL_SERVICE_NOT_FOUND" -> McpToolServiceDeleteResult.AlreadyAbsent
+            "TOOL_SERVICE_HAS_CONNECTIONS" -> McpToolServiceDeleteResult.HasConnections
+            else -> throw error
+        }
+    }
+
+    override suspend fun updateConnection(
+        connectionId: String,
+        update: McpConnectionUpdate,
+    ): McpBackendConnection = request(
+        method = "PATCH",
+        endpoint = mcpConnectionEndpoint(baseUrl, connectionId),
+        body = JSONObject(mcpConnectionUpdateFields(update)).toString(),
+    ).toConnection()
 
     override suspend fun connect(serverUrl: String): McpConnectionStart {
         val endpoint = opaqueMcpServerEndpoint(serverUrl) ?: error("请输入完整的 MCP Server URL")
@@ -339,6 +500,7 @@ private fun JSONObject.toConnection(): McpBackendConnection {
         boundIdentityIds = optJSONArray("bound_identities").toStringList(),
         tools = tools.toTools(),
         displayName = firstString("display_name"),
+        note = firstString("note"),
     )
 }
 
@@ -347,12 +509,66 @@ private fun JSONArray?.toTools(): List<McpDiscoveredTool> = this?.let { array ->
         for (index in 0 until array.length()) {
             array.optJSONObject(index)?.let { tool ->
                 tool.optString("name").takeIf(String::isNotBlank)?.let { name ->
-                    add(McpDiscoveredTool(name, tool.optString("description").takeIf(String::isNotBlank)))
+                    add(McpDiscoveredTool(
+                        name = name,
+                        description = tool.optString("description").takeIf(String::isNotBlank),
+                        toolId = tool.optString("tool_id").takeIf(String::isNotBlank),
+                        inputSchema = tool.optJSONObject("inputSchema")?.toString(2),
+                    ))
                 }
             }
         }
     }
 }.orEmpty()
+
+internal fun JSONArray?.toAuthoritativeTools(): List<McpDiscoveredTool> = this?.let { array ->
+    buildList {
+        for (index in 0 until array.length()) {
+            array.optJSONObject(index)?.let { tool ->
+                val toolId = tool.optString("tool_id").takeIf(String::isNotBlank) ?: return@let
+                val name = tool.optString("tool_name").takeIf(String::isNotBlank) ?: return@let
+                add(McpDiscoveredTool(
+                    name = name,
+                    description = tool.optString("description").takeIf(String::isNotBlank),
+                    toolId = toolId,
+                    inputSchema = tool.optJSONObject("inputSchema")?.toString(2),
+                ))
+            }
+        }
+    }
+}.orEmpty()
+
+internal fun JSONObject.toToolPolicyState(): McpToolPolicyState {
+    val values = optJSONArray("policies")
+    return McpToolPolicyState(
+        policyRevision = optLong("policy_revision"),
+        policies = buildList {
+            if (values != null) for (index in 0 until values.length()) {
+                values.optJSONObject(index)?.let { add(it.toToolPolicyRecord()) }
+            }
+        },
+    )
+}
+
+internal fun JSONObject.toToolPolicyRecord(): McpToolPolicyRecord = McpToolPolicyRecord(
+    id = getString("id"),
+    scopeType = McpToolPolicyScopeType.valueOf(getString("scope_type")),
+    decision = McpToolPolicyDecision.valueOf(getString("policy")),
+    policyRevision = optLong("policy_revision"),
+    personaId = optString("persona_id").takeIf(String::isNotBlank),
+    connectionId = optString("connection_id").takeIf(String::isNotBlank),
+    toolId = optString("tool_id").takeIf(String::isNotBlank),
+)
+
+private fun JSONObject.toToolService(): McpToolService = McpToolService(
+    id = firstString("id", "tool_service_id").orEmpty(),
+    name = firstString("name"),
+    displayName = firstString("display_name"),
+    connectionCount = firstInt("connections") ?: 0,
+    connectedConnectionCount = firstInt("connected_connections") ?: 0,
+    note = firstString("note"),
+    enabled = if (has("enabled")) optBoolean("enabled") else true,
+)
 
 private fun JSONArray?.toStringList(): List<String> = this?.let { array ->
     buildList {

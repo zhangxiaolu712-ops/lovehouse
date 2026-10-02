@@ -23,6 +23,7 @@ internal data class McpTcCard(
     val key: String,
     val serviceId: String?,
     val name: String,
+    val note: String?,
     val host: String,
     val accounts: List<McpBackendConnection>,
 )
@@ -37,6 +38,9 @@ internal class McpTcState {
     var reload by mutableIntStateOf(0)
     var afterReloadToast: String? = null
     var opened = false
+    var policyState by mutableStateOf(McpToolPolicyState(0, emptyList()))
+    var policyReady by mutableStateOf(false)
+    var policyError by mutableStateOf<String?>(null)
 
     fun connection(id: String): McpBackendConnection? =
         cards.firstNotNullOfOrNull { card -> card.accounts.firstOrNull { it.id == id } }
@@ -83,6 +87,11 @@ internal fun rememberMcpTcState(
             state.personas
         }
         state.legacy = runCatching { repository.legacyConnections() }.getOrElse { emptyList() }
+        state.policyReady = false
+        state.policyError = null
+        runCatching { repository.toolPolicies() }
+            .onSuccess { state.policyState = it; state.policyReady = true }
+            .onFailure { state.policyError = it.message ?: "Tool Policy 读取失败" }
         state.loading = false
         state.afterReloadToast?.let(ui::toast)
         state.afterReloadToast = null
@@ -101,12 +110,12 @@ internal fun McpTab(state: McpTcState, repository: McpConnectionRepository, ui: 
 
     TcGlass {
         TcRow(first = true) {
-            TcRowText("启用 MCP 工具", "自动发现可用工具，与外部工具统一调用", Modifier.weight(1f))
-            TcSwitch(enabled, "启用 MCP 工具") { enabled = it; ui.toast(PreviewNotSaved) }
+            TcRowText("智能挂载工具", "根据当前对话自动加载相关工具，减少上下文占用", Modifier.weight(1f))
+            TcSwitch(enabled, "智能挂载工具") { enabled = it; ui.toast(PreviewNotSaved) }
         }
         TcRow(first = false) {
-            TcRowText("调用前询问", "AI 发起调用时，先在对话里弹出确认卡片", Modifier.weight(1f))
-            TcSwitch(askFirst, "调用前询问") { askFirst = it; ui.toast(PreviewNotSaved) }
+            TcRowText("全局默认权限", "设置未单独配置工具的默认使用权限", Modifier.weight(1f))
+            TcSwitch(askFirst, "全局默认权限") { askFirst = it; ui.toast(PreviewNotSaved) }
         }
     }
 
@@ -123,19 +132,32 @@ internal fun McpTab(state: McpTcState, repository: McpConnectionRepository, ui: 
             sub = "${card.host} · ${card.accounts.size} 个账号",
             open = card.key in state.open,
             onToggle = { state.open = if (card.key in state.open) state.open - card.key else state.open + card.key },
-            note = null,
+            note = card.note,
             status = status,
             statusOk = ok,
             testLabel = "刷新",
             onTest = { state.refresh("已刷新") },
             onRename = {
                 ui.dialog = TcDialog("重命名", "只改显示名称，不影响连接地址。", input = card.name, ok = "保存") {
-                    ui.toast("重命名尚未接入后端，未保存")
+                    result ->
+                    val serviceId = card.serviceId
+                    if (serviceId == null) ui.toast("App Backend 未返回 tool_service_id，无法重命名")
+                    else scope.launch {
+                        runCatching { repository.updateToolService(serviceId, McpToolServiceUpdate(result.text, card.note)) }
+                            .onSuccess { state.refresh("已重命名") }
+                            .onFailure { ui.toast(it.message ?: "重命名失败") }
+                    }
                 }
             },
             onNote = {
-                ui.dialog = TcDialog("备注", "写给自己看的说明。", input = "", ok = "保存") {
-                    ui.toast("备注尚未接入后端，未保存")
+                ui.dialog = TcDialog("备注", "写给自己看的说明。", input = card.note.orEmpty(), ok = "保存") { result ->
+                    val serviceId = card.serviceId
+                    if (serviceId == null) ui.toast("App Backend 未返回 tool_service_id，无法保存备注")
+                    else scope.launch {
+                        runCatching { repository.updateToolService(serviceId, McpToolServiceUpdate(card.name, result.text)) }
+                            .onSuccess { state.refresh("备注已保存") }
+                            .onFailure { ui.toast(it.message ?: "备注保存失败") }
+                    }
                 }
             },
             onDelete = {
@@ -143,7 +165,19 @@ internal fun McpTab(state: McpTcState, repository: McpConnectionRepository, ui: 
                     TcDialog("暂时不能删除", "这里仍有 ${card.accounts.size} 个账号。请先全部移除，再删除整个服务。", ok = "知道了", single = true)
                 } else {
                     TcDialog("删除这一项？", "删除后它的相关配置会一并移除。", ok = "删除", danger = true) {
-                        ui.toast("删除服务尚未接入后端，未删除")
+                        val serviceId = card.serviceId
+                        if (serviceId == null) ui.toast("App Backend 未返回 tool_service_id，无法删除")
+                        else scope.launch {
+                            runCatching { repository.deleteToolService(serviceId) }
+                                .onSuccess { outcome ->
+                                    when (outcome) {
+                                        McpToolServiceDeleteResult.Deleted,
+                                        McpToolServiceDeleteResult.AlreadyAbsent -> state.refresh("服务已删除")
+                                        McpToolServiceDeleteResult.HasConnections -> ui.toast("服务仍有账号，不能删除")
+                                    }
+                                }
+                                .onFailure { ui.toast(it.message ?: "服务删除失败") }
+                        }
                     }
                 }
             },
@@ -157,7 +191,13 @@ internal fun McpTab(state: McpTcState, repository: McpConnectionRepository, ui: 
                     name = connection.displayName(),
                     meta = mcpAccountMeta(connection, state.personas),
                     checked = connection.enabled,
-                    onToggle = { ui.toast("账号开关尚未接入后端，未更改") },
+                    onToggle = { on ->
+                        scope.launch {
+                            runCatching { repository.updateConnection(connection.id, McpConnectionUpdate(enabled = on)) }
+                                .onSuccess { state.refresh(if (on) "账号已开启" else "账号已关闭") }
+                                .onFailure { ui.toast(it.message ?: "账号状态保存失败") }
+                        }
+                    },
                 ) {
                     TcAccLink("工具与权限") { onOpen(TcPage.Mcp("工具与权限", card.key, connection.id)) }
                     if (connection.status == McpBackendConnectionStatus.Connected) {
@@ -267,26 +307,40 @@ internal fun McpDetailPage(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
-    var previewEdited by remember { mutableStateOf(false) }
+    var shellEdited by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf(if (page.cardKey == null) "" else card?.name.orEmpty()) }
     var url by remember { mutableStateOf(connection?.serverUrl ?: card?.accounts?.firstOrNull()?.serverUrl.orEmpty()) }
-    var note by remember { mutableStateOf("") }
-    var accountNote by remember { mutableStateOf(connection?.displayName().orEmpty()) }
+    var note by remember { mutableStateOf(card?.note.orEmpty()) }
+    var accountName by remember { mutableStateOf(connection?.displayName.orEmpty()) }
+    var accountNote by remember { mutableStateOf(connection?.note.orEmpty()) }
     var access by remember { mutableIntStateOf(0) }
     var token by remember { mutableStateOf("") }
     var boundIds by remember { mutableStateOf(connection?.boundIdentityIds.orEmpty().toSet()) }
     val purposes = remember { mutableStateListOf<String>() }
     var purposeOn by remember { mutableStateOf(setOf<Int>()) }
     val toolOn = remember { mutableStateMapOf<String, Boolean>() }
-    val toolPermission = remember { mutableStateMapOf<String, ToolPermission>() }
+    var authoritativeTools by remember(connection?.id, state.reload) { mutableStateOf<List<McpDiscoveredTool>>(emptyList()) }
+    var toolsLoading by remember(connection?.id, state.reload) { mutableStateOf(connection != null) }
+    var toolsError by remember(connection?.id, state.reload) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(connection?.id, state.reload) {
+        val id = connection?.id ?: return@LaunchedEffect
+        toolsLoading = true
+        toolsError = null
+        runCatching { repository.connectionTools(id) }
+            .onSuccess { authoritativeTools = it }
+            .onFailure { toolsError = it.message ?: "工具字段读取失败" }
+        toolsLoading = false
+    }
 
     TcFormCard("连接信息") {
-        TcField("名称") { TcInput(name, { name = it; previewEdited = true }) }
+        TcField("服务名称") { TcInput(name, { name = it }) }
         TcField("服务地址 (URL，原样保存)") {
-            TcInput(url, { url = it; if (!adding) previewEdited = true }, placeholder = "https://")
+            TcInput(url, { if (adding) url = it }, placeholder = "https://", enabled = adding)
+            if (!adding) TcHint("现有 Connection 地址只读；本页不会改写 endpoint。")
         }
-        TcField("备注") {
-            TcInput(note, { note = it; previewEdited = true }, placeholder = "这个服务是做什么的，给自己看", multiline = true)
+        TcField("服务备注") {
+            TcInput(note, { note = it }, placeholder = "这个服务是做什么的，给自己看", multiline = true)
         }
         if (connection == null) {
             TcInlineStatus("测试连接", "尚未连接", ok = false) { ui.toast("保存后由 App Backend 连接并发现工具") }
@@ -310,14 +364,16 @@ internal fun McpDetailPage(
     }
 
     TcFormCard("账号与人格档案") {
-        TcField("账号备注") { TcInput(accountNote, { accountNote = it; previewEdited = true }) }
+        TcField("账号名称") { TcInput(accountName, { accountName = it }) }
+        TcField("账号备注") { TcInput(accountNote, { accountNote = it }, multiline = true) }
         TcField("接入方式") {
-            TcPills(listOf("官方 App · 仅 URL", "CLI · Token"), setOf(access)) { access = it; previewEdited = true }
+            TcPills(listOf("官方 App · 仅 URL", "CLI · Token"), setOf(access)) { access = it; shellEdited = true }
+            TcHint("接入方式仍是界面预览，本轮不改变 credential lifecycle。")
         }
         if (access == 1) {
             TcField("Token") {
-                TcInput(token, { token = it; previewEdited = true }, secret = true)
-                TcHint("只提交给后端保存，前端不留存，也不会明文回显。")
+                TcInput(token, { token = it; shellEdited = true }, secret = true)
+                TcHint("CLI Token 尚未接入后端，当前不会保存。")
             }
         }
         TcField("挂到哪些人格档案") {
@@ -345,35 +401,84 @@ internal fun McpDetailPage(
                         if (result.text.isNotEmpty()) {
                             purposes += result.text
                             purposeOn = purposeOn + (purposes.size - 1)
-                            previewEdited = true
+                            shellEdited = true
                         }
                     }
                 } else {
                     purposeOn = if (index in purposeOn) purposeOn - index else purposeOn + index
-                    previewEdited = true
+                    shellEdited = true
                 }
             }
         }
     }
 
-    val tools = connection?.tools.orEmpty()
+    val tools = authoritativeTools
     TcFormCard("工具与权限 · ${tools.size} 个") {
         when {
             tools.isNotEmpty() -> tools.forEachIndexed { index, tool ->
-                val on = toolOn[tool.name] ?: true
+                val toolId = checkNotNull(tool.toolId)
+                val currentConnection = checkNotNull(connection)
+                val explicit = state.policyState.accountConnectionToolPolicy(currentConnection.id, toolId)
+                val selected = explicit?.decision?.toToolPermission() ?: ToolPermission.Ask
+                val on = toolOn[toolId] ?: true
                 TcToolCard(last = index == tools.lastIndex) {
                     TcToolTop(tool.name, tool.description.orEmpty()) {
-                        TcSwitch(on, tool.name) { toolOn[tool.name] = it; previewEdited = true }
+                        TcSwitch(on, tool.name) {
+                            toolOn[toolId] = it
+                            shellEdited = true
+                            ui.toast("单工具开关尚未接入后端，未保存")
+                        }
                     }
                     TcSeg(
                         ToolPermission.entries.map { it.label },
-                        (toolPermission[tool.name] ?: ToolPermission.Ask).ordinal,
+                        selected.ordinal,
                         Modifier.padding(top = 4.dp, end = 6.dp, bottom = 2.dp),
-                        enabled = on,
-                    ) { toolPermission[tool.name] = ToolPermission.entries[it]; previewEdited = true }
-                    TcSchema("App Backend 尚未返回该工具的字段结构。")
+                        enabled = on && state.policyReady && !busy,
+                    ) { selectedIndex ->
+                        busy = true
+                        scope.launch {
+                            runCatching {
+                                saveAccountConnectionToolPolicy(
+                                    repository = repository,
+                                    connectionId = currentConnection.id,
+                                    toolId = toolId,
+                                    decision = ToolPermission.entries[selectedIndex].toPolicyDecision(),
+                                )
+                            }.onSuccess { refreshed ->
+                                state.policyState = refreshed
+                                state.policyReady = true
+                                ui.toast("工具权限已保存")
+                            }.onFailure { ui.toast(it.message ?: "工具权限保存失败") }
+                            busy = false
+                        }
+                    }
+                    TcHint(
+                        when {
+                            !state.policyReady -> state.policyError ?: "正在读取 authoritative Tool Policy…"
+                            explicit == null -> "当前：默认 ASK（继承，未保存 override）"
+                            else -> "当前：显式 ${selected.label}"
+                        },
+                    )
+                    if (explicit != null && !busy) {
+                        TcAccLink("恢复默认（继承）") {
+                            busy = true
+                            scope.launch {
+                                runCatching { deleteAccountConnectionToolPolicy(repository, explicit.id) }
+                                    .onSuccess { refreshed ->
+                                        state.policyState = refreshed
+                                        state.policyReady = true
+                                        ui.toast("已恢复默认 ASK")
+                                    }
+                                    .onFailure { ui.toast(it.message ?: "恢复默认失败") }
+                                busy = false
+                            }
+                        }
+                    }
+                    TcSchema(tool.inputSchema ?: "App Backend 未返回该工具的字段结构。")
                 }
             }
+            toolsLoading -> TcHint("正在从 App Backend 读取 authoritative 工具与字段…")
+            toolsError != null -> TcHint(toolsError!!)
             connection == null -> TcHint("保存并完成授权后，这里会列出服务发现的工具。")
             connection.toolCount > 0 -> TcHint("App Backend 报告 ${connection.toolCount} 个工具，但没有返回工具明细。")
             else -> TcHint("这个账号还没有发现工具。")
@@ -381,7 +486,7 @@ internal fun McpDetailPage(
     }
 
     TcSaveButton(if (busy && adding) "连接中…" else "保存并注册工具", enabled = !busy) {
-        val unsaved = if (previewEdited) "名称、备注、接入方式、用途与工具权限尚未接入后端，未保存" else null
+        val shellNotice = if (shellEdited) "接入方式、用途或单工具开关仍是界面预览，未保存" else null
         if (connection == null) {
             val endpoint = opaqueMcpServerEndpoint(url.trim())
             if (endpoint == null) {
@@ -390,41 +495,66 @@ internal fun McpDetailPage(
             }
             busy = true
             scope.launch {
-                runCatching { repository.connect(endpoint) }
-                    .onSuccess { result ->
-                        val message = when (result.nextAction()) {
-                            McpConnectionNextAction.OpenAuthorization -> runCatching {
-                                openMcpAuthorization(context, checkNotNull(result.authorizationUrl))
-                                "请在 MCP 官方页面完成登录与授权"
-                            }.getOrElse { it.message ?: "无法打开授权页面" }
-                            McpConnectionNextAction.RefreshStatus -> "MCP 已连接"
-                            McpConnectionNextAction.Wait -> "连接已创建，正在等待 App Backend 完成检查"
-                        }
-                        val bindingNote = if (boundIds.isNotEmpty()) "连接完成后在「换绑人格档案」挂载人格档案" else null
-                        state.refresh(listOfNotNull(message, bindingNote, unsaved).joinToString("；"))
-                        onDone()
-                    }
-                    .onFailure { ui.toast(it.message ?: "MCP 连接失败") }
+                val result = runCatching { repository.connect(endpoint) }.getOrElse {
+                    ui.toast(it.message ?: "MCP 连接失败")
+                    busy = false
+                    return@launch
+                }
+                val metadataFailure = runCatching {
+                    val created = result.connection ?: error("App Backend 未返回新 Connection，名称和备注未保存")
+                    repository.updateConnection(
+                        result.connectionId,
+                        McpConnectionUpdate(
+                            displayName = accountName.trim(),
+                            note = accountNote.trim(),
+                            updateMetadata = true,
+                        ),
+                    )
+                    created.toolServiceId?.let { serviceId ->
+                        repository.updateToolService(
+                            serviceId,
+                            McpToolServiceUpdate(name.trim(), note.trim()),
+                        )
+                    } ?: error("App Backend 未返回 tool_service_id，服务名称和备注未保存")
+                }.exceptionOrNull()
+                val message = when (result.nextAction()) {
+                    McpConnectionNextAction.OpenAuthorization -> runCatching {
+                        openMcpAuthorization(context, checkNotNull(result.authorizationUrl))
+                        "请在 MCP 官方页面完成登录与授权"
+                    }.getOrElse { it.message ?: "无法打开授权页面" }
+                    McpConnectionNextAction.RefreshStatus -> "MCP 已连接"
+                    McpConnectionNextAction.Wait -> "连接已创建，正在等待 App Backend 完成检查"
+                }
+                val bindingNote = if (boundIds.isNotEmpty()) "连接完成后在「换绑人格档案」挂载人格档案" else null
+                val metadataNotice = metadataFailure?.let { "连接已创建，但名称/备注保存失败：${it.message ?: "未知错误"}" }
+                state.refresh(listOfNotNull(message, metadataNotice, bindingNote, shellNotice).joinToString("；"))
+                onDone()
                 busy = false
             }
         } else {
             val before = connection.boundIdentityIds.toSet()
             val after = boundIds
             val serviceId = connection.toolServiceId ?: card?.serviceId
-            if (after == before) {
-                ui.toast(unsaved ?: "没有需要保存的改动")
-                onDone()
-                return@TcSaveButton
-            }
             if (serviceId.isNullOrBlank()) {
-                ui.toast("App Backend 未返回 tool_service_id，无法保存人格档案")
+                ui.toast("App Backend 未返回 tool_service_id，无法保存服务信息")
                 return@TcSaveButton
             }
             busy = true
             scope.launch {
-                runCatching { applyPersonaBindings(repository, serviceId, connection.id, before, after) }
+                runCatching {
+                    repository.updateToolService(serviceId, McpToolServiceUpdate(name.trim(), note.trim()))
+                    repository.updateConnection(
+                        connection.id,
+                        McpConnectionUpdate(
+                            displayName = accountName.trim(),
+                            note = accountNote.trim(),
+                            updateMetadata = true,
+                        ),
+                    )
+                    applyPersonaBindings(repository, serviceId, connection.id, before, after)
+                }
                     .onSuccess {
-                        state.refresh(listOfNotNull("人格档案已保存", unsaved).joinToString("；"))
+                        state.refresh(listOfNotNull("服务、账号与人格档案已保存", shellNotice).joinToString("；"))
                         onDone()
                     }
                     .onFailure { ui.toast(it.message ?: "人格档案保存失败") }
@@ -432,6 +562,55 @@ internal fun McpDetailPage(
             }
         }
     }
+}
+
+internal fun McpToolPolicyState.accountConnectionToolPolicy(
+    connectionId: String,
+    toolId: String,
+): McpToolPolicyRecord? = policies.singleOrNull {
+    it.scopeType == McpToolPolicyScopeType.ACCOUNT_CONNECTION_TOOL &&
+        it.connectionId == connectionId &&
+        it.toolId == toolId
+}
+
+internal fun ToolPermission.toPolicyDecision(): McpToolPolicyDecision = when (this) {
+    ToolPermission.Deny -> McpToolPolicyDecision.DENY
+    ToolPermission.Ask -> McpToolPolicyDecision.ASK
+    ToolPermission.Allow -> McpToolPolicyDecision.ALLOW
+}
+
+internal fun McpToolPolicyDecision.toToolPermission(): ToolPermission = when (this) {
+    McpToolPolicyDecision.DENY -> ToolPermission.Deny
+    McpToolPolicyDecision.ASK -> ToolPermission.Ask
+    McpToolPolicyDecision.ALLOW -> ToolPermission.Allow
+}
+
+internal suspend fun saveAccountConnectionToolPolicy(
+    repository: McpConnectionRepository,
+    connectionId: String,
+    toolId: String,
+    decision: McpToolPolicyDecision,
+): McpToolPolicyState {
+    val mutation = repository.putToolPolicy(
+        McpToolPolicyDraft.accountConnectionTool(connectionId, toolId, decision),
+    )
+    val authoritative = repository.toolPolicies()
+    check(authoritative.policyRevision >= mutation.policyRevision) {
+        "Tool Policy revision 尚未收敛"
+    }
+    return authoritative
+}
+
+internal suspend fun deleteAccountConnectionToolPolicy(
+    repository: McpConnectionRepository,
+    policyId: String,
+): McpToolPolicyState {
+    val mutation = repository.deleteToolPolicy(policyId)
+    val authoritative = repository.toolPolicies()
+    check(authoritative.policyRevision >= mutation.policyRevision) {
+        "Tool Policy revision 尚未收敛"
+    }
+    return authoritative
 }
 
 internal suspend fun applyPersonaBindings(
@@ -456,6 +635,7 @@ internal fun buildMcpCards(
             key = "service:${service.id}",
             serviceId = service.id,
             name = service.displayName ?: service.name ?: accounts.firstOrNull()?.displayName() ?: "MCP 服务",
+            note = service.note,
             host = mcpHost(accounts.firstOrNull()?.serverUrl),
             accounts = accounts,
         )
@@ -466,6 +646,7 @@ internal fun buildMcpCards(
             key = "connection:${connection.id}",
             serviceId = connection.toolServiceId,
             name = connection.displayName(),
+            note = null,
             host = mcpHost(connection.serverUrl),
             accounts = listOf(connection),
         )
