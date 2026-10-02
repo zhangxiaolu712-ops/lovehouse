@@ -412,6 +412,19 @@ private fun SettingsDetail(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    if (entry.title == "工具添加") {
+        // 工具中心自带顶栏（返回 / 标题 / 加号）和底部导航，按定稿 HTML 整页接管，不再套设置页的通用顶栏
+        SettingsToolCenter(
+            registry = capabilityRegistry,
+            connections = toolConnections,
+            probe = toolConnectionProbe,
+            mcpRepository = mcpConnections,
+            personaRuntimeSource = personaRuntimeSource,
+            onBack = onBack,
+            modifier = modifier,
+        )
+        return
+    }
     val consoleConnections = remember(entry.title) { ConsoleConnectionsState() }
     val consoleNested = entry.title == "控制台" && consoleConnections.page != ConnectionPage.Overview
     BackHandler(enabled = consoleNested) { consoleConnections.back() }
@@ -441,17 +454,6 @@ private fun SettingsDetail(
                 }
                 "语音" -> item { SettingsCardStack { PersonaVoiceSettings(localStorage); AudioRecordingProductSettings(permissionStatusProvider, baseCapabilities) } }
                 "天气与时间" -> item { SettingsCardStack { GlobalLocationSettings(permissionStatusProvider) } }
-                "工具添加" -> item {
-                    SettingsCardStack {
-                        SettingsToolCenter(
-                            registry = capabilityRegistry,
-                            connections = toolConnections,
-                            probe = toolConnectionProbe,
-                            mcpRepository = mcpConnections,
-                            personaRuntimeSource = personaRuntimeSource,
-                        )
-                    }
-                }
                 "本地资源" -> {
                     item { LocalResourceSettings(permissionStatusProvider, baseCapabilities) }
                     item { LocalStorageUsageSettings() }

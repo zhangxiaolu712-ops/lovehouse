@@ -1,22 +1,19 @@
 package fyi.b612.lovehouse.feature.settings
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,18 +25,37 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import fyi.b612.lovehouse.core.designsystem.LoveHouseGlass
 import fyi.b612.lovehouse.feature.chat.PersonaRuntimeSource
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
+private sealed interface ToolPage {
+    data object Main : ToolPage
+    data class McpAdd(val prefillUrl: String, val title: String) : ToolPage
+    data class McpDetail(val serviceId: String, val connectionId: String) : ToolPage
+    data class ApiEdit(val id: String?, val title: String) : ToolPage
+    data class StorageEdit(val id: String?, val title: String) : ToolPage
+}
+
+private val TabLabels = listOf("MCP", "API", "存储", "本地")
+private val Eyebrows = listOf("Tool Center · MCP", "Tool Center · API", "Tool Center · Storage", "Tool Center · Local")
+
+/**
+ * 工具添加页——按定稿 HTML（mcp-tool-center.html）1:1 翻译，挂在「设置 → 系统能力 → 工具添加」入口。
+ *
+ * HTML → Compose 对照：
+ *   .topbar（返回 / 标题 + eyebrow / 加号）  → ToolTopBar + ToolIconButton
+ *   .glass 总开关卡片 / .row / .switch       → ToolGlass + ToolRow + ToolSwitch
+ *   .section                                  → ToolSection
+ *   .server 服务卡片（展开 / 收起）           → ToolServerCard
+ *   .chip / .acc / .link-btn / .acc-links     → ToolChip / ToolAcc / ToolAccLink
+ *   .nav 底部悬浮四标签                        → ToolBottomNav
+ *   .scrim + .dialog / .toast                 → ToolHost（ToolDialogLayer / ToolToastLayer）
+ *   二级页 .form-card / .field / .input / .pill / .seg / .tool / .save-btn
+ *                                             → ToolFormCard / ToolField / ToolInput / ToolPills / ToolSeg / ToolBlock / ToolSaveButton
+ */
 @Composable
 internal fun SettingsToolCenter(
     registry: CapabilityRegistry,
@@ -47,193 +63,169 @@ internal fun SettingsToolCenter(
     probe: ToolConnectionProbe,
     mcpRepository: McpConnectionRepository,
     personaRuntimeSource: PersonaRuntimeSource,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    var tab by remember { mutableIntStateOf(0) }
-    var testResults by remember { mutableStateOf<Map<String, ToolTestResult>>(emptyMap()) }
-    var editing by remember { mutableStateOf<StoredToolConnection?>(null) }
-    val capabilityState by registry.state.collectAsState()
-    val capabilities = capabilityState.capabilities
-    val preferred = capabilityState.enabledToolIds
-    val saved by connections.connections.collectAsState()
-    val savedApiConnections = saved.filter { it.kind == ToolConnectionKind.Api }
-    val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val ps = remember { ToolPreviewState() }
+    val model = remember(mcpRepository, personaRuntimeSource) { McpToolsModel(mcpRepository, personaRuntimeSource) }
+    var reload by remember { mutableIntStateOf(0) }
+    var tab by remember { mutableIntStateOf(0) }
+    var page by remember { mutableStateOf<ToolPage>(ToolPage.Main) }
 
-    ProductPanel {
-        Text("Tool Center", color = LoveHouseGlass.Ink, fontSize = 14.sp)
-        Text(
-            "${savedApiConnections.size} 个本机 API · MCP 连接由 App Backend 管理",
-            color = LoveHouseGlass.MutedInk,
-            fontSize = 10.sp,
-        )
-        Text("本轮只安装和授权完整 MCP Server，不调用其中任何工具。", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
-    }
-    ProductPanel {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("已添加", "添加 API", "添加 MCP").forEachIndexed { index, label ->
-                Surface(
-                    Modifier.weight(1f).clickable { editing = null; tab = index },
-                    RoundedCornerShape(11.dp),
-                    if (tab == index) Color(0xFFBFD4CF).copy(.74f) else Color.White.copy(.28f),
-                    border = BorderStroke(.6.dp, Color.White.copy(.55f)),
-                ) { Text(label, Modifier.padding(vertical = 8.dp), color = LoveHouseGlass.Ink, fontSize = 10.sp, textAlign = TextAlign.Center) }
-            }
-        }
-    }
-    when (tab) {
-        0 -> {
-            ProductPanel {
-                Text("LoveHouse 内置工具", color = LoveHouseGlass.Ink, fontSize = 13.sp)
-                Text(
-                    capabilityState.error ?: if (capabilityState.loading) "正在读取真实工具状态…" else "Bridge 返回 ${capabilities.size} 项 capability",
-                    color = LoveHouseGlass.MutedInk,
-                    fontSize = 9.sp,
-                )
-                capabilities.forEach { tool ->
-                    val available = tool.availability == ToolAvailability.Available
-                    Row(Modifier.fillMaxWidth().padding(top = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(tool.displayName, color = LoveHouseGlass.Ink, fontSize = 11.sp)
-                            Text(
-                                "${tool.availability.label} · ${tool.capabilityKind.name.lowercase()} · ${tool.toolId}",
-                                color = LoveHouseGlass.MutedInk,
-                                fontSize = 8.5.sp,
-                            )
-                            testResults[tool.toolId]?.let { Text(it.message, color = if (it.succeeded) Color(0xFF466F63) else Color(0xFF9B4F55), fontSize = 8.5.sp) }
-                        }
-                        OutlinedButton(
-                            onClick = { scope.launch { testResults = testResults + (tool.toolId to runCatching { registry.test(tool.toolId) }.getOrElse { ToolTestResult(tool.toolId, false, it.message ?: "测试失败") }) } },
-                            enabled = available,
-                        ) { Text("测试", fontSize = 9.sp) }
-                        Switch(
-                            checked = tool.toolId in preferred,
-                            onCheckedChange = {
-                                registry.setEnabled(tool.toolId, it)
-                            },
-                            enabled = available,
-                        )
-                    }
-                }
-                if (capabilities.isEmpty()) OutlinedButton(onClick = registry::refresh) { Text("重试真实状态") }
-            }
-            savedApiConnections.forEach { connection ->
-                ProductPanel {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(connection.name, color = LoveHouseGlass.Ink, fontSize = 13.sp)
-                            Text("${connection.kind.name.uppercase()} · ${connection.status.label}", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
-                            Text(connection.endpoint, color = LoveHouseGlass.MutedInk, fontSize = 9.sp, maxLines = 1)
-                            Text("发现 ${connection.discoveredTools.size} 个工具 · Chat Runtime 尚未注册", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
-                        }
-                        Switch(connection.enabled, { connections.setEnabled(connection.id, it) })
-                    }
-                    connection.discoveredTools.takeIf(List<String>::isNotEmpty)?.let { tools -> Text(tools.joinToString(" · "), color = LoveHouseGlass.Ink, fontSize = 9.sp) }
-                    connection.lastResult?.let { Text(it, color = LoveHouseGlass.MutedInk, fontSize = 9.sp) }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            scope.launch {
-                                val draft = connection.toDraft()
-                                val result = withContext(Dispatchers.IO) { if (draft.kind == ToolConnectionKind.Mcp) probe.discover(draft) else probe.test(draft) }
-                                connections.save(draft, result, connection.enabled)
+    ToolHost(modifier.fillMaxSize()) {
+        val ui = LocalToolUi.current
+        LaunchedEffect(model, reload) { model.load()?.let { ui.toast(it) } }
+        BackHandler { if (page == ToolPage.Main) onBack() else page = ToolPage.Main }
+
+        when (val current = page) {
+            ToolPage.Main -> {
+                val scroll = rememberScrollState()
+                LaunchedEffect(tab) { scroll.scrollTo(0) }
+                PageColumn(scroll, bottom = 96.dp) {
+                    val plus: (@Composable () -> Unit)? = if (tab == 3) {
+                        null
+                    } else {
+                        {
+                            ToolIconButton(ToolIconKind.Plus, "添加") {
+                                page = when (tab) {
+                                    0 -> ToolPage.McpAdd("", "添加服务器")
+                                    1 -> ToolPage.ApiEdit(null, "添加 API 服务")
+                                    else -> ToolPage.StorageEdit(null, "添加存储")
+                                }
                             }
-                        }) { Text(if (connection.kind == ToolConnectionKind.Mcp) "重新发现" else "测试", fontSize = 9.sp) }
-                        OutlinedButton(onClick = { editing = connection; tab = if (connection.kind == ToolConnectionKind.Api) 1 else 2 }) { Text("编辑", fontSize = 9.sp) }
-                        OutlinedButton(onClick = { connections.delete(connection.id) }) { Text("删除", fontSize = 9.sp) }
+                        }
+                    }
+                    ToolTopBar(title = "工具中心", eyebrow = Eyebrows[tab], onBack = onBack, trailing = plus)
+                    when (tab) {
+                        0 -> McpTab(
+                            model = model,
+                            repository = mcpRepository,
+                            ps = ps,
+                            onReload = { reload++ },
+                            onOpenAuthorization = { openMcpAuthorization(context, it) },
+                            onOpenDetail = { service, connection -> page = ToolPage.McpDetail(service.id, connection.id) },
+                            onAddAccount = { url -> page = ToolPage.McpAdd(url, "接入新账号") },
+                        )
+                        1 -> ApiTab(connections, probe, ps) { id, title -> page = ToolPage.ApiEdit(id, title) }
+                        2 -> {
+                            ToolPreviewNote("预览数据：存储还没接后端，下面是示例内容，改动不会保存")
+                            StorageTab(ps) { id, title -> page = ToolPage.StorageEdit(id, title) }
+                        }
+                        else -> LocalTab(registry)
                     }
                 }
+                ToolBottomNav(
+                    labels = TabLabels,
+                    selected = tab,
+                    onSelect = { tab = it },
+                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                        .padding(start = 24.dp, end = 24.dp, bottom = 14.dp).widthIn(max = 392.dp),
+                )
             }
-            McpConnectionsPanel(
-                repository = mcpRepository,
-                showAddForm = false,
-                personaRuntimeSource = personaRuntimeSource,
-                onOpenAuthorization = { openMcpAuthorization(context, it) },
-            )
+            is ToolPage.McpAdd -> SubPage(current.title, "Service · Detail", { page = ToolPage.Main }) {
+                McpAddPage(
+                    prefillUrl = current.prefillUrl,
+                    repository = mcpRepository,
+                    onConnected = { reload++; page = ToolPage.Main },
+                    onOpenAuthorization = { openMcpAuthorization(context, it) },
+                )
+            }
+            is ToolPage.McpDetail -> SubPage("工具与权限", "Service · Detail", { page = ToolPage.Main }) {
+                McpDetailPage(
+                    model = model,
+                    repository = mcpRepository,
+                    ps = ps,
+                    serviceId = current.serviceId,
+                    connectionId = current.connectionId,
+                    onReload = { reload++ },
+                    onDone = { page = ToolPage.Main },
+                )
+            }
+            is ToolPage.ApiEdit -> SubPage(current.title, "API · Detail", { page = ToolPage.Main }) {
+                ApiDetailPage(current.id, connections, probe, model, ps) { page = ToolPage.Main }
+            }
+            is ToolPage.StorageEdit -> SubPage(current.title, "Storage · Detail", { page = ToolPage.Main }) {
+                StorageDetailPage(current.id, ps) { page = ToolPage.Main }
+            }
         }
-        1 -> ToolConnectionForm(ToolConnectionKind.Api, connections, probe, editing?.takeIf { it.kind == ToolConnectionKind.Api }) { editing = null; tab = 0 }
-        else -> McpConnectionsPanel(
-            repository = mcpRepository,
-            showAddForm = true,
-            personaRuntimeSource = personaRuntimeSource,
-            onOpenAuthorization = { openMcpAuthorization(context, it) },
+    }
+}
+
+/** 页面容器：宽度 440 上限、左右 24 的页边距，整页一起滚动（顶栏也随页面滚动，和 HTML 一致）。 */
+@Composable
+private fun PageColumn(scroll: ScrollState, bottom: Dp, content: @Composable ColumnScope.() -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(
+            Modifier.widthIn(max = 440.dp).fillMaxWidth().fillMaxHeight().statusBarsPadding()
+                .verticalScroll(scroll).padding(start = 24.dp, end = 24.dp, bottom = bottom),
+            content = content,
         )
     }
 }
 
+/** 二级页：顶栏（返回 / 标题 + eyebrow / 右侧占位）+ 内容；底部没有悬浮导航。 */
 @Composable
-private fun ToolConnectionForm(
-    kind: ToolConnectionKind,
-    store: ToolConnectionStore,
-    probe: ToolConnectionProbe,
-    initial: StoredToolConnection?,
-    onSaved: () -> Unit,
-) {
-    var draft by remember(kind, initial?.id) { mutableStateOf(initial?.toDraft() ?: ToolConnectionDraft(kind = kind)) }
-    var result by remember(kind, initial?.id) { mutableStateOf<ToolConnectionProbeResult?>(initial?.let { ToolConnectionProbeResult(it.status == ToolConnectionStatus.Connected, it.lastResult ?: "尚未重新测试", it.discoveredTools) }) }
-    var busy by remember { mutableStateOf(false) }
+private fun SubPage(title: String, eyebrow: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val scroll = rememberScrollState()
+    PageColumn(scroll, bottom = 24.dp) {
+        ToolTopBar(title = title, eyebrow = eyebrow, onBack = onBack)
+        content()
+        Box(Modifier.navigationBarsPadding())
+    }
+}
+
+/**
+ * 「本地」标签。定稿 HTML 里这一页只有占位文案（「该页面还没设计，先占位」），没有设计稿。
+ * 为了不丢掉现有的真实内置能力开关，临时用 HTML 已有的 .row 组件承接；待 Owner 确认设计。
+ */
+@Composable
+private fun LocalTab(registry: CapabilityRegistry) {
+    val ui = LocalToolUi.current
     val scope = rememberCoroutineScope()
-    ProductPanel {
-        Text(if (kind == ToolConnectionKind.Api) "添加 API" else "添加 MCP", color = LoveHouseGlass.Ink, fontSize = 13.sp)
-        ConnectionField("名称", draft.name) { draft = draft.copy(name = it); result = null }
-        ConnectionField("${if (kind == ToolConnectionKind.Api) "Base URL / Endpoint" else "MCP URL"}", draft.endpoint) { draft = draft.copy(endpoint = it); result = null }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("认证方式", Modifier.weight(1f), color = LoveHouseGlass.Ink, fontSize = 10.sp)
-            OutlinedButton(onClick = { draft = draft.copy(auth = ToolConnectionAuth.entries[(draft.auth.ordinal + 1) % ToolConnectionAuth.entries.size], credential = ""); result = null }) {
-                Text(draft.auth.label, fontSize = 9.sp)
+    val state by registry.state.collectAsState()
+    val capabilities = state.capabilities
+
+    ToolSection("本机与内置能力", "${capabilities.size} 个")
+    if (capabilities.isEmpty()) {
+        ToolEmpty(
+            state.error
+                ?: if (state.loading) {
+                    "正在读取真实工具状态…"
+                } else {
+                    "这里放本机与内置能力（相机、定位、通知等）。\n本地 SQL 属于数据库，在「存储」标签里。\n（该页面还没设计，先占位）"
+                },
+        )
+    } else {
+        ToolGlass {
+            capabilities.forEachIndexed { index, tool ->
+                val available = tool.availability == ToolAvailability.Available
+                ToolRow(
+                    label = tool.displayName,
+                    sub = "${tool.availability.label()} · ${tool.capabilityKind.name.lowercase()}",
+                    divider = index > 0,
+                ) {
+                    ToolChip("测试", {
+                        scope.launch {
+                            val outcome = runCatching { registry.test(tool.toolId) }
+                                .getOrElse { ToolTestResult(tool.toolId, false, it.message ?: "测试失败") }
+                            ui.toast(outcome.message)
+                        }
+                    }, enabled = available)
+                    ToolSwitch(
+                        checked = tool.toolId in state.enabledToolIds,
+                        onChange = { registry.setEnabled(tool.toolId, it) },
+                        enabled = available,
+                    )
+                }
             }
         }
-        if (draft.auth != ToolConnectionAuth.None) ConnectionField("API Key / Token（加密保存）", draft.credential, secret = true) { draft = draft.copy(credential = it); result = null }
-        ConnectionField("备注（可选）", draft.note) { draft = draft.copy(note = it) }
-        Text("凭据使用 Android Keystore AES-GCM 加密，不写普通 DataStore、日志或聊天历史。", color = LoveHouseGlass.MutedInk, fontSize = 8.5.sp)
-        result?.let { Text(it.message, color = if (it.succeeded) Color(0xFF466F63) else Color(0xFF9B4F55), fontSize = 9.sp) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                enabled = !busy && draft.name.isNotBlank() && draft.endpoint.isNotBlank(),
-                onClick = {
-                    busy = true
-                    scope.launch {
-                        result = withContext(Dispatchers.IO) { if (kind == ToolConnectionKind.Mcp) probe.discover(draft) else probe.test(draft) }
-                        busy = false
-                    }
-                },
-            ) { Text(if (busy) "检查中…" else if (kind == ToolConnectionKind.Mcp) "发现工具" else "测试连接", fontSize = 9.sp) }
-            Button(
-                enabled = result != null && draft.name.isNotBlank() && draft.endpoint.isNotBlank(),
-                onClick = { store.save(draft, result!!); draft = ToolConnectionDraft(kind = kind); result = null; onSaved() },
-            ) { Text("保存并启用", fontSize = 9.sp) }
-        }
-        if (result == null) Text("必须先完成真实${if (kind == ToolConnectionKind.Mcp) "发现" else "连接测试"}，才可保存。", color = LoveHouseGlass.MutedInk, fontSize = 8.5.sp)
     }
 }
 
-@Composable
-private fun ConnectionField(label: String, value: String, secret: Boolean = false, onChange: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-        Text(label, color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
-        Surface(Modifier.fillMaxWidth(), RoundedCornerShape(11.dp), Color.White.copy(.34f), border = BorderStroke(.6.dp, Color.White.copy(.55f))) {
-            BasicTextField(
-                value, onChange, Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(color = LoveHouseGlass.Ink, fontSize = 11.sp),
-                singleLine = true,
-                visualTransformation = if (secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-            )
-        }
-    }
-}
-
-private val ToolAvailability.label: String get() = when (this) {
+private fun ToolAvailability.label(): String = when (this) {
     ToolAvailability.Available -> "可用"
     ToolAvailability.Unconfigured -> "未配置"
     ToolAvailability.NoPermission -> "无权限"
     ToolAvailability.ConnectionFailed -> "连接失败"
 }
-private val ToolConnectionStatus.label: String get() = when (this) {
-    ToolConnectionStatus.Untested -> "未测试"
-    ToolConnectionStatus.Connected -> "最近测试成功"
-    ToolConnectionStatus.Failed -> "最近测试失败"
-}
-private val ToolConnectionAuth.label: String get() = when (this) {
-    ToolConnectionAuth.None -> "None"
-    ToolConnectionAuth.ApiKey -> "API Key"
-    ToolConnectionAuth.BearerToken -> "Bearer Token"
-}
-private fun StoredToolConnection.toDraft() = ToolConnectionDraft(id, name, kind, endpoint, auth, credential, note)
