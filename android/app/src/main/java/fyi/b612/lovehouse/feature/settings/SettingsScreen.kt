@@ -88,6 +88,8 @@ private data class SettingEntry(
 
 private data class SettingGroup(val title: String, val entries: List<SettingEntry>)
 
+private const val ToolCenterEntryTitle = "工具添加"
+
 private val groupTemplates = listOf(
     SettingGroup("账号与个性化", listOf(
         SettingEntry("账号", "LoveHouse App 登录与会话", "未登录", LoveHouseIcon.Contact),
@@ -155,18 +157,23 @@ fun SettingsScreen(
                 onOpenConnectionControl = onOpenConnectionControl,
                 onSelect = { entry -> if (entry.title == "动态") onOpenEvents() else selected = entry },
             )
+        } else if (detail.title == ToolCenterEntryTitle) {
+            ToolCenterPage(
+                registry = capabilityRegistry,
+                connections = toolConnections,
+                probe = toolConnectionProbe,
+                mcpRepository = mcpConnections,
+                personaRuntimeSource = personaRuntimeSource,
+                onBack = { selected = null },
+                modifier = modifier,
+            )
         } else {
             SettingsDetail(
                 detail,
                 localStorage = localStorage,
                 permissionStatusProvider = permissionStatusProvider,
-                capabilityRegistry = capabilityRegistry,
                 baseCapabilities = baseCapabilities,
-                toolConnections = toolConnections,
-                toolConnectionProbe = toolConnectionProbe,
                 appAccount = appAccount,
-                mcpConnections = mcpConnections,
-                personaRuntimeSource = personaRuntimeSource,
                 selfCheck = selfCheck,
                 onBack = { selected = null },
                 modifier = modifier.statusBarsPadding().navigationBarsPadding(),
@@ -401,13 +408,8 @@ private fun SettingsDetail(
     entry: SettingEntry,
     localStorage: LocalStorage,
     permissionStatusProvider: PermissionStatusProvider,
-    capabilityRegistry: CapabilityRegistry,
     baseCapabilities: LoveHouseCapabilityRegistry,
-    toolConnections: ToolConnectionStore,
-    toolConnectionProbe: ToolConnectionProbe,
     appAccount: AppAccountRepository,
-    mcpConnections: McpConnectionRepository,
-    personaRuntimeSource: PersonaRuntimeSource,
     selfCheck: DeploymentSelfCheckRunner,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -441,17 +443,6 @@ private fun SettingsDetail(
                 }
                 "语音" -> item { SettingsCardStack { PersonaVoiceSettings(localStorage); AudioRecordingProductSettings(permissionStatusProvider, baseCapabilities) } }
                 "天气与时间" -> item { SettingsCardStack { GlobalLocationSettings(permissionStatusProvider) } }
-                "工具添加" -> item {
-                    SettingsCardStack {
-                        SettingsToolCenter(
-                            registry = capabilityRegistry,
-                            connections = toolConnections,
-                            probe = toolConnectionProbe,
-                            mcpRepository = mcpConnections,
-                            personaRuntimeSource = personaRuntimeSource,
-                        )
-                    }
-                }
                 "本地资源" -> {
                     item { LocalResourceSettings(permissionStatusProvider, baseCapabilities) }
                     item { LocalStorageUsageSettings() }

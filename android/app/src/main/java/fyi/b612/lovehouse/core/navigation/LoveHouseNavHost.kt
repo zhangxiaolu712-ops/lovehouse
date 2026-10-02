@@ -334,6 +334,9 @@ private fun LoveHouseContent(
             McpOAuthResultScreen(
                 repository = dependencies.mcpConnections,
                 personaRuntimeSource = dependencies.personaRuntimeSource,
+                capabilityRegistry = dependencies.capabilityRegistry,
+                toolConnections = dependencies.toolConnections,
+                toolConnectionProbe = dependencies.toolConnectionProbe,
                 connectionId = entry.arguments?.getString("connectionId").orEmpty(),
                 callbackStatus = entry.arguments?.getString("status").orEmpty(),
                 onBack = { navController.popBackStack() },
