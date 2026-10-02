@@ -46,6 +46,11 @@ internal fun ApiTab(store: ToolConnectionStore, probe: ToolConnectionProbe, ui: 
 
     apis.forEach { api ->
         val hasKey = api.hasKey()
+        // ToolConnectionStore.save can only record Connected/Failed, so an untested connection must be tested first.
+        val saveKeepingStatus: (ToolConnectionDraft, String) -> Unit = { draft, done ->
+            if (api.status == ToolConnectionStatus.Untested) ui.toast("这个连接还没测试，请先点「测试连通」再修改")
+            else save(draft, api.lastProbe(), api.enabled, done)
+        }
         TcServerCard(
             letter = api.name.firstOrNull()?.uppercase() ?: "A",
             name = api.name,
@@ -65,12 +70,12 @@ internal fun ApiTab(store: ToolConnectionStore, probe: ToolConnectionProbe, ui: 
             },
             onRename = {
                 ui.dialog = TcDialog("重命名", "只改显示名称，不影响连接地址。", input = api.name, ok = "保存") { result ->
-                    if (result.text.isNotEmpty()) save(api.toTcDraft().copy(name = result.text), api.lastProbe(), api.enabled, "已重命名")
+                    if (result.text.isNotEmpty()) saveKeepingStatus(api.toTcDraft().copy(name = result.text), "已重命名")
                 }
             },
             onNote = {
                 ui.dialog = TcDialog("备注", "写给自己看的说明。", input = api.note, ok = "保存") { result ->
-                    save(api.toTcDraft().copy(note = result.text), api.lastProbe(), api.enabled, "备注已保存")
+                    saveKeepingStatus(api.toTcDraft().copy(note = result.text), "备注已保存")
                 }
             },
             onDelete = {
@@ -101,12 +106,7 @@ internal fun ApiTab(store: ToolConnectionStore, probe: ToolConnectionProbe, ui: 
                     TcAccLink("能力与权限") { onOpen(TcPage.Api("能力与权限", api.id)) }
                     TcAccLink("移除", danger = true) {
                         ui.dialog = TcDialog("移除这个密钥？", "只移除这一项的连接，服务本身保留。", ok = "移除", danger = true) {
-                            save(
-                                api.toTcDraft().copy(auth = ToolConnectionAuth.None, credential = ""),
-                                api.lastProbe(),
-                                api.enabled,
-                                "密钥已移除",
-                            )
+                            saveKeepingStatus(api.toTcDraft().copy(auth = ToolConnectionAuth.None, credential = ""), "密钥已移除")
                         }
                     }
                 }
