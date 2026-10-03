@@ -171,13 +171,19 @@ internal enum class TcIcon(val path: String) {
 
 @Composable
 internal fun TcIconView(icon: TcIcon, size: Dp, tint: Color, modifier: Modifier = Modifier) {
-    val vector = remember(icon) {
-        ImageVector.Builder(icon.name, 24.dp, 24.dp, 24f, 24f)
+    TcPathIcon(icon.path, size, tint, modifier)
+}
+
+/** A 24x24 line icon drawn from an SVG path string, round caps/joins. */
+@Composable
+internal fun TcPathIcon(path: String, size: Dp, tint: Color, modifier: Modifier = Modifier, strokeWidth: Float = 1.7f) {
+    val vector = remember(path, strokeWidth) {
+        ImageVector.Builder("line-icon", 24.dp, 24.dp, 24f, 24f)
             .addPath(
-                pathData = addPathNodes(icon.path),
+                pathData = addPathNodes(path),
                 fill = null,
                 stroke = SolidColor(Color.Black),
-                strokeLineWidth = 1.7f,
+                strokeLineWidth = strokeWidth,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
             )
