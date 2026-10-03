@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -313,8 +314,8 @@ internal fun McpDetailPage(
     var note by remember { mutableStateOf(card?.note.orEmpty()) }
     var accountName by remember { mutableStateOf(connection?.displayName.orEmpty()) }
     var accountNote by remember { mutableStateOf(connection?.note.orEmpty()) }
-    var access by remember { mutableIntStateOf(0) }
-    var token by remember { mutableStateOf("") }
+    var credential by remember(connection?.id) { mutableStateOf(McpCredentialDraft.from(connection)) }
+    var credentialBusy by remember { mutableStateOf(false) }
     var boundIds by remember { mutableStateOf(connection?.boundIdentityIds.orEmpty().toSet()) }
     val purposes = remember { mutableStateListOf<String>() }
     var purposeOn by remember { mutableStateOf(setOf<Int>()) }
@@ -366,14 +367,96 @@ internal fun McpDetailPage(
     TcFormCard("账号与人格档案") {
         TcField("账号名称") { TcInput(accountName, { accountName = it }) }
         TcField("账号备注") { TcInput(accountNote, { accountNote = it }, multiline = true) }
-        TcField("接入方式") {
-            TcPills(listOf("官方 App · 仅 URL", "CLI · Token"), setOf(access)) { access = it; shellEdited = true }
-            TcHint("接入方式仍是界面预览，本轮不改变 credential lifecycle。")
-        }
-        if (access == 1) {
-            TcField("Token") {
-                TcInput(token, { token = it; shellEdited = true }, secret = true)
-                TcHint("CLI Token 尚未接入后端，当前不会保存。")
+        McpCredentialInputs(credential, connection) { credential = it }
+        if (connection != null) {
+            val currentType = connection.authType
+            val updating = connection.status == McpBackendConnectionStatus.AuthUpdating
+            val action = when (credential.choice) {
+                McpAuthChoice.Bearer, McpAuthChoice.ApiKey -> "保存凭证"
+                McpAuthChoice.None -> if (currentType == McpAuthType.None) null else "切换为无鉴权"
+                McpAuthChoice.OAuth -> if (currentType == McpAuthType.OAuth) "重新授权 OAuth" else "切换到 OAuth 授权"
+            }
+            val removeToNone = {
+                ui.dialog = TcDialog(
+                    "改为无鉴权？",
+                    "将删除这个连接保存在后端的凭证，并以无鉴权方式重新发现工具；只有发现成功才会生效。",
+                    ok = "改为无鉴权",
+                    danger = true,
+                ) {
+                    credentialBusy = true
+                    scope.launch {
+                        runCatching { runMcpCredentialMutation(repository, connection.id) { removeCredential(connection.id) } }
+                            .onSuccess { fresh ->
+                                credential = McpCredentialDraft.from(fresh)
+                                state.refresh("已改为无鉴权 · ${fresh.status.label()}")
+                            }
+                            .onFailure { ui.toast(it.mcpSafeText()) }
+                        credentialBusy = false
+                    }
+                }
+            }
+            val switchToOAuth = {
+                ui.dialog = TcDialog(
+                    "切换到 OAuth 授权？",
+                    "将把这个连接切换为 OAuth，并移除当前保存的凭证；需要在官方页面重新完成授权。",
+                    ok = "继续授权",
+                ) {
+                    credentialBusy = true
+                    scope.launch {
+                        runCatching {
+                            var start: McpConnectionStart? = null
+                            val fresh = runMcpCredentialMutation(repository, connection.id) {
+                                start = reauthorizeOAuth(connection.id)
+                            }
+                            openMcpAuthorization(context, checkNotNull(start?.authorizationUrl))
+                            fresh
+                        }.onSuccess { fresh ->
+                            credential = McpCredentialDraft.from(fresh)
+                            state.refresh("请在 MCP 官方页面完成授权")
+                        }.onFailure { ui.toast(it.mcpSafeText()) }
+                        credentialBusy = false
+                    }
+                }
+            }
+            when {
+                updating -> TcHint("认证更新中，请稍后刷新查看结果。")
+                action != null -> Box(Modifier.padding(bottom = 11.dp)) {
+                    TcInlineStatus(
+                        action,
+                        connection.status.label(),
+                        ok = connection.status == McpBackendConnectionStatus.Connected,
+                        busy = credentialBusy,
+                    ) {
+                        when (credential.choice) {
+                            McpAuthChoice.Bearer, McpAuthChoice.ApiKey -> {
+                                val invalid = credential.validationError()
+                                val input = credential.toInput()
+                                if (invalid != null || input == null) {
+                                    ui.toast(invalid ?: "请选择凭证类型")
+                                } else {
+                                    credentialBusy = true
+                                    scope.launch {
+                                        runCatching {
+                                            runMcpCredentialMutation(repository, connection.id) { updateCredential(connection.id, input) }
+                                        }.onSuccess { fresh ->
+                                            credential = McpCredentialDraft.from(fresh)
+                                            state.refresh("凭证已更新 · ${fresh.status.label()}")
+                                        }.onFailure { ui.toast(it.mcpSafeText()) }
+                                        credentialBusy = false
+                                    }
+                                }
+                            }
+                            McpAuthChoice.None -> removeToNone()
+                            McpAuthChoice.OAuth -> switchToOAuth()
+                        }
+                    }
+                }
+            }
+            if (!updating && !credentialBusy && currentType != null &&
+                currentType in setOf(McpAuthType.Bearer, McpAuthType.ApiKey) &&
+                credential.choice == currentType.toChoice()
+            ) {
+                TcAccLink("移除凭证", danger = true) { removeToNone() }
             }
         }
         TcField("挂到哪些人格档案") {
@@ -486,20 +569,30 @@ internal fun McpDetailPage(
     }
 
     TcSaveButton(if (busy && adding) "连接中…" else "保存并注册工具", enabled = !busy) {
-        val shellNotice = if (shellEdited) "接入方式、用途或单工具开关仍是界面预览，未保存" else null
+        val shellNotice = listOfNotNull(
+            if (shellEdited) "用途或单工具开关仍是界面预览，未保存" else null,
+            if (connection != null && credential.hasSecret) "Token / API Key 需点「保存凭证」单独提交" else null,
+        ).joinToString("；").ifEmpty { null }
         if (connection == null) {
             val endpoint = opaqueMcpServerEndpoint(url.trim())
             if (endpoint == null) {
                 ui.toast("请输入完整的 MCP Server URL")
                 return@TcSaveButton
             }
+            val invalidCredential = credential.validationError()
+            if (invalidCredential != null) {
+                ui.toast(invalidCredential)
+                return@TcSaveButton
+            }
+            val credentialInput = credential.toInput()
             busy = true
             scope.launch {
-                val result = runCatching { repository.connect(endpoint) }.getOrElse {
-                    ui.toast(it.message ?: "MCP 连接失败")
+                val result = runCatching { repository.connect(endpoint, credentialInput) }.getOrElse {
+                    ui.toast(if (credentialInput != null) it.mcpSafeText() else it.message ?: "MCP 连接失败")
                     busy = false
                     return@launch
                 }
+                credential = credential.cleared()
                 val metadataFailure = runCatching {
                     val created = result.connection ?: error("App Backend 未返回新 Connection，名称和备注未保存")
                     repository.updateConnection(
@@ -674,6 +767,7 @@ internal fun mcpAccountMeta(connection: McpBackendConnection, personas: List<Per
         if (connection.boundIdentityIds.isEmpty()) "未绑定人格档案"
         else "人格档案 " + connection.boundIdentityIds.joinToString("、") { personaDisplayName(it, personas) },
     )
+    mcpCredentialSummary(connection)?.let(::add)
     add(connection.status.label())
     add("${connection.toolCount} 个工具")
     if (!connection.enabled) add("已关闭")

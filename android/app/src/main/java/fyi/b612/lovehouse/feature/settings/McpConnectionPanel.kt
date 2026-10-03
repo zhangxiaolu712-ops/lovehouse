@@ -83,6 +83,7 @@ internal fun McpBackendConnectionStatus.label(): String = when (this) {
     McpBackendConnectionStatus.Connected -> "已连接"
     McpBackendConnectionStatus.Failed -> "连接失败"
     McpBackendConnectionStatus.Abandoned -> "已放弃"
+    McpBackendConnectionStatus.AuthUpdating -> "认证更新中"
     McpBackendConnectionStatus.Unknown -> "状态未知"
 }
 
@@ -93,6 +94,7 @@ internal fun McpBackendConnectionStatus.canDelete(): Boolean = when (this) {
     McpBackendConnectionStatus.Abandoned,
     -> true
     McpBackendConnectionStatus.Connected,
+    McpBackendConnectionStatus.AuthUpdating,
     McpBackendConnectionStatus.Unknown,
     -> false
 }

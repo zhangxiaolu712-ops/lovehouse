@@ -17,8 +17,29 @@ enum class McpBackendConnectionStatus {
     Connected,
     Failed,
     Abandoned,
+    AuthUpdating,
     Unknown,
 }
+
+enum class McpAuthType { None, Bearer, ApiKey, OAuth }
+
+enum class McpCredentialStatus { Configured, Missing, ReauthorizationRequired }
+
+/** Write-only credential input; it is never persisted and never printed. */
+sealed interface McpCredentialInput {
+    data object None : McpCredentialInput
+
+    class Bearer(val token: String) : McpCredentialInput {
+        override fun toString(): String = "Bearer(token=<redacted>)"
+    }
+
+    class ApiKey(val headerName: String, val value: String) : McpCredentialInput {
+        override fun toString(): String = "ApiKey(headerName=$headerName, value=<redacted>)"
+    }
+}
+
+/** An error whose message is Android-owned text that is safe to show. */
+class McpSafeException(message: String) : IllegalStateException(message)
 
 data class McpBackendConnection(
     val id: String,
@@ -34,6 +55,10 @@ data class McpBackendConnection(
     val tools: List<McpDiscoveredTool> = emptyList(),
     val displayName: String? = null,
     val note: String? = null,
+    val authType: McpAuthType? = null,
+    val credentialStatus: McpCredentialStatus? = null,
+    val credentialUpdatedAt: String? = null,
+    val apiKeyHeaderName: String? = null,
 )
 
 data class McpToolService(
@@ -171,6 +196,14 @@ interface McpConnectionRepository {
     suspend fun updateConnection(connectionId: String, update: McpConnectionUpdate): McpBackendConnection =
         error("MCP Connection 更新尚未接入")
     suspend fun connect(serverUrl: String): McpConnectionStart
+
+    /** A null credential keeps the OAuth-capable create path; explicit None is a different request. */
+    suspend fun connect(serverUrl: String, credential: McpCredentialInput?): McpConnectionStart =
+        if (credential == null) connect(serverUrl) else error("MCP 凭证尚未接入")
+    suspend fun updateCredential(connectionId: String, credential: McpCredentialInput): McpBackendConnection =
+        error("MCP 凭证尚未接入")
+    suspend fun removeCredential(connectionId: String): McpBackendConnection = error("MCP 凭证尚未接入")
+    suspend fun reauthorizeOAuth(connectionId: String): McpConnectionStart = error("MCP OAuth 重新授权尚未接入")
     suspend fun delete(connectionId: String): McpConnectionDeleteResult
     suspend fun bindIdentity(toolServiceId: String, identityId: String, connectionId: String)
     suspend fun unbindIdentity(toolServiceId: String, identityId: String)
@@ -206,6 +239,40 @@ internal fun opaqueMcpServerEndpoint(value: String): String? = value.takeIf(Stri
 
 internal fun createMcpConnectionFields(serverUrl: String): Map<String, String> =
     mapOf("server_url" to serverUrl)
+
+internal fun mcpCredentialFields(credential: McpCredentialInput): JSONObject = when (credential) {
+    McpCredentialInput.None -> JSONObject().put("auth_type", "none")
+    is McpCredentialInput.Bearer -> JSONObject().put("auth_type", "bearer").put("token", credential.token)
+    is McpCredentialInput.ApiKey -> JSONObject()
+        .put("auth_type", "api_key")
+        .put("header_name", credential.headerName)
+        .put("value", credential.value)
+}
+
+internal fun createMcpConnectionBody(serverUrl: String, credential: McpCredentialInput?): JSONObject =
+    JSONObject(createMcpConnectionFields(serverUrl)).apply {
+        if (credential != null) put("credential", mcpCredentialFields(credential))
+    }
+
+/** Maps HTTP status + error.code to Android-owned text; backend error.message is never shown. */
+internal fun mcpCredentialErrorText(status: Int, errorCode: String?): String = when {
+    status == 401 -> "App 账号登录已失效，请重新登录后再试"
+    status == 404 || errorCode == "MCP_CONNECTION_NOT_FOUND" -> "这个连接不存在或已被移除"
+    errorCode == "INVALID_MCP_CREDENTIAL" -> "凭证格式不正确，请检查后再试"
+    errorCode == "MCP_CREDENTIAL_UPDATE_FAILED" -> "凭证未通过远端 MCP 验证，未更新"
+    errorCode == "MCP_CREDENTIAL_REMOVE_FAILED" -> "改为无鉴权后远端 MCP 未通过验证，凭证未移除"
+    errorCode == "MCP_OAUTH_REAUTHORIZATION_FAILED" -> "无法发起 OAuth 授权，请稍后再试"
+    errorCode == "MCP_CONNECTION_FAILED" -> "连接远端 MCP 失败，请检查地址和凭证"
+    status == 403 -> "没有权限执行这个操作"
+    else -> "操作失败（HTTP $status），请稍后再试"
+}
+
+internal fun Throwable.mcpSafeText(): String = (this as? McpSafeException)?.message ?: "操作失败，请稍后再试"
+
+private val HeaderNameToken = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+/** Local pre-check only; App Backend performs the authoritative validation. */
+internal fun isPlausibleApiKeyHeaderName(value: String): Boolean = value.length <= 128 && HeaderNameToken.matches(value)
 
 internal fun mcpConnectionEndpoint(baseUrl: String, connectionId: String): String {
     require(connectionId.isNotBlank()) { "缺少 MCP connection_id" }
@@ -374,26 +441,58 @@ class AppBackendMcpConnectionRepository(
             endpoint = appBackendMcpEndpoint(baseUrl, "connections"),
             body = JSONObject(createMcpConnectionFields(endpoint)).toString(),
         )
-        val nested = payload.optJSONObject("connection")
-        val connectionId = payload.firstString("connection_id", "id")
-            ?: nested?.firstString("connection_id", "id")
-            ?: error("App Backend 未返回 connection_id")
-        val status = parseStatus(payload.firstString("status") ?: nested?.firstString("status"))
-        val authorizationUrl = payload.firstString("authorization_url")
-        if (status == McpBackendConnectionStatus.AuthorizationRequired && !authorizationUrl.isNullOrBlank()) {
-            check(isSafeMcpAuthorizationUrl(authorizationUrl)) { "App Backend 返回了不安全的 OAuth 地址" }
-        }
+        val start = payload.toConnectionStart()
         Log.i(
             LOG_TAG,
-            "create_connection connection_id=$connectionId response_status=${status.name.lowercase()} " +
-                "authorization_url_present=${!authorizationUrl.isNullOrBlank()}",
+            "create_connection connection_id=${start.connectionId} response_status=${start.status.name.lowercase()} " +
+                "authorization_url_present=${!start.authorizationUrl.isNullOrBlank()}",
         )
-        return McpConnectionStart(
-            connectionId = connectionId,
-            status = status,
-            authorizationUrl = authorizationUrl,
-            connection = nested?.toConnection(),
-        )
+        return start
+    }
+
+    override suspend fun connect(serverUrl: String, credential: McpCredentialInput?): McpConnectionStart {
+        if (credential == null) return connect(serverUrl)
+        val endpoint = opaqueMcpServerEndpoint(serverUrl) ?: throw McpSafeException("请输入完整的 MCP Server URL")
+        val start = credentialRequest(
+            method = "POST",
+            endpoint = appBackendMcpEndpoint(baseUrl, "connections"),
+            body = createMcpConnectionBody(endpoint, credential).toString(),
+        ).toConnectionStart()
+        Log.i(LOG_TAG, "create_connection_with_credential response_status=${start.status.name.lowercase()}")
+        return start
+    }
+
+    override suspend fun updateCredential(
+        connectionId: String,
+        credential: McpCredentialInput,
+    ): McpBackendConnection = credentialRequest(
+        method = "PUT",
+        endpoint = "${mcpConnectionEndpoint(baseUrl, connectionId)}/credential",
+        body = mcpCredentialFields(credential).toString(),
+    ).toUpdatedConnection()
+
+    override suspend fun removeCredential(connectionId: String): McpBackendConnection = credentialRequest(
+        method = "DELETE",
+        endpoint = "${mcpConnectionEndpoint(baseUrl, connectionId)}/credential",
+    ).toUpdatedConnection()
+
+    override suspend fun reauthorizeOAuth(connectionId: String): McpConnectionStart {
+        val start = credentialRequest(
+            method = "POST",
+            endpoint = "${mcpConnectionEndpoint(baseUrl, connectionId)}/oauth/reauthorize",
+        ).toConnectionStart()
+        if (start.status != McpBackendConnectionStatus.AuthorizationRequired || start.authorizationUrl.isNullOrBlank()) {
+            throw McpSafeException("App Backend 未返回可用的 OAuth 授权地址")
+        }
+        return start
+    }
+
+    private suspend fun credentialRequest(method: String, endpoint: String, body: String? = null): JSONObject = try {
+        request(method, endpoint, body, logErrorMessage = false)
+    } catch (error: McpHttpException) {
+        throw McpSafeException(mcpCredentialErrorText(error.status, error.errorCode))
+    } catch (ignored: IOException) {
+        throw McpSafeException("网络连接失败，请检查网络后再试")
     }
 
     override suspend fun delete(connectionId: String): McpConnectionDeleteResult = try {
@@ -424,7 +523,12 @@ class AppBackendMcpConnectionRepository(
         )
     }
 
-    private suspend fun request(method: String, endpoint: String, body: String? = null): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun request(
+        method: String,
+        endpoint: String,
+        body: String? = null,
+        logErrorMessage: Boolean = true,
+    ): JSONObject = withContext(Dispatchers.IO) {
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = CONNECT_TIMEOUT_MS
@@ -452,7 +556,11 @@ class AppBackendMcpConnectionRepository(
                     ?.takeIf(String::isNotBlank)
                     ?: payload.optString("message").takeIf(String::isNotBlank)
                     ?: "App Backend 请求失败（HTTP $status）"
-                Log.w(LOG_TAG, "mcp_request_failed http_status=$status error_code=${errorCode ?: "none"} error_message=$message")
+                Log.w(
+                    LOG_TAG,
+                    "mcp_request_failed http_status=$status error_code=${errorCode ?: "none"}" +
+                        if (logErrorMessage) " error_message=$message" else "",
+                )
                 throw McpHttpException(status, errorCode, message)
             }
             payload
@@ -485,7 +593,31 @@ private fun JSONArray?.toConnections(): List<McpBackendConnection> = this?.let {
     }
 }.orEmpty()
 
-private fun JSONObject.toConnection(): McpBackendConnection {
+internal fun JSONObject.toConnectionStart(): McpConnectionStart {
+    val nested = optJSONObject("connection")
+    val connectionId = firstString("connection_id", "id")
+        ?: nested?.firstString("connection_id", "id")
+        ?: error("App Backend 未返回 connection_id")
+    val status = parseStatus(firstString("status") ?: nested?.firstString("status"))
+    val authorizationUrl = firstString("authorization_url")
+    if (status == McpBackendConnectionStatus.AuthorizationRequired && !authorizationUrl.isNullOrBlank()) {
+        check(isSafeMcpAuthorizationUrl(authorizationUrl)) { "App Backend 返回了不安全的 OAuth 地址" }
+    }
+    return McpConnectionStart(
+        connectionId = connectionId,
+        status = status,
+        authorizationUrl = authorizationUrl,
+        connection = nested?.toConnection(),
+    )
+}
+
+internal fun JSONObject.toUpdatedConnection(): McpBackendConnection {
+    if (optString("status") != "updated") throw McpSafeException("凭证变更尚未完成，请刷新后查看连接状态")
+    return optJSONObject("connection")?.toConnection()
+        ?: throw McpSafeException("App Backend 未返回更新后的连接状态")
+}
+
+internal fun JSONObject.toConnection(): McpBackendConnection {
     val tools = optJSONArray("tools")
     return McpBackendConnection(
         id = firstString("connection_id", "id", "server_id").orEmpty(),
@@ -501,7 +633,30 @@ private fun JSONObject.toConnection(): McpBackendConnection {
         tools = tools.toTools(),
         displayName = firstString("display_name"),
         note = firstString("note"),
+        authType = parseAuthType(nullableString("auth_type")),
+        credentialStatus = parseCredentialStatus(nullableString("credential_status")),
+        credentialUpdatedAt = nullableString("credential_updated_at"),
+        apiKeyHeaderName = nullableString("api_key_header_name"),
     )
+}
+
+/** Android's org.json returns "null" from optString for JSON null, so check isNull first. */
+private fun JSONObject.nullableString(key: String): String? =
+    if (isNull(key)) null else optString(key).takeIf(String::isNotBlank)
+
+private fun parseAuthType(value: String?): McpAuthType? = when (value) {
+    "none" -> McpAuthType.None
+    "bearer" -> McpAuthType.Bearer
+    "api_key" -> McpAuthType.ApiKey
+    "oauth" -> McpAuthType.OAuth
+    else -> null
+}
+
+private fun parseCredentialStatus(value: String?): McpCredentialStatus? = when (value) {
+    "configured" -> McpCredentialStatus.Configured
+    "missing" -> McpCredentialStatus.Missing
+    "reauthorization_required" -> McpCredentialStatus.ReauthorizationRequired
+    else -> null
 }
 
 private fun JSONArray?.toTools(): List<McpDiscoveredTool> = this?.let { array ->
@@ -584,6 +739,7 @@ private fun parseStatus(value: String?): McpBackendConnectionStatus = when (valu
     "connected", "ready" -> McpBackendConnectionStatus.Connected
     "failed", "error" -> McpBackendConnectionStatus.Failed
     "abandoned", "cancelled", "canceled" -> McpBackendConnectionStatus.Abandoned
+    "auth_updating" -> McpBackendConnectionStatus.AuthUpdating
     else -> McpBackendConnectionStatus.Unknown
 }
 
