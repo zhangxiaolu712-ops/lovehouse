@@ -124,6 +124,7 @@ private val DangerWash = Color(0x1A9A3B32)
 private val OkWash = Color(0x1A4F7F68)
 private val OkLine = Color(0x334F7F68)
 private val Handle = Color(0x40A55F52)
+private val VaultSheetGlass = Color(0xF2FCF9F4)
 
 private sealed interface VaultSheet {
     data object Add : VaultSheet
@@ -174,18 +175,6 @@ internal fun SecretVaultPage(onBack: () -> Unit, modifier: Modifier = Modifier) 
                     }
                 }
             }
-            Box(
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .navigationBarsPadding()
-                    .padding(24.dp)
-                    .size(48.dp)
-                    .shadow(10.dp, RoundedCornerShape(16.dp), ambientColor = Tc.PopShadow, spotColor = Tc.PopShadow)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Tc.Accent)
-                    .clickable(onClickLabel = "添加密钥", role = Role.Button) { sheet = VaultSheet.Add },
-                contentAlignment = Alignment.Center,
-            ) { TcIconView(TcIcon.Plus, 20.dp, Color.White) }
         }
 
         AnimatedVisibility(sheet != null, enter = fadeIn(tween(200)), exit = fadeOut(tween(200))) {
@@ -337,7 +326,7 @@ private fun VaultSheetFrame(content: @Composable ColumnScope.() -> Unit) {
             .heightIn(max = maxHeight)
             .shadow(16.dp, shape, ambientColor = Tc.PopShadow, spotColor = Tc.PopShadow)
             .clip(shape)
-            .background(Tc.GlassStrong)
+            .background(VaultSheetGlass)
             .border(1.dp, Tc.Edge, shape)
             .clickable(remember { MutableInteractionSource() }, null) {}
             .imePadding()
