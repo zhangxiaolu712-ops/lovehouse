@@ -218,6 +218,7 @@ private fun LoveHouseContent(
                 toolConnectionProbe = dependencies.toolConnectionProbe,
                 appAccount = dependencies.appAccount,
                 mcpConnections = dependencies.mcpConnections,
+                secretVault = dependencies.secretVault,
                 personaRuntimeSource = dependencies.personaRuntimeSource,
                 selfCheck = dependencies.selfCheck,
                 serverEvents = dependencies.serverEvents,
