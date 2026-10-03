@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import fyi.b612.lovehouse.feature.settings.TcPathIcon
 import java.time.LocalDate
 import java.time.LocalTime
@@ -87,6 +88,8 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
     var month by remember { mutableStateOf(YearMonth.from(today)) }
     var selDay by remember { mutableIntStateOf(ScheduleSamples.InitialSelectedDay) }
     var calendarBadge by remember { mutableStateOf<String?>(null) }
+    var selectedScheduleItemIndex by remember { mutableStateOf<Int?>(null) }
+    var detailScheduleItem by remember { mutableStateOf<ScheduleItem?>(null) }
     val store = remember {
         mutableStateMapOf<LocalDate, List<ScheduleItem>>().apply { putAll(ScheduleSamples.schedule(YearMonth.from(today))) }
     }
@@ -96,6 +99,8 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
     val goTo: (YearMonth, Int) -> Unit = { target, day ->
         month = target
         selDay = day.coerceIn(1, target.lengthOfMonth())
+        selectedScheduleItemIndex = null
+        detailScheduleItem = null
     }
 
     Box(modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
@@ -115,7 +120,16 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
                         selected = selected,
                         today = today,
                         store = store,
-                        onSelect = { selDay = it },
+                        selectedItemIndex = selectedScheduleItemIndex,
+                        onSelect = {
+                            selDay = it
+                            selectedScheduleItemIndex = null
+                            detailScheduleItem = null
+                        },
+                        onItemSelect = { index, item ->
+                            selectedScheduleItemIndex = index
+                            detailScheduleItem = item
+                        },
                         onMonth = { goTo(it, selDay) },
                         onToday = { goTo(YearMonth.from(today), today.dayOfMonth) },
                         onMode = { calendarBadge = it },
@@ -124,7 +138,16 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
                         store[selected] = store[selected].orEmpty() + item
                         tab = ScheduleTab.Calendar
                     }
-                    ScheduleTab.Timeline -> TimelineView(selected, store) { goTo(YearMonth.from(it), it.dayOfMonth) }
+                    ScheduleTab.Timeline -> TimelineView(
+                        selected = selected,
+                        store = store,
+                        selectedItemIndex = selectedScheduleItemIndex,
+                        onDateSelect = { goTo(YearMonth.from(it), it.dayOfMonth) },
+                        onItemSelect = { index, item ->
+                            selectedScheduleItemIndex = index
+                            detailScheduleItem = item
+                        },
+                    )
                     ScheduleTab.Todo -> TodoView(todos)
                     ScheduleTab.Course -> CourseView()
                     ScheduleTab.Checkin -> CheckinView(habits)
@@ -143,6 +166,12 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
                 calendarBadge = null
                 dockOpen = false
             }
+        }
+        detailScheduleItem?.let { item ->
+            ScheduleItemDetailDialog(
+                item = item,
+                onDismiss = { detailScheduleItem = null },
+            )
         }
     }
 }
@@ -174,10 +203,6 @@ private fun ScheduleDock(current: ScheduleTab, onSelect: (ScheduleTab) -> Unit) 
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(Modifier.padding(bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(Sc.RoseDot, Sc.AmberDot, Sc.OkDot).forEach { Box(Modifier.size(10.dp).background(it, CircleShape)) }
-        }
-        Box(Modifier.padding(vertical = 4.dp).size(28.dp, 1.dp).background(Sc.CellOff))
         ScheduleTab.entries.forEach { entry ->
             val on = entry == current
             val shape = RoundedCornerShape(12.dp)
@@ -203,7 +228,9 @@ private fun CalendarView(
     selected: LocalDate,
     today: LocalDate,
     store: SnapshotStateMap<LocalDate, List<ScheduleItem>>,
+    selectedItemIndex: Int?,
     onSelect: (Int) -> Unit,
+    onItemSelect: (Int, ScheduleItem) -> Unit,
     onMonth: (YearMonth) -> Unit,
     onToday: () -> Unit,
     onMode: (String) -> Unit,
@@ -295,7 +322,15 @@ private fun CalendarView(
         Column(
             Modifier.fillMaxWidth().scGlass(RoundedCornerShape(16.dp)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) { items.forEach { DayScheduleRow(it) } }
+        ) {
+            items.forEachIndexed { index, item ->
+                DayScheduleRow(
+                    item = item,
+                    selected = index == selectedItemIndex,
+                    onClick = { onItemSelect(index, item) },
+                )
+            }
+        }
     }
 }
 
@@ -385,23 +420,24 @@ private fun PickerArrow(glyph: String, label: String, onClick: () -> Unit) {
     ) { ScText(glyph, 16f, color = Sc.Ink600, weight = FontWeight.SemiBold) }
 }
 
-/** Calendar day list row; the current item is an accent-washed card, not a dark block. */
+/** Calendar day list row; selection is runtime UI state and never part of sample data. */
 @Composable
-private fun DayScheduleRow(item: ScheduleItem) {
+private fun DayScheduleRow(item: ScheduleItem, selected: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(12.dp)
     Row(
         Modifier
             .fillMaxWidth()
             .clip(shape)
-            .then(if (item.active) Modifier.background(Sc.AccentWash).border(1.dp, Sc.AccentLine, shape) else Modifier)
-            .padding(if (item.active) 10.dp else 8.dp),
+            .then(if (selected) Modifier.background(Sc.AccentWash).border(1.dp, Sc.AccentLine, shape) else Modifier)
+            .clickable(onClickLabel = "查看${item.title}详情", onClick = onClick)
+            .padding(if (selected) 10.dp else 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        ScText(item.time, 11f, Modifier.width(64.dp), color = if (item.active) Sc.AccentDeep else Sc.Ink400, weight = FontWeight.Medium)
+        ScText(item.time, 11f, Modifier.width(64.dp), color = if (selected) Sc.AccentDeep else Sc.Ink400, weight = FontWeight.Medium)
         Column(Modifier.weight(1f)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 ScText(item.title, 12f, Modifier.weight(1f, fill = false), color = Sc.Ink800, weight = FontWeight.SemiBold)
-                KindTag(item.kind, item.active)
+                KindTag(item.kind, selected)
             }
             DetailLine(item, 10f, Sc.Ink600, Modifier.padding(top = 2.dp))
         }
@@ -556,7 +592,13 @@ private fun PrimaryButton(label: String, modifier: Modifier = Modifier, tall: Bo
 // ---------------- 行程排期 ----------------
 
 @Composable
-private fun TimelineView(selected: LocalDate, store: SnapshotStateMap<LocalDate, List<ScheduleItem>>, onSelect: (LocalDate) -> Unit) {
+private fun TimelineView(
+    selected: LocalDate,
+    store: SnapshotStateMap<LocalDate, List<ScheduleItem>>,
+    selectedItemIndex: Int?,
+    onDateSelect: (LocalDate) -> Unit,
+    onItemSelect: (Int, ScheduleItem) -> Unit,
+) {
     val items = store[selected] ?: listOf(ScheduleItem("全天", "自由休整", ScheduleKind.Rest, "今日无特定的工作或项目任务"))
     Column(Modifier.fillMaxWidth().scGlass(RoundedCornerShape(24.dp)).padding(16.dp)) {
         Row(
@@ -583,7 +625,7 @@ private fun TimelineView(selected: LocalDate, store: SnapshotStateMap<LocalDate,
             weekOf(selected).forEach { date ->
                 val on = date == selected
                 Column(
-                    Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { onSelect(date) },
+                    Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable { onDateSelect(date) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     ScText(weekdayCn(date), 10f, color = Sc.Ink400)
@@ -605,19 +647,27 @@ private fun TimelineView(selected: LocalDate, store: SnapshotStateMap<LocalDate,
                 }
                 .padding(start = 20.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
-        ) { items.forEach { TimelineRow(it) } }
+        ) {
+            items.forEachIndexed { index, item ->
+                TimelineRow(
+                    item = item,
+                    selected = index == selectedItemIndex,
+                    onClick = { onItemSelect(index, item) },
+                )
+            }
+        }
     }
 }
 
-/** Timeline node sits centred on the rail; the current item uses an accent wash panel. */
+/** Timeline node sits centred on the rail; selected styling comes only from UI state. */
 @Composable
-private fun TimelineRow(item: ScheduleItem) {
+private fun TimelineRow(item: ScheduleItem, selected: Boolean, onClick: () -> Unit) {
     Box(Modifier.fillMaxWidth()) {
-        if (item.active) Box(Modifier.offset(x = (-17).dp, y = 2.dp).size(12.dp).background(Sc.AccentTint, CircleShape))
+        if (selected) Box(Modifier.offset(x = (-17).dp, y = 2.dp).size(12.dp).background(Sc.AccentTint, CircleShape))
         Box(
             Modifier.offset(x = (-15).dp, y = 4.dp).size(8.dp)
-                .background(if (item.active) Color.White else Sc.SoftWhite, CircleShape)
-                .border(2.dp, if (item.active) Sc.AccentDeep else Sc.Ink400, CircleShape),
+                .background(if (selected) Color.White else Sc.SoftWhite, CircleShape)
+                .border(2.dp, if (selected) Sc.AccentDeep else Sc.Ink400, CircleShape),
         )
         Column {
             Row(
@@ -626,19 +676,52 @@ private fun TimelineRow(item: ScheduleItem) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(Modifier.weight(1f, fill = false), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ScText(item.time, 11f, Modifier.alignByBaseline(), color = if (item.active) Sc.AccentDeep else Sc.Ink400, weight = FontWeight.SemiBold)
+                    ScText(item.time, 11f, Modifier.alignByBaseline(), color = if (selected) Sc.AccentDeep else Sc.Ink400, weight = FontWeight.SemiBold)
                     ScText(item.title, 12f, Modifier.alignByBaseline(), color = Sc.Ink800, weight = FontWeight.SemiBold)
                 }
-                KindTag(item.kind, item.active)
+                KindTag(item.kind, selected)
             }
             val shape = RoundedCornerShape(12.dp)
             Box(
                 Modifier.fillMaxWidth().clip(shape)
-                    .background(if (item.active) Sc.AccentWash else Sc.SoftWhite)
-                    .border(1.dp, if (item.active) Sc.AccentLine else Sc.SoftEdge, shape)
+                    .background(if (selected) Sc.AccentWash else Sc.SoftWhite)
+                    .border(1.dp, if (selected) Sc.AccentLine else Sc.SoftEdge, shape)
+                    .clickable(onClickLabel = "查看${item.title}详情", onClick = onClick)
                     .padding(8.dp),
-            ) { DetailLine(item, 11f, if (item.active) Sc.Ink700 else Sc.Ink600) }
+            ) { DetailLine(item, 11f, if (selected) Sc.Ink700 else Sc.Ink600) }
         }
+    }
+}
+
+@Composable
+private fun ScheduleItemDetailDialog(item: ScheduleItem, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 520.dp)
+                .scPop(RoundedCornerShape(20.dp), fill = Color(0xFFFCF9F4))
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                ScText(item.title, 17f, Modifier.weight(1f), color = Sc.Ink900, weight = FontWeight.SemiBold)
+                KindTag(item.kind, false)
+            }
+            DetailField("时间", item.time)
+            DetailField("分类", item.kind.label)
+            DetailField("地点 / 备注", item.detail)
+            PrimaryButton("关闭", Modifier.fillMaxWidth(), onClick = onDismiss)
+        }
+    }
+}
+
+@Composable
+private fun DetailField(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        ScText(label, 10f, color = Sc.Ink400, weight = FontWeight.Medium)
+        ScText(value, 12f, Modifier.fillMaxWidth(), color = Sc.Ink700, lineHeight = 1.5f)
     }
 }
 

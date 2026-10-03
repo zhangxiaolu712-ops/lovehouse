@@ -10,7 +10,6 @@ internal data class ScheduleItem(
     val kind: ScheduleKind,
     val detail: String,
     val detailIcon: ScIcon? = null,
-    val active: Boolean = false,
 )
 
 internal data class TodoItem(val id: Long, val text: String, val completed: Boolean, val completedTime: String?)
@@ -54,17 +53,17 @@ internal object ScheduleSamples {
     fun schedule(month: YearMonth): Map<LocalDate, List<ScheduleItem>> = mapOf(
         month.atDay(7) to listOf(
             ScheduleItem("08:00", "晨间慢跑", ScheduleKind.Life, "滨江公园 5公里", ScIcon.Pin),
-            ScheduleItem("10:00 - 11:30", "产品设计复盘", ScheduleKind.Work, "线上会议室 - ZenSchedule UI界面优化", ScIcon.Pin, active = true),
+            ScheduleItem("10:00 - 11:30", "产品设计复盘", ScheduleKind.Work, "线上会议室 - ZenSchedule UI界面优化", ScIcon.Pin),
             ScheduleItem("14:00 - 16:00", "客户技术支持", ScheduleKind.Work, "客户现场沟通 & 架构演示", ScIcon.Pin),
             ScheduleItem("19:00 - 20:30", "柔术训练课", ScheduleKind.Course, "极真馆 - 张教练", ScIcon.Cap),
         ),
         month.atDay(8) to listOf(
-            ScheduleItem("09:00 - 10:30", "周度团队站会", ScheduleKind.Work, "3号大会议室", ScIcon.Pin, active = true),
+            ScheduleItem("09:00 - 10:30", "周度团队站会", ScheduleKind.Work, "3号大会议室", ScIcon.Pin),
             ScheduleItem("12:00 - 13:00", "午餐健康调理", ScheduleKind.Life, "搭配高蛋白营养餐", ScIcon.Pin),
             ScheduleItem("15:00 - 17:00", "代码架构审核", ScheduleKind.Work, "极简前端模块构建", ScIcon.Pin),
         ),
         month.atDay(9) to listOf(
-            ScheduleItem("10:00 - 12:00", "前端架构研讨", ScheduleKind.Work, "线上会议", ScIcon.Pin, active = true),
+            ScheduleItem("10:00 - 12:00", "前端架构研讨", ScheduleKind.Work, "线上会议", ScIcon.Pin),
             ScheduleItem("15:00 - 17:00", "读书分享会", ScheduleKind.Course, "社区书店", ScIcon.Cap),
         ),
     )

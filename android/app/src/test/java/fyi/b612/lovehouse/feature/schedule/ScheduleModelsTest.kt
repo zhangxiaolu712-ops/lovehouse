@@ -30,6 +30,7 @@ class ScheduleModelsTest {
         val month = YearMonth.of(2026, 10)
         val samples = ScheduleSamples.schedule(month)
         assertEquals(setOf(7, 8, 9), samples.keys.map { it.dayOfMonth }.toSet())
-        assertEquals(1, samples.getValue(month.atDay(7)).count { it.active })
+        assertEquals(4, samples.getValue(month.atDay(7)).size)
+        assertEquals("产品设计复盘", samples.getValue(month.atDay(7))[1].title)
     }
 }
