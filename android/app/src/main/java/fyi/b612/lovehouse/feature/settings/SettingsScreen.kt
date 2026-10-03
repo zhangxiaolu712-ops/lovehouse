@@ -111,7 +111,7 @@ private val groupTemplates = listOf(
     SettingGroup("本机与设备", listOf(
         SettingEntry("本地资源", "照片、文件与离线资源", "12.8 GB", LoveHouseIcon.File),
         SettingEntry("设备", "本机 · Nearby BLE · Trusted Devices", "", LoveHouseIcon.Computer),
-        SettingEntry("密码库 / Secret Vault", "集中保存密码、API Key 与恢复码", "尚未启用", LoveHouseIcon.Settings),
+        SettingEntry("密码库 / Secret Vault", "集中保存密码、API Key 与恢复码", "后端存储", LoveHouseIcon.Settings),
         SettingEntry("隐私锁", "进入验证与敏感内容保护", "指纹", LoveHouseIcon.Settings),
         SettingEntry("同步", "云端同步、冲突与离线状态", "正常", LoveHouseIcon.Regenerate),
     )),
@@ -135,6 +135,7 @@ fun SettingsScreen(
     toolConnectionProbe: ToolConnectionProbe,
     appAccount: AppAccountRepository,
     mcpConnections: McpConnectionRepository,
+    secretVault: SecretVaultRepository,
     personaRuntimeSource: PersonaRuntimeSource,
     selfCheck: DeploymentSelfCheckRunner,
     onOpenConnectionControl: () -> Unit,
@@ -169,7 +170,7 @@ fun SettingsScreen(
                 modifier = modifier,
             )
         } else if (detail.title == SecretVaultEntryTitle) {
-            SecretVaultPage(onBack = { selected = null }, modifier = modifier)
+            SecretVaultPage(repository = secretVault, onBack = { selected = null }, modifier = modifier)
         } else {
             SettingsDetail(
                 detail,
@@ -255,7 +256,7 @@ private fun SettingsHome(
         "工具添加" to if (savedToolConnections.any { it.kind == ToolConnectionKind.Api }) "本机 API + MCP" else "App Backend MCP",
         "本地资源" to "本机存储",
         "设备" to (deviceContext.battery.levelPercent?.let { "电量 $it%" } ?: "状态可刷新"),
-        "密码库 / Secret Vault" to "尚未启用",
+        "密码库 / Secret Vault" to "后端存储",
         "隐私锁" to biometricState,
         "同步" to "尚未接入",
         "控制台" to "状态未知",

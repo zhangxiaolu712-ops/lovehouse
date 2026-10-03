@@ -40,9 +40,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,44 +69,33 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.time.LocalDateTime
+import java.time.Instant
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.UUID
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-internal enum class VaultKeyType(val label: String) { ApiKey("API Key"), Bearer("Bearer Token") }
+internal enum class VaultKeyType(val label: String, val wireName: String) {
+    ApiKey("API Key", "api_key"),
+    Bearer("Bearer Token", "bearer");
 
-/** One vault entry as the list shows it. Only the masked form is kept; the full key never is. */
-internal data class VaultKey(
-    val id: String,
-    val name: String,
-    val type: VaultKeyType,
-    val maskedKey: String,
-    val notes: String,
-    val updatedAt: String,
-)
-
-/** Preview entries from the HTML, in memory only, so the real vault source can replace them in one place. */
-internal object VaultSamples {
-    val keys = listOf(
-        VaultKey("key_1", "ElevenLabs", VaultKeyType.ApiKey, "sk-••••••7mXa", "用于配音及语音生成模型接口", "2026-09-28 14:30"),
-        VaultKey("key_2", "OpenAI GPT-4o", VaultKeyType.Bearer, "sk-proj-••••••9kLq", "高频对话与文本逻辑处理核心 Key", "2026-10-02 09:15"),
-        VaultKey("key_3", "DeepSeek API", VaultKeyType.ApiKey, "sk-••••••3xP9", "代码生成与深度逻辑推理辅助凭证", "2026-10-03 18:04"),
-    )
-}
-
-/** The HTML's preview mask. A real vault should show the mask the backend returns instead. */
-internal fun maskVaultKey(raw: String): String {
-    val clean = raw.trim()
-    return when {
-        clean.isEmpty() -> "sk-••••••••"
-        clean.length <= 8 -> clean.take(2) + "••••" + clean.takeLast(2)
-        else -> clean.take(3) + "••••••" + clean.takeLast(4)
+    companion object {
+        fun fromWire(value: String): VaultKeyType? = entries.firstOrNull { it.wireName == value }
     }
 }
 
 private val VaultTime = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
-private const val PreviewSuffix = "（预览，未接后端）"
+
+internal fun String.vaultTypeLabel(): String = VaultKeyType.fromWire(this)?.label ?: this
+    .replace('_', ' ')
+    .replaceFirstChar { it.uppercase() }
+
+internal fun formatVaultTimestamp(value: String): String = runCatching {
+    Instant.parse(value).atZone(ZoneId.systemDefault()).format(VaultTime)
+}.getOrDefault(value)
+
+private fun Throwable.safeVaultMessage(): String =
+    (this as? SecretVaultException)?.message ?: "密码库连接失败，请检查网络后重试"
 
 private object VaultIcon {
     const val Key = "M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78a5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"
@@ -132,15 +121,37 @@ private sealed interface VaultSheet {
 }
 
 @Composable
-internal fun SecretVaultPage(onBack: () -> Unit, modifier: Modifier = Modifier) {
-    val keys = remember { mutableStateListOf<VaultKey>().apply { addAll(VaultSamples.keys) } }
+internal fun SecretVaultPage(repository: SecretVaultRepository, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    var keys by remember(repository) { mutableStateOf<List<SecretCredential>>(emptyList()) }
+    var loading by remember(repository) { mutableStateOf(true) }
+    var loadError by remember(repository) { mutableStateOf<String?>(null) }
+    var mutating by remember(repository) { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<VaultSheet?>(null) }
     var confirmDelete by remember { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<String?>(null) }
     var toastSeq by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
     val showToast: (String) -> Unit = { toast = it; toastSeq++ }
     var shownSheet by remember { mutableStateOf<VaultSheet?>(null) }
     if (sheet != null && sheet != shownSheet) shownSheet = sheet
+
+    val refresh: () -> Unit = {
+        scope.launch {
+            loading = true
+            loadError = null
+            runCatching { repository.list() }
+                .onSuccess { keys = it }
+                .onFailure { loadError = it.safeVaultMessage() }
+            loading = false
+        }
+    }
+
+    LaunchedEffect(repository) {
+        runCatching { repository.list() }
+            .onSuccess { keys = it }
+            .onFailure { loadError = it.safeVaultMessage() }
+        loading = false
+    }
 
     BackHandler(enabled = sheet != null && confirmDelete == null) { sheet = null }
     BackHandler(enabled = confirmDelete != null) { confirmDelete = null }
@@ -165,13 +176,16 @@ internal fun SecretVaultPage(onBack: () -> Unit, modifier: Modifier = Modifier) 
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     TcText("集中管理你的 API 密钥，完整密钥不会再次显示。", Tc.FsSub, Modifier.weight(1f), color = Tc.Ink2)
-                    Pill("本地脱敏", Tc.Ok, OkWash, OkLine, icon = VaultIcon.Shield)
+                    Pill("后端加密", Tc.Ok, OkWash, OkLine, icon = VaultIcon.Shield)
                 }
-                if (keys.isEmpty()) {
-                    EmptyVault { sheet = VaultSheet.Add }
-                } else {
+                when {
+                    loading -> VaultStatus("正在读取密码库…")
+                    loadError != null -> VaultLoadError(loadError.orEmpty(), refresh)
+                    keys.isEmpty() -> EmptyVault { sheet = VaultSheet.Add }
+                    else -> {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         keys.forEach { key -> VaultCard(key) { sheet = VaultSheet.Edit(key.id) } }
+                    }
                     }
                 }
             }
@@ -193,10 +207,21 @@ internal fun SecretVaultPage(onBack: () -> Unit, modifier: Modifier = Modifier) 
                 VaultSheet.Add -> AddKeySheet(
                     onClose = { sheet = null },
                     onToast = showToast,
-                ) { added ->
-                    keys.add(0, added)
-                    sheet = null
-                    showToast("密钥已添加，完整值已脱敏$PreviewSuffix")
+                ) { input ->
+                    if (!mutating) {
+                        mutating = true
+                        scope.launch {
+                            runCatching { repository.create(input) }
+                                .onSuccess { created ->
+                                    keys = listOf(created) + keys.filterNot { it.id == created.id }
+                                    sheet = null
+                                    showToast("密钥已安全保存")
+                                    runCatching { repository.list() }.onSuccess { keys = it }
+                                }
+                                .onFailure { showToast(it.safeVaultMessage()) }
+                            mutating = false
+                        }
+                    }
                 }
                 is VaultSheet.Edit -> keys.firstOrNull { it.id == current.id }?.let { key ->
                     EditKeySheet(
@@ -204,11 +229,21 @@ internal fun SecretVaultPage(onBack: () -> Unit, modifier: Modifier = Modifier) 
                         onClose = { sheet = null },
                         onToast = showToast,
                         onDelete = { confirmDelete = key.id },
-                    ) { updated, replaced ->
-                        val index = keys.indexOfFirst { it.id == updated.id }
-                        if (index >= 0) keys[index] = updated
-                        sheet = null
-                        showToast((if (replaced) "已替换为新密钥并脱敏" else "已更新密钥基本信息") + PreviewSuffix)
+                    ) { update ->
+                        if (!mutating) {
+                            mutating = true
+                            scope.launch {
+                                runCatching { repository.update(key.id, update) }
+                                    .onSuccess { updated ->
+                                        keys = keys.map { if (it.id == updated.id) updated else it }
+                                        sheet = null
+                                        showToast(if (update.replacementSecret != null) "密钥已安全替换" else "密钥信息已更新")
+                                        runCatching { repository.list() }.onSuccess { keys = it }
+                                    }
+                                    .onFailure { showToast(it.safeVaultMessage()) }
+                                mutating = false
+                            }
+                        }
                     }
                 }
                 null -> Unit
@@ -219,10 +254,21 @@ internal fun SecretVaultPage(onBack: () -> Unit, modifier: Modifier = Modifier) 
             DeleteConfirm(
                 onCancel = { confirmDelete = null },
                 onConfirm = {
-                    keys.removeAll { it.id == id }
-                    confirmDelete = null
-                    sheet = null
-                    showToast("密钥已移除$PreviewSuffix")
+                    if (!mutating) {
+                        mutating = true
+                        scope.launch {
+                            runCatching { repository.delete(id) }
+                                .onSuccess {
+                                    keys = keys.filterNot { it.id == id }
+                                    confirmDelete = null
+                                    sheet = null
+                                    showToast("密钥已移除")
+                                    runCatching { repository.list() }.onSuccess { keys = it }
+                                }
+                                .onFailure { showToast(it.safeVaultMessage()) }
+                            mutating = false
+                        }
+                    }
                 },
             )
         }
@@ -232,7 +278,7 @@ internal fun SecretVaultPage(onBack: () -> Unit, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun VaultCard(key: VaultKey, onClick: () -> Unit) {
+private fun VaultCard(key: SecretCredential, onClick: () -> Unit) {
     val shape = RoundedCornerShape(16.dp)
     Column(
         Modifier.fillMaxWidth().tcGlass(shape).clickable(onClick = onClick).padding(16.dp),
@@ -241,22 +287,22 @@ private fun VaultCard(key: VaultKey, onClick: () -> Unit) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             KeyBadge(32.dp, 13.dp)
             Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                TcText(key.name, Tc.FsSub, weight = FontWeight.SemiBold, letterSpacing = .025f, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                TcText(key.type.label, 10f, color = Tc.Ink2)
+                TcText(key.displayName, Tc.FsSub, weight = FontWeight.SemiBold, letterSpacing = .025f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TcText(key.metadata.serviceName ?: key.credentialType.vaultTypeLabel(), 10f, color = Tc.Ink2)
             }
-            ConfiguredBadge()
+            ConfiguredBadge(key.configured)
         }
         Row(
             Modifier.fillMaxWidth().tcInner(RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            TcText(key.maskedKey, Tc.FsSub, Modifier.weight(1f), color = Tc.Ink, family = Tc.Mono, letterSpacing = .05f, maxLines = 1)
+            TcText(FIXED_SECRET_MASK, Tc.FsSub, Modifier.weight(1f), color = Tc.Ink, family = Tc.Mono, letterSpacing = .05f, maxLines = 1)
             TcPathIcon(VaultIcon.ChevRight, 12.dp, Tc.Ink2)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TcText(key.notes.ifBlank { "无备注" }, 10f, Modifier.weight(1f).padding(end = 8.dp), color = Tc.Ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            TcText("最近更新 ${key.updatedAt}", 10f, color = Tc.Ink2)
+            TcText(key.metadata.note.orEmpty().ifBlank { "无备注" }, 10f, Modifier.weight(1f).padding(end = 8.dp), color = Tc.Ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            TcText("最近更新 ${formatVaultTimestamp(key.updatedAt)}", 10f, color = Tc.Ink2)
         }
     }
 }
@@ -271,7 +317,7 @@ private fun KeyBadge(size: Dp, icon: Dp) {
 }
 
 @Composable
-private fun ConfiguredBadge() {
+private fun ConfiguredBadge(configured: Boolean) {
     val pulse by rememberInfiniteTransition(label = "configured").animateFloat(
         1f, .35f, infiniteRepeatable(tween(1000), RepeatMode.Reverse), label = "configured-dot",
     )
@@ -280,8 +326,28 @@ private fun ConfiguredBadge() {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Box(Modifier.size(6.dp).alpha(pulse).background(Tc.Ok, CircleShape))
-        TcText("已配置", 10f, color = Tc.Ok, weight = FontWeight.Medium)
+        Box(Modifier.size(6.dp).alpha(pulse).background(if (configured) Tc.Ok else Tc.Ink2, CircleShape))
+        TcText(if (configured) "已配置" else "状态未知", 10f, color = if (configured) Tc.Ok else Tc.Ink2, weight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun VaultStatus(text: String) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 64.dp), contentAlignment = Alignment.Center) {
+        TcText(text, Tc.FsSub, color = Tc.Ink2)
+    }
+}
+
+@Composable
+private fun VaultLoadError(message: String, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        TcText("密码库暂时无法读取", Tc.FsBody, weight = FontWeight.SemiBold, align = TextAlign.Center)
+        TcText(message, Tc.FsSub, color = Tc.Ink2, align = TextAlign.Center)
+        AccentButton("重新加载", onClick = onRetry)
     }
 }
 
@@ -351,10 +417,11 @@ private fun SheetHeader(onClose: () -> Unit, title: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AddKeySheet(onClose: () -> Unit, onToast: (String) -> Unit, onSave: (VaultKey) -> Unit) {
+private fun AddKeySheet(onClose: () -> Unit, onToast: (String) -> Unit, onSave: (SecretCredentialCreate) -> Unit) {
     var name by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(VaultKeyType.ApiKey) }
     var raw by remember { mutableStateOf("") }
+    var serviceName by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
     VaultSheetFrame {
@@ -382,6 +449,7 @@ private fun AddKeySheet(onClose: () -> Unit, onToast: (String) -> Unit, onSave: 
                         ?: onToast("剪贴板里没有可用的文本")
                 },
             ) { SecretField(raw, { raw = it }, "粘贴或输入完整 sk-...") }
+            VaultLabel("服务名称（可选）") { TcInput(serviceName, { serviceName = it }, placeholder = "例如：ElevenLabs") }
             VaultLabel("可选备注") { TcInput(notes, { notes = it }, placeholder = "填写用途、配额额度或对应项目说明...", multiline = true) }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 GhostButton("取消", Modifier.weight(1f), onClose)
@@ -389,10 +457,16 @@ private fun AddKeySheet(onClose: () -> Unit, onToast: (String) -> Unit, onSave: 
                     if (name.isBlank() || raw.isBlank()) {
                         onToast("请填写完整必填字段")
                     } else {
-                        val masked = maskVaultKey(raw)
-                        raw = ""
                         onSave(
-                            VaultKey(UUID.randomUUID().toString(), name.trim(), type, masked, notes.trim(), LocalDateTime.now().format(VaultTime)),
+                            SecretCredentialCreate(
+                                displayName = name.trim(),
+                                credentialType = type.wireName,
+                                secret = raw,
+                                metadata = SecretCredentialMetadata(
+                                    serviceName = serviceName.trim().takeIf(String::isNotEmpty),
+                                    note = notes.trim().takeIf(String::isNotEmpty),
+                                ),
+                            ),
                         )
                     }
                 }
@@ -403,14 +477,15 @@ private fun AddKeySheet(onClose: () -> Unit, onToast: (String) -> Unit, onSave: 
 
 @Composable
 private fun EditKeySheet(
-    key: VaultKey,
+    key: SecretCredential,
     onClose: () -> Unit,
     onToast: (String) -> Unit,
     onDelete: () -> Unit,
-    onSave: (VaultKey, Boolean) -> Unit,
+    onSave: (SecretCredentialUpdate) -> Unit,
 ) {
-    var name by remember(key.id) { mutableStateOf(key.name) }
-    var notes by remember(key.id) { mutableStateOf(key.notes) }
+    var name by remember(key.id) { mutableStateOf(key.displayName) }
+    var serviceName by remember(key.id) { mutableStateOf(key.metadata.serviceName.orEmpty()) }
+    var notes by remember(key.id) { mutableStateOf(key.metadata.note.orEmpty()) }
     var replaceOpen by remember(key.id) { mutableStateOf(false) }
     var replacement by remember(key.id) { mutableStateOf("") }
     val chevron by animateFloatAsState(if (replaceOpen) 180f else 0f, tween(200), label = "replace-chevron")
@@ -418,9 +493,9 @@ private fun EditKeySheet(
     VaultSheetFrame {
         SheetHeader(onClose) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TcText(key.name, 18f, Modifier.weight(1f, fill = false), weight = FontWeight.SemiBold, lineHeight = 1.4f, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TcText(key.displayName, 18f, Modifier.weight(1f, fill = false), weight = FontWeight.SemiBold, lineHeight = 1.4f, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 TcText(
-                    key.type.label, 10f,
+                    key.credentialType.vaultTypeLabel(), 10f,
                     Modifier.clip(RoundedCornerShape(6.dp)).background(Tc.Fill35).border(1.dp, Tc.Line, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 2.dp),
                     color = Tc.Ink2, weight = FontWeight.Medium,
                 )
@@ -434,7 +509,7 @@ private fun EditKeySheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    TcText(key.maskedKey, Tc.FsSub, Modifier.weight(1f), color = Tc.Ink2, family = Tc.Mono, maxLines = 1)
+                    TcText(FIXED_SECRET_MASK, Tc.FsSub, Modifier.weight(1f), color = Tc.Ink2, family = Tc.Mono, maxLines = 1)
                     TcPathIcon(VaultIcon.Lock, 12.dp, Tc.Ink2)
                 }
             }
@@ -475,18 +550,22 @@ private fun EditKeySheet(
                     }
                 }
             }
+            VaultLabel("服务名称") { TcInput(serviceName, { serviceName = it }, placeholder = "例如：ElevenLabs") }
             VaultLabel("修改备注") { TcInput(notes, { notes = it }, placeholder = "备注...", multiline = true) }
             Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 AccentButton("保存修改", Modifier.fillMaxWidth()) {
                     if (name.isBlank()) {
                         onToast("名称不能为空")
                     } else {
-                        val replaced = replacement.isNotBlank()
-                        val masked = if (replaced) maskVaultKey(replacement) else key.maskedKey
-                        replacement = ""
                         onSave(
-                            key.copy(name = name.trim(), notes = notes.trim(), maskedKey = masked, updatedAt = LocalDateTime.now().format(VaultTime)),
-                            replaced,
+                            SecretCredentialUpdate(
+                                displayName = name.trim(),
+                                replacementSecret = replacement.takeIf(String::isNotBlank),
+                                metadata = key.metadata.copy(
+                                    serviceName = serviceName.trim().takeIf(String::isNotEmpty),
+                                    note = notes.trim().takeIf(String::isNotEmpty),
+                                ),
+                            ),
                         )
                     }
                 }

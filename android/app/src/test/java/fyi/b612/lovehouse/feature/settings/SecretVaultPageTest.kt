@@ -1,26 +1,24 @@
 package fyi.b612.lovehouse.feature.settings
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class SecretVaultPageTest {
     @Test
-    fun `mask keeps only a short prefix and suffix`() {
-        val raw = "sk-proj-abcdefghijklmnop7mXa"
-        val masked = maskVaultKey(raw)
-        assertEquals("sk-••••••7mXa", masked)
-        assertFalse(masked.contains("abcdefghijklmnop"))
+    fun `configured credentials always use a fixed non-derived mask`() {
+        assertEquals("••••••••••••••", FIXED_SECRET_MASK)
     }
 
     @Test
-    fun `short and empty keys are still masked`() {
-        assertEquals("ab••••gh", maskVaultKey("abcdefgh"))
-        assertEquals("sk-••••••••", maskVaultKey("   "))
+    fun `known and future credential types have safe labels`() {
+        assertEquals("API Key", "api_key".vaultTypeLabel())
+        assertEquals("Bearer Token", "bearer".vaultTypeLabel())
+        assertEquals("Future type", "future_type".vaultTypeLabel())
     }
 
     @Test
-    fun `preview entries never hold a full key`() {
-        VaultSamples.keys.forEach { assertEquals(true, it.maskedKey.contains("••••")) }
+    fun `backend timestamp is formatted without changing credential state`() {
+        assertEquals(16, formatVaultTimestamp("2026-10-04T02:00:00Z").length)
+        assertEquals("unknown", formatVaultTimestamp("unknown"))
     }
 }
