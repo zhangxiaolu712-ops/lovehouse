@@ -19,13 +19,13 @@ class McpCredentialWiringTest {
         val bearer = mcpCredentialFields(McpCredentialInput.Bearer(secret))
         assertEquals("bearer", bearer.getString("auth_type"))
         assertEquals(secret, bearer.getString("token"))
-        assertEquals(setOf("auth_type", "token"), bearer.keySet())
+        assertEquals(setOf("auth_type", "token"), bearer.keys().asSequence().toSet())
 
         val apiKey = mcpCredentialFields(McpCredentialInput.ApiKey("X-Api-Key", secret))
         assertEquals("api_key", apiKey.getString("auth_type"))
         assertEquals("X-Api-Key", apiKey.getString("header_name"))
         assertEquals(secret, apiKey.getString("value"))
-        assertEquals(setOf("auth_type", "header_name", "value"), apiKey.keySet())
+        assertEquals(setOf("auth_type", "header_name", "value"), apiKey.keys().asSequence().toSet())
     }
 
     @Test
