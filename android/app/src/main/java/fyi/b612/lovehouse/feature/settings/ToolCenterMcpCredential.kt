@@ -95,6 +95,73 @@ internal fun mcpCredentialSummary(connection: McpBackendConnection): String? {
     return listOfNotNull(type.toChoice().label, header, state, updated).joinToString(" · ")
 }
 
+/** What the single "save" must do with the credential, derived from dirty form state. */
+internal sealed interface McpCredentialPlan {
+    data object NoChange : McpCredentialPlan
+    data object Remove : McpCredentialPlan
+    class Put(val input: McpCredentialInput) : McpCredentialPlan {
+        override fun toString(): String = "Put($input)"
+    }
+    data class Invalid(val message: String) : McpCredentialPlan
+}
+
+internal fun planMcpCredentialChange(draft: McpCredentialDraft, current: McpBackendConnection): McpCredentialPlan {
+    val currentType = current.authType
+    return when (draft.choice) {
+        McpAuthChoice.OAuth -> McpCredentialPlan.NoChange
+        McpAuthChoice.None -> if (currentType == McpAuthType.None) McpCredentialPlan.NoChange else McpCredentialPlan.Remove
+        McpAuthChoice.Bearer -> when {
+            draft.token.isNotBlank() -> McpCredentialPlan.Put(McpCredentialInput.Bearer(draft.token))
+            currentType == McpAuthType.Bearer -> McpCredentialPlan.NoChange
+            else -> McpCredentialPlan.Invalid("请输入 Token")
+        }
+        McpAuthChoice.ApiKey -> {
+            val header = draft.headerName.trim()
+            val headerChanged = header != current.apiKeyHeaderName.orEmpty()
+            when {
+                draft.apiKey.isBlank() && currentType == McpAuthType.ApiKey && !headerChanged -> McpCredentialPlan.NoChange
+                header.isEmpty() -> McpCredentialPlan.Invalid("请输入 Header Name")
+                !isPlausibleApiKeyHeaderName(header) -> McpCredentialPlan.Invalid("Header Name 格式不正确")
+                draft.apiKey.isBlank() && currentType == McpAuthType.ApiKey -> McpCredentialPlan.Invalid("修改 Header Name 需要同时重新输入 API Key")
+                draft.apiKey.isBlank() -> McpCredentialPlan.Invalid("请输入 API Key")
+                else -> McpCredentialPlan.Put(McpCredentialInput.ApiKey(header, draft.apiKey))
+            }
+        }
+    }
+}
+
+/**
+ * The single save for an existing Connection: details first, then the credential mutation
+ * the dirty state needs, then one authoritative GET that the UI converges to.
+ */
+internal suspend fun saveMcpConnectionEdits(
+    repository: McpConnectionRepository,
+    connectionId: String,
+    plan: McpCredentialPlan,
+    saveDetails: suspend () -> Unit,
+): McpBackendConnection {
+    if (plan is McpCredentialPlan.Invalid) throw McpSafeException(plan.message)
+    saveDetails()
+    try {
+        when (plan) {
+            is McpCredentialPlan.Put -> repository.updateCredential(connectionId, plan.input)
+            McpCredentialPlan.Remove -> repository.removeCredential(connectionId)
+            McpCredentialPlan.NoChange, is McpCredentialPlan.Invalid -> Unit
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        throw McpSafeException("服务和账号信息已保存，但凭证未更新：${error.mcpSafeText()}")
+    }
+    return try {
+        repository.connection(connectionId)
+    } catch (error: CancellationException) {
+        throw error
+    } catch (ignored: Exception) {
+        throw McpSafeException("已保存，但重新读取连接状态失败，请刷新")
+    }
+}
+
 /**
  * Runs one credential mutation, then re-reads the authoritative Connection.
  * The UI converges to the GET result, never to the local request.
@@ -125,8 +192,13 @@ internal fun McpCredentialInputs(
             onChange(draft.withChoice(McpAuthChoice.entries[it]))
         }
         existing?.let(::mcpCredentialSummary)?.let { TcHint("当前：$it") }
-        if (existing == null && draft.choice == McpAuthChoice.OAuth) {
-            TcHint("不附带凭证创建；远端要求 OAuth 时会跳转到官方授权页面。")
+        when {
+            existing == null && draft.choice == McpAuthChoice.OAuth ->
+                TcHint("不附带凭证创建；远端要求 OAuth 时会跳转到官方授权页面。")
+            existing != null && draft.choice == McpAuthChoice.OAuth ->
+                TcHint("OAuth 需要在官方页面完成授权，不随「保存」提交。")
+            existing != null && draft.choice == McpAuthChoice.None && existing.authType != McpAuthType.None ->
+                TcHint("保存后将删除后端保存的凭证，改为无鉴权。")
         }
     }
     val configured = existing?.credentialStatus == McpCredentialStatus.Configured

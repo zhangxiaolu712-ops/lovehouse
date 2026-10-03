@@ -371,30 +371,6 @@ internal fun McpDetailPage(
         if (connection != null) {
             val currentType = connection.authType
             val updating = connection.status == McpBackendConnectionStatus.AuthUpdating
-            val action = when (credential.choice) {
-                McpAuthChoice.Bearer, McpAuthChoice.ApiKey -> "保存凭证"
-                McpAuthChoice.None -> if (currentType == McpAuthType.None) null else "切换为无鉴权"
-                McpAuthChoice.OAuth -> if (currentType == McpAuthType.OAuth) "重新授权 OAuth" else "切换到 OAuth 授权"
-            }
-            val removeToNone = {
-                ui.dialog = TcDialog(
-                    "改为无鉴权？",
-                    "将删除这个连接保存在后端的凭证，并以无鉴权方式重新发现工具；只有发现成功才会生效。",
-                    ok = "改为无鉴权",
-                    danger = true,
-                ) {
-                    credentialBusy = true
-                    scope.launch {
-                        runCatching { runMcpCredentialMutation(repository, connection.id) { removeCredential(connection.id) } }
-                            .onSuccess { fresh ->
-                                credential = McpCredentialDraft.from(fresh)
-                                state.refresh("已改为无鉴权 · ${fresh.status.label()}")
-                            }
-                            .onFailure { ui.toast(it.mcpSafeText()) }
-                        credentialBusy = false
-                    }
-                }
-            }
             val switchToOAuth = {
                 ui.dialog = TcDialog(
                     "切换到 OAuth 授权？",
@@ -418,45 +394,17 @@ internal fun McpDetailPage(
                     }
                 }
             }
-            when {
-                updating -> TcHint("认证更新中，请稍后刷新查看结果。")
-                action != null -> Box(Modifier.padding(bottom = 11.dp)) {
+            if (updating) {
+                TcHint("认证更新中，请稍后刷新查看结果。")
+            } else if (credential.choice == McpAuthChoice.OAuth) {
+                Box(Modifier.padding(bottom = 11.dp)) {
                     TcInlineStatus(
-                        action,
+                        if (currentType == McpAuthType.OAuth) "重新授权 OAuth" else "切换到 OAuth 授权",
                         connection.status.label(),
                         ok = connection.status == McpBackendConnectionStatus.Connected,
                         busy = credentialBusy,
-                    ) {
-                        when (credential.choice) {
-                            McpAuthChoice.Bearer, McpAuthChoice.ApiKey -> {
-                                val invalid = credential.validationError()
-                                val input = credential.toInput()
-                                if (invalid != null || input == null) {
-                                    ui.toast(invalid ?: "请选择凭证类型")
-                                } else {
-                                    credentialBusy = true
-                                    scope.launch {
-                                        runCatching {
-                                            runMcpCredentialMutation(repository, connection.id) { updateCredential(connection.id, input) }
-                                        }.onSuccess { fresh ->
-                                            credential = McpCredentialDraft.from(fresh)
-                                            state.refresh("凭证已更新 · ${fresh.status.label()}")
-                                        }.onFailure { ui.toast(it.mcpSafeText()) }
-                                        credentialBusy = false
-                                    }
-                                }
-                            }
-                            McpAuthChoice.None -> removeToNone()
-                            McpAuthChoice.OAuth -> switchToOAuth()
-                        }
-                    }
+                    ) { switchToOAuth() }
                 }
-            }
-            if (!updating && !credentialBusy && currentType != null &&
-                currentType in setOf(McpAuthType.Bearer, McpAuthType.ApiKey) &&
-                credential.choice == currentType.toChoice()
-            ) {
-                TcAccLink("移除凭证", danger = true) { removeToNone() }
             }
         }
         TcField("挂到哪些人格档案") {
@@ -569,10 +517,7 @@ internal fun McpDetailPage(
     }
 
     TcSaveButton(if (busy && adding) "连接中…" else "保存并注册工具", enabled = !busy) {
-        val shellNotice = listOfNotNull(
-            if (shellEdited) "用途或单工具开关仍是界面预览，未保存" else null,
-            if (connection != null && credential.hasSecret) "Token / API Key 需点「保存凭证」单独提交" else null,
-        ).joinToString("；").ifEmpty { null }
+        val shellNotice = if (shellEdited) "用途或单工具开关仍是界面预览，未保存" else null
         if (connection == null) {
             val endpoint = opaqueMcpServerEndpoint(url.trim())
             if (endpoint == null) {
@@ -632,27 +577,55 @@ internal fun McpDetailPage(
                 ui.toast("App Backend 未返回 tool_service_id，无法保存服务信息")
                 return@TcSaveButton
             }
-            busy = true
-            scope.launch {
-                runCatching {
-                    repository.updateToolService(serviceId, McpToolServiceUpdate(name.trim(), note.trim()))
-                    repository.updateConnection(
-                        connection.id,
-                        McpConnectionUpdate(
-                            displayName = accountName.trim(),
-                            note = accountNote.trim(),
-                            updateMetadata = true,
-                        ),
-                    )
-                    applyPersonaBindings(repository, serviceId, connection.id, before, after)
-                }
-                    .onSuccess {
-                        state.refresh(listOfNotNull("服务、账号与人格档案已保存", shellNotice).joinToString("；"))
-                        onDone()
-                    }
-                    .onFailure { ui.toast(it.message ?: "人格档案保存失败") }
-                busy = false
+            val plan = planMcpCredentialChange(credential, connection)
+            if (plan is McpCredentialPlan.Invalid) {
+                ui.toast(plan.message)
+                return@TcSaveButton
             }
+            val save = {
+                busy = true
+                scope.launch {
+                    runCatching {
+                        saveMcpConnectionEdits(repository, connection.id, plan) {
+                            repository.updateToolService(serviceId, McpToolServiceUpdate(name.trim(), note.trim()))
+                            repository.updateConnection(
+                                connection.id,
+                                McpConnectionUpdate(
+                                    displayName = accountName.trim(),
+                                    note = accountNote.trim(),
+                                    updateMetadata = true,
+                                ),
+                            )
+                            applyPersonaBindings(repository, serviceId, connection.id, before, after)
+                        }
+                    }.onSuccess { fresh ->
+                        credential = McpCredentialDraft.from(fresh)
+                        val credentialNote = when (plan) {
+                            is McpCredentialPlan.Put -> "凭证已更新"
+                            McpCredentialPlan.Remove -> "已改为无鉴权"
+                            else -> null
+                        }
+                        state.refresh(
+                            listOfNotNull("已保存", credentialNote, fresh.status.label(), shellNotice).joinToString(" · "),
+                        )
+                        onDone()
+                    }.onFailure { error ->
+                        ui.toast(if (error is McpSafeException) error.mcpSafeText() else error.message ?: "保存失败")
+                        if (error is McpSafeException) state.refresh()
+                    }
+                    busy = false
+                }
+            }
+            if (plan == McpCredentialPlan.Remove) {
+                ui.dialog = TcDialog(
+                    "改为无鉴权？",
+                    "保存时会删除这个连接保存在后端的凭证，并以无鉴权方式重新发现工具；只有发现成功才会生效。",
+                    ok = "保存",
+                    danger = true,
+                ) { save() }
+                return@TcSaveButton
+            }
+            save()
         }
     }
 }

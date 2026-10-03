@@ -167,6 +167,78 @@ class McpCredentialWiringTest {
     }
 
     @Test
+    fun `single save plans the credential mutation from dirty state`() {
+        val none = connectionJson("none", "configured").toConnection()
+        val bearer = connectionJson("bearer", "configured").toConnection()
+        val apiKey = connectionJson("api_key", "configured", headerName = "X-Api-Key").toConnection()
+        val draft = McpCredentialDraft.forNew()
+
+        assertEquals(McpCredentialPlan.NoChange, planMcpCredentialChange(McpCredentialDraft.from(bearer), bearer))
+        assertEquals(McpCredentialPlan.NoChange, planMcpCredentialChange(McpCredentialDraft.from(apiKey), apiKey))
+        assertEquals(McpCredentialPlan.NoChange, planMcpCredentialChange(draft.withChoice(McpAuthChoice.OAuth), bearer))
+        assertEquals(McpCredentialPlan.NoChange, planMcpCredentialChange(draft.withChoice(McpAuthChoice.None), none))
+        assertEquals(McpCredentialPlan.Remove, planMcpCredentialChange(draft.withChoice(McpAuthChoice.None), bearer))
+
+        val putBearer = planMcpCredentialChange(McpCredentialDraft.from(bearer).withToken(secret), bearer)
+        assertTrue(putBearer is McpCredentialPlan.Put && putBearer.input is McpCredentialInput.Bearer)
+        assertFalse(putBearer.toString().contains(secret))
+        assertEquals(McpCredentialPlan.Invalid("请输入 Token"), planMcpCredentialChange(draft.withChoice(McpAuthChoice.Bearer), apiKey))
+
+        val headerOnly = McpCredentialDraft.from(apiKey).withHeaderName("X-Other-Key")
+        assertEquals(McpCredentialPlan.Invalid("修改 Header Name 需要同时重新输入 API Key"), planMcpCredentialChange(headerOnly, apiKey))
+        val putApiKey = planMcpCredentialChange(headerOnly.withApiKey(secret), apiKey)
+        assertTrue(putApiKey is McpCredentialPlan.Put && putApiKey.input is McpCredentialInput.ApiKey)
+        assertEquals(
+            McpCredentialPlan.Invalid("请输入 API Key"),
+            planMcpCredentialChange(draft.withChoice(McpAuthChoice.ApiKey).withHeaderName("X-Api-Key"), bearer),
+        )
+    }
+
+    @Test
+    fun `single save runs details then credential then one authoritative get`() = runBlocking {
+        val repository = RecordingRepository()
+        val plan = McpCredentialPlan.Put(McpCredentialInput.Bearer(secret))
+        val fresh = saveMcpConnectionEdits(repository, "c1", plan) { repository.calls += "details" }
+        assertEquals(listOf("details", "put c1 bearer", "get c1"), repository.calls)
+        assertEquals("authoritative", fresh.name)
+
+        repository.calls.clear()
+        saveMcpConnectionEdits(repository, "c1", McpCredentialPlan.Remove) { repository.calls += "details" }
+        assertEquals(listOf("details", "delete c1", "get c1"), repository.calls)
+
+        repository.calls.clear()
+        saveMcpConnectionEdits(repository, "c1", McpCredentialPlan.NoChange) { repository.calls += "details" }
+        assertEquals(listOf("details", "get c1"), repository.calls)
+    }
+
+    @Test
+    fun `invalid credential blocks the save before anything is written`() = runBlocking {
+        val repository = RecordingRepository()
+        try {
+            saveMcpConnectionEdits(repository, "c1", McpCredentialPlan.Invalid("请输入 Token")) { repository.calls += "details" }
+            fail("expected failure")
+        } catch (error: McpSafeException) {
+            assertEquals("请输入 Token", error.message)
+        }
+        assertTrue(repository.calls.isEmpty())
+    }
+
+    @Test
+    fun `credential failure after details reports safe partial result`() = runBlocking {
+        val repository = RecordingRepository(failPut = true)
+        try {
+            saveMcpConnectionEdits(repository, "c1", McpCredentialPlan.Put(McpCredentialInput.Bearer(secret))) {
+                repository.calls += "details"
+            }
+            fail("expected failure")
+        } catch (error: McpSafeException) {
+            assertEquals("服务和账号信息已保存，但凭证未更新：凭证未通过远端 MCP 验证，未更新", error.message)
+            assertFalse(error.message!!.contains(secret))
+        }
+        assertEquals(listOf("details", "put c1 bearer"), repository.calls)
+    }
+
+    @Test
     fun `failed authoritative refresh surfaces safe text only`() = runBlocking {
         val repository = RecordingRepository(failGet = true)
         try {
@@ -221,7 +293,10 @@ class McpCredentialWiringTest {
         .put("credential_updated_at", updatedAt ?: JSONObject.NULL)
         .apply { if (headerName != null) put("api_key_header_name", headerName) }
 
-    private class RecordingRepository(private val failGet: Boolean = false) : McpConnectionRepository {
+    private class RecordingRepository(
+        private val failGet: Boolean = false,
+        private val failPut: Boolean = false,
+    ) : McpConnectionRepository {
         val calls = mutableListOf<String>()
         private val stale = McpBackendConnection("c1", "https://mcp.example/runtime", "stale", null, McpBackendConnectionStatus.Connected, 0)
 
@@ -243,6 +318,7 @@ class McpCredentialWiringTest {
                 is McpCredentialInput.ApiKey -> "api_key"
             }
             calls += "put $connectionId $type"
+            if (failPut) throw McpSafeException(mcpCredentialErrorText(502, "MCP_CREDENTIAL_UPDATE_FAILED"))
             return stale
         }
         override suspend fun removeCredential(connectionId: String): McpBackendConnection {
