@@ -89,6 +89,7 @@ private data class SettingEntry(
 private data class SettingGroup(val title: String, val entries: List<SettingEntry>)
 
 private const val ToolCenterEntryTitle = "工具添加"
+private const val SecretVaultEntryTitle = "密码库 / Secret Vault"
 
 private val groupTemplates = listOf(
     SettingGroup("账号与个性化", listOf(
@@ -167,6 +168,8 @@ fun SettingsScreen(
                 onBack = { selected = null },
                 modifier = modifier,
             )
+        } else if (detail.title == SecretVaultEntryTitle) {
+            SecretVaultPage(onBack = { selected = null }, modifier = modifier)
         } else {
             SettingsDetail(
                 detail,
@@ -456,7 +459,6 @@ private fun SettingsDetail(
                 }
                 "同步" -> item { FutureSettingsPanel("同步", "聊天与设置的多设备同步尚未接入；本机数据不会被描述为已同步。") }
                 "控制台" -> item { SettingsCardStack { HouseStatusConsole(consoleConnections) } }
-                "密码库 / Secret Vault" -> item { FutureSettingsPanel("独立安全模块", "Secret Vault 将作为独立安全子系统提供，目前尚未启用。不会保存密码、API Key 或恢复码，也不会允许 AI 读取 Secret。") }
                 "主动唤醒" -> item { FutureSettingsPanel("主动唤醒", "尚未启用。未来主动唤醒服务独立接线，本页不启动 scheduler 或 Agent。") }
                 "工作项目" -> item { FutureSettingsPanel("工作项目", "Android 尚未接入工程目录与 Git 状态来源，不显示本机 Windows 路径或虚假分支。") }
                 "数据与迁移" -> item { FutureSettingsPanel("数据与迁移", "尚未启用。本页不会启动备份、导入、恢复或覆盖现有资料。") }
