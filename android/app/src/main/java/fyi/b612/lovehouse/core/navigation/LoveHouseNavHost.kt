@@ -35,6 +35,7 @@ import androidx.navigation.navDeepLink
 import androidx.navigation.navArgument
 import fyi.b612.lovehouse.app.AppDependencies
 import fyi.b612.lovehouse.core.designsystem.LoveHouseAppShell
+import fyi.b612.lovehouse.feature.schedule.ScheduleScreen
 import fyi.b612.lovehouse.feature.chat.ChatListScreen
 import fyi.b612.lovehouse.feature.chat.ChatSessionStore
 import fyi.b612.lovehouse.feature.chat.ChatShellScreen
@@ -138,8 +139,16 @@ private fun LoveHouseContent(
                 onOpenChat = { navController.navigate(AppDestination.Chat.route) },
                 onOpenSettings = { navController.navigate(AppDestination.Settings.route) },
                 onOpenLab = { navController.navigate(AppDestination.Lab.route) },
+                onOpenSchedule = { navController.navigate(AppDestination.Schedule.route) },
                 localStorage = dependencies.localStorage,
             )
+        }
+
+        composable(
+            route = AppDestination.Schedule.route,
+            deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Schedule.deepLink }),
+        ) {
+            ScheduleScreen()
         }
 
         composable(

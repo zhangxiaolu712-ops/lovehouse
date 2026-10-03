@@ -193,6 +193,7 @@ fun HomeScreen(
     onOpenLab: () -> Unit,
     localStorage: LocalStorage,
     modifier: Modifier = Modifier,
+    onOpenSchedule: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val appearance = LocalLoveHouseAppearance.current
@@ -304,7 +305,7 @@ fun HomeScreen(
                         .onGloballyPositioned { editor.updatePlaceableBounds(it.boundsInRoot()) },
                 ) {
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize(), pageSpacing = 12.dp, userScrollEnabled = editor.draggingId == null, key = { it }) { page ->
-                        DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
+                        DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, onOpenSchedule, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
                     }
                     DesktopPageIndicator(pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
                 }
@@ -330,7 +331,7 @@ fun HomeScreen(
                 pageSpacing = 12.dp,
                 key = { it },
             ) { page ->
-                DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
+                DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, onOpenSchedule, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
             }
 
             DesktopPageIndicator(pagerState.currentPage)
@@ -409,9 +410,9 @@ private fun DesktopPageIndicator(currentPage: Int, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenChat: () -> Unit, onOpenSettings: () -> Unit, onOpenLab: () -> Unit, modifier: Modifier) {
+private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenChat: () -> Unit, onOpenSettings: () -> Unit, onOpenLab: () -> Unit, onOpenSchedule: () -> Unit, modifier: Modifier) {
     DynamicGridPage(page, editor, modifier) { geometry ->
-        FirstDesktopItems(page, editor, geometry)
+        FirstDesktopItems(page, editor, geometry, onOpenSchedule)
         SecondDesktopItems(page, editor, geometry)
         ThirdDesktopItems(page, editor, geometry)
         FourthDesktopItems(page, editor, geometry, onOpenLab)
@@ -421,7 +422,7 @@ private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenChat: () -> Unit
 }
 
 @Composable
-private fun FirstDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry) {
+private fun FirstDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry, onOpenSchedule: () -> Unit) {
         val cellWidth = geometry.cellWidth
         val cellHeight = geometry.cellHeight
         GridGlassPanel("p1-days", renderPage, editor, GridPlacement(0, 0, 0, 1, 4), geometry, 18.dp) {
@@ -432,7 +433,7 @@ private fun FirstDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: 
                 CurrentClockWidget()
         }
         GridDesktopApp("♡", "收藏", renderPage, editor, GridPlacement(0, 1, 2, 1, 1), geometry)
-        GridDesktopApp("⌑", "日历", renderPage, editor, GridPlacement(0, 1, 3, 1, 1), geometry)
+        GridDesktopApp("⌑", "日历", renderPage, editor, GridPlacement(0, 1, 3, 1, 1), geometry, onClick = onOpenSchedule)
         GridDesktopApp("☁", "天气", renderPage, editor, GridPlacement(0, 2, 2, 1, 1), geometry)
         GridDesktopApp("✎", "画像", renderPage, editor, GridPlacement(0, 2, 3, 1, 1), geometry)
         GridGlassPanel("p1-space", renderPage, editor, GridPlacement(0, 3, 0, 1, 2), geometry, 18.dp) {

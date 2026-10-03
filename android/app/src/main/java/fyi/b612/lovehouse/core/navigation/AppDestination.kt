@@ -15,6 +15,7 @@ enum class AppDestination(
     Events("events", "动态", "动", "lovehouse://events", false),
     EventDetail("events/{eventId}?openTarget={openTarget}", "动态详情", "动", "lovehouse://event/{eventId}", false),
     ChatThread("chat/thread/{threadId}", "聊天详情", "聊", "lovehouse://chat/thread/{threadId}", false),
+    Schedule("schedule", "日程", "程", "lovehouse://schedule", false),
     Lab("lab", "Lab", "验", "lovehouse://lab", false),
     ConnectionControl("lab/connection-control", "连接与工程控制", "连", "lovehouse://lab/connection-control", false),
     NativeLab("lab/native", "原生能力测试", "验", "lovehouse://lab/native", false),
