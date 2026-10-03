@@ -443,79 +443,6 @@ internal fun McpDetailPage(
         }
     }
 
-    val tools = authoritativeTools
-    TcFormCard("工具与权限 · ${tools.size} 个") {
-        when {
-            tools.isNotEmpty() -> tools.forEachIndexed { index, tool ->
-                val toolId = checkNotNull(tool.toolId)
-                val currentConnection = checkNotNull(connection)
-                val explicit = state.policyState.accountConnectionToolPolicy(currentConnection.id, toolId)
-                val selected = explicit?.decision?.toToolPermission() ?: ToolPermission.Ask
-                val on = toolOn[toolId] ?: true
-                TcToolCard(last = index == tools.lastIndex) {
-                    TcToolTop(tool.name, tool.description.orEmpty()) {
-                        TcSwitch(on, tool.name) {
-                            toolOn[toolId] = it
-                            shellEdited = true
-                            ui.toast("单工具开关尚未接入后端，未保存")
-                        }
-                    }
-                    TcSeg(
-                        ToolPermission.entries.map { it.label },
-                        selected.ordinal,
-                        Modifier.padding(top = 4.dp, end = 6.dp, bottom = 2.dp),
-                        enabled = on && state.policyReady && !busy,
-                    ) { selectedIndex ->
-                        busy = true
-                        scope.launch {
-                            runCatching {
-                                saveAccountConnectionToolPolicy(
-                                    repository = repository,
-                                    connectionId = currentConnection.id,
-                                    toolId = toolId,
-                                    decision = ToolPermission.entries[selectedIndex].toPolicyDecision(),
-                                )
-                            }.onSuccess { refreshed ->
-                                state.policyState = refreshed
-                                state.policyReady = true
-                                ui.toast("工具权限已保存")
-                            }.onFailure { ui.toast(it.message ?: "工具权限保存失败") }
-                            busy = false
-                        }
-                    }
-                    TcHint(
-                        when {
-                            !state.policyReady -> state.policyError ?: "正在读取 authoritative Tool Policy…"
-                            explicit == null -> "当前：默认 ASK（继承，未保存 override）"
-                            else -> "当前：显式 ${selected.label}"
-                        },
-                    )
-                    if (explicit != null && !busy) {
-                        TcAccLink("恢复默认（继承）") {
-                            busy = true
-                            scope.launch {
-                                runCatching { deleteAccountConnectionToolPolicy(repository, explicit.id) }
-                                    .onSuccess { refreshed ->
-                                        state.policyState = refreshed
-                                        state.policyReady = true
-                                        ui.toast("已恢复默认 ASK")
-                                    }
-                                    .onFailure { ui.toast(it.message ?: "恢复默认失败") }
-                                busy = false
-                            }
-                        }
-                    }
-                    TcSchema(tool.inputSchema ?: "App Backend 未返回该工具的字段结构。")
-                }
-            }
-            toolsLoading -> TcHint("正在从 App Backend 读取 authoritative 工具与字段…")
-            toolsError != null -> TcHint(toolsError!!)
-            connection == null -> TcHint("保存并完成授权后，这里会列出服务发现的工具。")
-            connection.toolCount > 0 -> TcHint("App Backend 报告 ${connection.toolCount} 个工具，但没有返回工具明细。")
-            else -> TcHint("这个账号还没有发现工具。")
-        }
-    }
-
     TcSaveButton(if (busy && adding) "连接中…" else "保存并注册工具", enabled = !busy) {
         val shellNotice = if (shellEdited) "用途或单工具开关仍是界面预览，未保存" else null
         if (connection == null) {
@@ -532,7 +459,7 @@ internal fun McpDetailPage(
             val credentialInput = credential.toInput()
             busy = true
             scope.launch {
-                val result = runCatching { repository.connect(endpoint, credentialInput) }.getOrElse {
+                val result = runCatching { repository.connect(endpoint, credentialInput, card?.serviceId) }.getOrElse {
                     ui.toast(if (credentialInput != null) it.mcpSafeText() else it.message ?: "MCP 连接失败")
                     busy = false
                     return@launch
@@ -628,6 +555,80 @@ internal fun McpDetailPage(
             save()
         }
     }
+
+    val tools = authoritativeTools
+    TcFormCard("工具与权限 · ${tools.size} 个") {
+        when {
+            tools.isNotEmpty() -> tools.forEachIndexed { index, tool ->
+                val toolId = checkNotNull(tool.toolId)
+                val currentConnection = checkNotNull(connection)
+                val explicit = state.policyState.accountConnectionToolPolicy(currentConnection.id, toolId)
+                val selected = explicit?.decision?.toToolPermission() ?: ToolPermission.Ask
+                val on = toolOn[toolId] ?: true
+                TcToolCard(last = index == tools.lastIndex) {
+                    TcToolTop(tool.name, tool.description.orEmpty()) {
+                        TcSwitch(on, tool.name) {
+                            toolOn[toolId] = it
+                            shellEdited = true
+                            ui.toast("单工具开关尚未接入后端，未保存")
+                        }
+                    }
+                    TcSeg(
+                        ToolPermission.entries.map { it.label },
+                        selected.ordinal,
+                        Modifier.padding(top = 4.dp, end = 6.dp, bottom = 2.dp),
+                        enabled = on && state.policyReady && !busy,
+                    ) { selectedIndex ->
+                        busy = true
+                        scope.launch {
+                            runCatching {
+                                saveAccountConnectionToolPolicy(
+                                    repository = repository,
+                                    connectionId = currentConnection.id,
+                                    toolId = toolId,
+                                    decision = ToolPermission.entries[selectedIndex].toPolicyDecision(),
+                                )
+                            }.onSuccess { refreshed ->
+                                state.policyState = refreshed
+                                state.policyReady = true
+                                ui.toast("工具权限已保存")
+                            }.onFailure { ui.toast(it.message ?: "工具权限保存失败") }
+                            busy = false
+                        }
+                    }
+                    TcHint(
+                        when {
+                            !state.policyReady -> state.policyError ?: "正在读取 authoritative Tool Policy…"
+                            explicit == null -> "当前：默认 ASK（继承，未保存 override）"
+                            else -> "当前：显式 ${selected.label}"
+                        },
+                    )
+                    if (explicit != null && !busy) {
+                        TcAccLink("恢复默认（继承）") {
+                            busy = true
+                            scope.launch {
+                                runCatching { deleteAccountConnectionToolPolicy(repository, explicit.id) }
+                                    .onSuccess { refreshed ->
+                                        state.policyState = refreshed
+                                        state.policyReady = true
+                                        ui.toast("已恢复默认 ASK")
+                                    }
+                                    .onFailure { ui.toast(it.message ?: "恢复默认失败") }
+                                busy = false
+                            }
+                        }
+                    }
+                    TcSchema(tool.inputSchema ?: "App Backend 未返回该工具的字段结构。")
+                }
+            }
+            toolsLoading -> TcHint("正在从 App Backend 读取 authoritative 工具与字段…")
+            toolsError != null -> TcHint(toolsError!!)
+            connection == null -> TcHint("保存并完成授权后，这里会列出服务发现的工具。")
+            connection.toolCount > 0 -> TcHint("App Backend 报告 ${connection.toolCount} 个工具，但没有返回工具明细。")
+            else -> TcHint("这个账号还没有发现工具。")
+        }
+    }
+
 }
 
 internal fun McpToolPolicyState.accountConnectionToolPolicy(

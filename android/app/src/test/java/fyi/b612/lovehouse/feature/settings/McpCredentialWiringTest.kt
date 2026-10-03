@@ -34,12 +34,34 @@ class McpCredentialWiringTest {
         val omitted = createMcpConnectionBody(url, null)
         assertEquals(url, omitted.getString("server_url"))
         assertFalse(omitted.has("credential"))
+        assertFalse(omitted.has("tool_service_id"))
 
         val none = createMcpConnectionBody(url, McpCredentialInput.None)
         assertEquals("none", none.getJSONObject("credential").getString("auth_type"))
 
         val bearer = createMcpConnectionBody(url, McpCredentialInput.Bearer(secret))
         assertEquals("bearer", bearer.getJSONObject("credential").getString("auth_type"))
+        assertFalse(bearer.has("tool_service_id"))
+    }
+
+    @Test
+    fun `existing service add account keeps authoritative tool service identity`() {
+        val body = createMcpConnectionBody(
+            serverUrl = "https://mcp.example/runtime",
+            credential = McpCredentialInput.Bearer(secret),
+            toolServiceId = "service-a",
+        )
+
+        assertEquals("service-a", body.getString("tool_service_id"))
+        assertEquals("bearer", body.getJSONObject("credential").getString("auth_type"))
+
+        val oauthCreate = createMcpConnectionBody(
+            serverUrl = "https://mcp.example/runtime",
+            credential = null,
+            toolServiceId = "service-a",
+        )
+        assertEquals("service-a", oauthCreate.getString("tool_service_id"))
+        assertFalse(oauthCreate.has("credential"))
     }
 
     @Test

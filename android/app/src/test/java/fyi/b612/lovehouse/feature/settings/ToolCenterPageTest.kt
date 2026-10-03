@@ -13,12 +13,18 @@ class ToolCenterPageTest {
     @Test
     fun `services become cards and orphans only show without services`() {
         val account = connection("c1", toolServiceId = "s1", url = "https://mcp.example.com/api/mcp")
+        val secondAccount = connection("c2", toolServiceId = "s1", url = "https://mcp.example.com/api/mcp")
         val service = McpToolService("s1", "example", "示例 MCP", 1, 1)
 
-        val grouped = buildMcpCards(listOf(service), mapOf("s1" to listOf(account)), listOf(account))
+        val grouped = buildMcpCards(
+            listOf(service),
+            mapOf("s1" to listOf(account, secondAccount)),
+            listOf(account, secondAccount),
+        )
         assertEquals(listOf("service:s1"), grouped.map { it.key })
         assertEquals("示例 MCP", grouped.single().name)
         assertEquals("mcp.example.com", grouped.single().host)
+        assertEquals(listOf("c1", "c2"), grouped.single().accounts.map { it.id })
 
         val orphans = buildMcpCards(emptyList(), emptyMap(), listOf(account))
         assertEquals(listOf("connection:c1"), orphans.map { it.key })

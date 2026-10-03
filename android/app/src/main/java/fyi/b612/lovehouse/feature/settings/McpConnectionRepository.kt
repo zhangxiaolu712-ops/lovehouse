@@ -198,8 +198,12 @@ interface McpConnectionRepository {
     suspend fun connect(serverUrl: String): McpConnectionStart
 
     /** A null credential keeps the OAuth-capable create path; explicit None is a different request. */
-    suspend fun connect(serverUrl: String, credential: McpCredentialInput?): McpConnectionStart =
-        if (credential == null) connect(serverUrl) else error("MCP 凭证尚未接入")
+    suspend fun connect(
+        serverUrl: String,
+        credential: McpCredentialInput?,
+        toolServiceId: String? = null,
+    ): McpConnectionStart =
+        if (credential == null && toolServiceId == null) connect(serverUrl) else error("MCP 凭证尚未接入")
     suspend fun updateCredential(connectionId: String, credential: McpCredentialInput): McpBackendConnection =
         error("MCP 凭证尚未接入")
     suspend fun removeCredential(connectionId: String): McpBackendConnection = error("MCP 凭证尚未接入")
@@ -237,8 +241,11 @@ internal fun mcpConnectionUpdateFields(update: McpConnectionUpdate): Map<String,
 
 internal fun opaqueMcpServerEndpoint(value: String): String? = value.takeIf(String::isNotBlank)
 
-internal fun createMcpConnectionFields(serverUrl: String): Map<String, String> =
-    mapOf("server_url" to serverUrl)
+internal fun createMcpConnectionFields(serverUrl: String, toolServiceId: String? = null): Map<String, String> =
+    buildMap {
+        put("server_url", serverUrl)
+        toolServiceId?.takeIf(String::isNotBlank)?.let { put("tool_service_id", it) }
+    }
 
 internal fun mcpCredentialFields(credential: McpCredentialInput): JSONObject = when (credential) {
     McpCredentialInput.None -> JSONObject().put("auth_type", "none")
@@ -249,8 +256,12 @@ internal fun mcpCredentialFields(credential: McpCredentialInput): JSONObject = w
         .put("value", credential.value)
 }
 
-internal fun createMcpConnectionBody(serverUrl: String, credential: McpCredentialInput?): JSONObject =
-    JSONObject(createMcpConnectionFields(serverUrl)).apply {
+internal fun createMcpConnectionBody(
+    serverUrl: String,
+    credential: McpCredentialInput?,
+    toolServiceId: String? = null,
+): JSONObject =
+    JSONObject(createMcpConnectionFields(serverUrl, toolServiceId)).apply {
         if (credential != null) put("credential", mcpCredentialFields(credential))
     }
 
@@ -450,15 +461,33 @@ class AppBackendMcpConnectionRepository(
         return start
     }
 
-    override suspend fun connect(serverUrl: String, credential: McpCredentialInput?): McpConnectionStart {
-        if (credential == null) return connect(serverUrl)
+    override suspend fun connect(
+        serverUrl: String,
+        credential: McpCredentialInput?,
+        toolServiceId: String?,
+    ): McpConnectionStart {
+        if (credential == null && toolServiceId == null) return connect(serverUrl)
         val endpoint = opaqueMcpServerEndpoint(serverUrl) ?: throw McpSafeException("请输入完整的 MCP Server URL")
-        val start = credentialRequest(
-            method = "POST",
-            endpoint = appBackendMcpEndpoint(baseUrl, "connections"),
-            body = createMcpConnectionBody(endpoint, credential).toString(),
-        ).toConnectionStart()
-        Log.i(LOG_TAG, "create_connection_with_credential response_status=${start.status.name.lowercase()}")
+        val requestBody = createMcpConnectionBody(endpoint, credential, toolServiceId).toString()
+        val payload = if (credential == null) {
+            request(
+                method = "POST",
+                endpoint = appBackendMcpEndpoint(baseUrl, "connections"),
+                body = requestBody,
+            )
+        } else {
+            credentialRequest(
+                method = "POST",
+                endpoint = appBackendMcpEndpoint(baseUrl, "connections"),
+                body = requestBody,
+            )
+        }
+        val start = payload.toConnectionStart()
+        Log.i(
+            LOG_TAG,
+            "create_connection_with_credential response_status=${start.status.name.lowercase()} " +
+                "existing_tool_service=${!toolServiceId.isNullOrBlank()}",
+        )
         return start
     }
 
