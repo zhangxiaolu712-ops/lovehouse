@@ -63,7 +63,9 @@ import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
 import fyi.b612.lovehouse.feature.settings.AndroidAppAccountRepository
 import fyi.b612.lovehouse.feature.settings.AppAccountRepository
 import fyi.b612.lovehouse.feature.settings.AppBackendMcpConnectionRepository
+import fyi.b612.lovehouse.feature.settings.AppBackendSecretVaultRepository
 import fyi.b612.lovehouse.feature.settings.McpConnectionRepository
+import fyi.b612.lovehouse.feature.settings.SecretVaultRepository
 import fyi.b612.lovehouse.feature.settings.AppEffectiveToolResolver
 import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
 import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
@@ -95,6 +97,7 @@ data class AppDependencies(
     val serverEvents: ServerEventRepository,
     val remoteEventPush: RemoteEventPushRegistration,
     val mcpConnections: McpConnectionRepository,
+    val secretVault: SecretVaultRepository,
     val conversationPersonas: ConversationPersonaStore,
     val personaRuntimeSource: PersonaRuntimeSource,
     val effectiveTools: EffectiveToolResolver,
@@ -139,6 +142,10 @@ fun createAppDependencies(context: Context): AppDependencies {
         onAuthenticationRequired = appAccountSource::refresh,
     )
     val mcpConnections: McpConnectionRepository = AppBackendMcpConnectionRepository(
+        BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
+        sessionCookie = appAccountSource::backendSessionCookie,
+    )
+    val secretVault: SecretVaultRepository = AppBackendSecretVaultRepository(
         BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
         sessionCookie = appAccountSource::backendSessionCookie,
     )
@@ -218,6 +225,7 @@ fun createAppDependencies(context: Context): AppDependencies {
         serverEvents = serverEvents,
         remoteEventPush = remoteEventPush,
         mcpConnections = mcpConnections,
+        secretVault = secretVault,
         conversationPersonas = conversationPersonas,
         personaRuntimeSource = personaRuntimeSource,
         effectiveTools = effectiveTools,
