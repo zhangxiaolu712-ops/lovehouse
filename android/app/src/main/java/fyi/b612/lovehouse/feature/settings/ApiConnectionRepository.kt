@@ -23,7 +23,9 @@ data class ApiServiceDescriptor(
 
 data class ApiBackendConnection(
     val id: String,
-    val serviceId: String,
+    val serviceId: String?,
+    val serviceType: String?,
+    val baseUrl: String?,
     val displayName: String,
     val note: String?,
     val credentialId: String?,
@@ -50,7 +52,9 @@ sealed interface ApiCredentialBinding {
 }
 
 class ApiConnectionCreate(
-    val serviceId: String,
+    val serviceId: String? = null,
+    val serviceType: String? = null,
+    val baseUrl: String? = null,
     val displayName: String,
     val note: String?,
     val configJson: String = "{}",
@@ -59,11 +63,13 @@ class ApiConnectionCreate(
     val idempotencyKey: String = UUID.randomUUID().toString(),
 ) {
     override fun toString(): String =
-        "ApiConnectionCreate(serviceId=$serviceId, displayName=$displayName, credential=$credential)"
+        "ApiConnectionCreate(serviceId=$serviceId, serviceType=$serviceType, displayName=$displayName, credential=$credential)"
 }
 
 data class ApiConnectionUpdate(
     val displayName: String? = null,
+    val serviceType: String? = null,
+    val baseUrl: String? = null,
     val note: String? = null,
     val configJson: String? = null,
     val enabled: Boolean? = null,
@@ -180,12 +186,14 @@ private class HttpApiConnectionApi(
 internal class ApiConnectionException(message: String) : Exception(message)
 
 internal fun createApiConnectionBody(input: ApiConnectionCreate): JSONObject = JSONObject()
-    .put("service_id", input.serviceId)
     .put("display_name", input.displayName.trim())
     .put("note", input.note?.trim()?.takeIf(String::isNotEmpty) ?: JSONObject.NULL)
     .put("config", JSONObject(input.configJson))
     .put("enabled", input.enabled)
     .apply {
+        input.serviceId?.let { put("service_id", it) }
+        input.serviceType?.let { put("service_type", it.trim()) }
+        input.baseUrl?.let { put("base_url", it.trim()) }
         when (val binding = input.credential) {
             ApiCredentialBinding.None -> Unit
             is ApiCredentialBinding.Existing ->
@@ -206,6 +214,8 @@ internal fun createApiConnectionBody(input: ApiConnectionCreate): JSONObject = J
 
 internal fun updateApiConnectionBody(input: ApiConnectionUpdate): JSONObject = JSONObject().apply {
     input.displayName?.let { put("display_name", it.trim()) }
+    input.serviceType?.let { put("service_type", it.trim()) }
+    input.baseUrl?.let { put("base_url", it.trim()) }
     input.note?.let { put("note", it.trim().takeIf(String::isNotEmpty) ?: JSONObject.NULL) }
     input.configJson?.let { put("config", JSONObject(it)) }
     input.enabled?.let { put("enabled", it) }
@@ -227,7 +237,9 @@ internal fun JSONObject.toApiService(): ApiServiceDescriptor = ApiServiceDescrip
 
 internal fun JSONObject.toApiConnection(): ApiBackendConnection = ApiBackendConnection(
     id = getString("connection_id"),
-    serviceId = getString("service_id"),
+    serviceId = nullableApiString("service_id"),
+    serviceType = nullableApiString("service_type"),
+    baseUrl = nullableApiString("base_url"),
     displayName = getString("display_name"),
     note = nullableApiString("note"),
     credentialId = nullableApiString("credential_id"),

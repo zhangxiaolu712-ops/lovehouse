@@ -76,10 +76,30 @@ class ApiConnectionRepositoryTest {
     }
 
     @Test
+    fun `user-defined service serializes without a registered service id`() {
+        val body = createApiConnectionBody(
+            ApiConnectionCreate(
+                serviceType = "Custom weather API",
+                baseUrl = "https://api.example.invalid/v1",
+                displayName = "Owner API",
+                note = "safe note",
+                credential = ApiCredentialBinding.Existing("credential-1"),
+            ),
+        )
+
+        assertFalse(body.has("service_id"))
+        assertEquals("Custom weather API", body.getString("service_type"))
+        assertEquals("https://api.example.invalid/v1", body.getString("base_url"))
+        assertEquals("credential-1", body.getJSONObject("credential").getString("credential_id"))
+    }
+
+    @Test
     fun `metadata update does not silently rebind credential`() {
         val body = updateApiConnectionBody(
             ApiConnectionUpdate(
                 displayName = "Renamed",
+                serviceType = "Owner API",
+                baseUrl = "https://api.example.invalid/v2",
                 note = "updated note",
                 credentialId = "credential-2",
                 updateCredential = false,
@@ -87,6 +107,8 @@ class ApiConnectionRepositoryTest {
         )
 
         assertEquals("Renamed", body.getString("display_name"))
+        assertEquals("Owner API", body.getString("service_type"))
+        assertEquals("https://api.example.invalid/v2", body.getString("base_url"))
         assertFalse(body.has("credential_id"))
     }
 
@@ -121,15 +143,20 @@ class ApiConnectionRepositoryTest {
     }
 
     @Test
-    fun `empty registry keeps the original API add form visible`() {
+    fun `empty registry keeps a savable owner-defined API form`() {
         val root = File(requireNotNull(System.getProperty("user.dir")))
         val source = File(root, "src/main/java/fyi/b612/lovehouse/feature/settings/ToolCenterApi.kt").readText()
 
-        assertTrue(source.contains("UnregisteredApiDraftForm"))
+        assertTrue(source.contains("CustomApiServiceForm"))
         assertTrue(source.contains("Base URL（原样保存）"))
         assertTrue(source.contains("直接输入新 Secret"))
         assertTrue(source.contains("使用密码库已有凭证"))
-        assertTrue(source.contains("Provider Descriptor 后才能提交"))
+        assertTrue(source.contains("repository.create"))
+        assertFalse(source.contains("需要先接入 Provider Descriptor"))
+        assertFalse(source.contains("Provider Descriptor 后才能提交"))
+        assertFalse(source.contains("谁能用"))
+        assertFalse(source.contains("按人格档案分配 · 音色"))
+        assertFalse(source.contains("能力与权限"))
         assertFalse(source.contains("HttpToolConnectionProbe"))
     }
 
