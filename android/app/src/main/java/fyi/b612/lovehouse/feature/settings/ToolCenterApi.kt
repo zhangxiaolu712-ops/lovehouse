@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -177,7 +178,7 @@ internal fun ApiDetailPage(
     val service = existing?.let { value -> services.firstOrNull { it.serviceId == value.serviceId } }
         ?: services.getOrNull(serviceIndex)
     if (existing == null && services.isEmpty()) {
-        TcGlass { TcEmpty(apiEmptyRegistryMessage(services)) }
+        UnregisteredApiDraftForm(credentials = credentials, ui = ui)
         return
     }
 
@@ -330,6 +331,106 @@ internal fun ApiDetailPage(
             }
         }
     }
+}
+
+@Composable
+private fun UnregisteredApiDraftForm(
+    credentials: List<SecretCredential>,
+    ui: TcUi,
+) {
+    var name by remember { mutableStateOf("") }
+    var serviceKind by remember { mutableIntStateOf(2) }
+    var endpoint by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var credentialMode by remember { mutableIntStateOf(0) }
+    var credentialType by remember { mutableIntStateOf(0) }
+    var credentialName by remember { mutableStateOf("") }
+    var secret by remember { mutableStateOf("") }
+    var credentialIndex by remember { mutableIntStateOf(0) }
+    var sharing by remember { mutableIntStateOf(1) }
+    val capabilities = remember { mutableStateListOf<String>() }
+
+    TcFormCard("连接信息") {
+        TcField("名称") { TcInput(name, { name = it }) }
+        TcField("服务类型") {
+            TcPills(listOf("语音", "地图", "自定义"), setOf(serviceKind)) { serviceKind = it }
+        }
+        TcField("Base URL（原样保存）") {
+            TcInput(endpoint, { endpoint = it }, placeholder = "https://")
+        }
+        TcField("备注") {
+            TcInput(note, { note = it }, placeholder = "这个服务是做什么的，给自己看", multiline = true)
+        }
+        TcInlineStatus(
+            "测试连通",
+            "需要先接入 Provider Descriptor",
+            ok = false,
+            busy = false,
+        ) {
+            ui.toast("Provider 尚未接入；Android 不会直接请求第三方 API")
+        }
+    }
+
+    TcFormCard("密钥") {
+        TcField("使用方式") {
+            TcPills(listOf("直接输入新 Secret", "使用密码库已有凭证"), setOf(credentialMode)) {
+                credentialMode = it
+            }
+        }
+        if (credentialMode == 0) {
+            TcField("鉴权方式") {
+                TcPills(listOf("API Key", "Bearer Token"), setOf(credentialType)) { credentialType = it }
+            }
+            TcField("密钥备注") {
+                TcInput(credentialName, { credentialName = it }, placeholder = "例如：语音服务密钥")
+            }
+            TcField("Key / Token") {
+                TcInput(secret, { secret = it }, secret = true)
+                TcHint("Secret 只保留在当前输入状态；正式提交后由 App Backend 自动写入密码库。")
+            }
+        } else {
+            TcField("密码库凭证") {
+                if (credentials.isEmpty()) {
+                    TcHint("密码库中暂无可选凭证。")
+                } else {
+                    TcSelect(
+                        credentials.map { it.displayName },
+                        credentialIndex.coerceIn(credentials.indices),
+                        "选择密码库凭证",
+                    ) { credentialIndex = it }
+                }
+            }
+        }
+        TcField("谁能用", last = true) {
+            TcPills(listOf("所有人格档案共用", "按人格档案分配"), setOf(sharing)) { sharing = it }
+            TcHint("分配合同尚未接入后端，当前仅保留原有产品界面。")
+        }
+    }
+
+    if (sharing == 1) {
+        TcFormCard("按人格档案分配 · 音色") {
+            TcHint("Voice Resource 与 Persona 分配尚未接入后端。")
+            TcLink("+ 添加音色") { ui.toast("Voice Provider 尚未接入，未保存") }
+        }
+    }
+
+    TcFormCard("能力与权限 · ${capabilities.size} 项") {
+        capabilities.forEachIndexed { index, capability ->
+            TcToolCard(last = index == capabilities.lastIndex) {
+                TcToolTop(capability, "尚未接入后端") { }
+            }
+        }
+        TcLink("+ 添加能力") {
+            ui.dialog = TcDialog("添加能力", "当前只保留表单预览，不会提交到后端。", input = "", ok = "添加") { added ->
+                if (added.text.isNotBlank()) capabilities += added.text
+            }
+        }
+    }
+
+    TcGlass {
+        TcHint("当前 App Backend 尚无已注册 API 服务。表单可以填写，但需 Provider Descriptor 后才能提交。")
+    }
+    TcSaveButton("保存", enabled = false) { }
 }
 
 internal fun apiEmptyRegistryMessage(services: List<ApiServiceDescriptor>): String =

@@ -121,6 +121,19 @@ class ApiConnectionRepositoryTest {
     }
 
     @Test
+    fun `empty registry keeps the original API add form visible`() {
+        val root = File(requireNotNull(System.getProperty("user.dir")))
+        val source = File(root, "src/main/java/fyi/b612/lovehouse/feature/settings/ToolCenterApi.kt").readText()
+
+        assertTrue(source.contains("UnregisteredApiDraftForm"))
+        assertTrue(source.contains("Base URL（原样保存）"))
+        assertTrue(source.contains("直接输入新 Secret"))
+        assertTrue(source.contains("使用密码库已有凭证"))
+        assertTrue(source.contains("Provider Descriptor 后才能提交"))
+        assertFalse(source.contains("HttpToolConnectionProbe"))
+    }
+
+    @Test
     fun `API page no longer reads local prototype or probes third party endpoints`() {
         val root = File(requireNotNull(System.getProperty("user.dir")))
         val source = File(root, "src/main/java/fyi/b612/lovehouse/feature/settings/ToolCenterApi.kt").readText()
