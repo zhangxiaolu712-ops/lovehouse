@@ -131,8 +131,7 @@ fun SettingsScreen(
     ownerSession: OwnerSessionStore,
     capabilityRegistry: CapabilityRegistry,
     baseCapabilities: LoveHouseCapabilityRegistry,
-    toolConnections: ToolConnectionStore,
-    toolConnectionProbe: ToolConnectionProbe,
+    apiConnections: ApiConnectionRepository,
     appAccount: AppAccountRepository,
     mcpConnections: McpConnectionRepository,
     secretVault: SecretVaultRepository,
@@ -153,7 +152,6 @@ fun SettingsScreen(
                 permissionStatusProvider = permissionStatusProvider,
                 ownerSession = ownerSession,
                 baseCapabilities = baseCapabilities,
-                toolConnections = toolConnections,
                 appAccount = appAccount,
                 serverEvents = serverEvents,
                 onOpenConnectionControl = onOpenConnectionControl,
@@ -162,8 +160,8 @@ fun SettingsScreen(
         } else if (detail.title == ToolCenterEntryTitle) {
             ToolCenterPage(
                 registry = capabilityRegistry,
-                connections = toolConnections,
-                probe = toolConnectionProbe,
+                apiConnections = apiConnections,
+                secretVault = secretVault,
                 mcpRepository = mcpConnections,
                 personaRuntimeSource = personaRuntimeSource,
                 onBack = { selected = null },
@@ -193,7 +191,6 @@ private fun SettingsHome(
     permissionStatusProvider: PermissionStatusProvider,
     ownerSession: OwnerSessionStore,
     baseCapabilities: LoveHouseCapabilityRegistry,
-    toolConnections: ToolConnectionStore,
     appAccount: AppAccountRepository,
     serverEvents: ServerEventRepository,
     onOpenConnectionControl: () -> Unit,
@@ -204,7 +201,6 @@ private fun SettingsHome(
     val profilesJson by localStorage.observeString(PersonasKey).collectAsState(initial = null)
     val baseCapabilityState by baseCapabilities.state.collectAsState()
     val session by ownerSession.state.collectAsState()
-    val savedToolConnections by toolConnections.connections.collectAsState()
     val appAccountState by appAccount.state.collectAsState()
     val eventState by serverEvents.feed.collectAsState()
     val appearance = LocalLoveHouseAppearance.current
@@ -253,7 +249,7 @@ private fun SettingsHome(
         "语音" to "原生录音可用",
         "天气与时间" to "天气未接入",
         "主动唤醒" to "尚未启用",
-        "工具添加" to if (savedToolConnections.any { it.kind == ToolConnectionKind.Api }) "本机 API + MCP" else "App Backend MCP",
+        "工具添加" to "App Backend API + MCP",
         "本地资源" to "本机存储",
         "设备" to (deviceContext.battery.levelPercent?.let { "电量 $it%" } ?: "状态可刷新"),
         "密码库 / Secret Vault" to "后端存储",

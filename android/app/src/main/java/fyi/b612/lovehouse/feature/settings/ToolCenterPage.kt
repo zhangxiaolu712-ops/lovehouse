@@ -103,8 +103,8 @@ internal class TcUi {
 @Composable
 internal fun ToolCenterPage(
     registry: CapabilityRegistry,
-    connections: ToolConnectionStore,
-    probe: ToolConnectionProbe,
+    apiConnections: ApiConnectionRepository,
+    secretVault: SecretVaultRepository,
     mcpRepository: McpConnectionRepository,
     personaRuntimeSource: PersonaRuntimeSource,
     onBack: () -> Unit,
@@ -153,7 +153,7 @@ internal fun ToolCenterPage(
                             }
                             when (tab) {
                                 TcTab.Mcp -> McpTab(mcp, mcpRepository, ui, onOpen = { page = it })
-                                TcTab.Api -> ApiTab(connections, probe, ui, onOpen = { page = it })
+                                TcTab.Api -> ApiTab(apiConnections, ui, onOpen = { page = it })
                                 TcTab.Db -> StorageTab()
                                 TcTab.Local -> LocalTab(registry, ui)
                             }
@@ -164,7 +164,7 @@ internal fun ToolCenterPage(
                         }
                         is TcPage.Api -> {
                             TcTopBar(current.title, "API · Detail", toMain)
-                            ApiDetailPage(current, connections, probe, personaRuntimeSource, ui, onDone = toMain)
+                            ApiDetailPage(current, apiConnections, secretVault, ui, onDone = toMain)
                         }
                         is TcPage.Db -> {
                             TcTopBar(current.title, "Storage · Detail", toMain)

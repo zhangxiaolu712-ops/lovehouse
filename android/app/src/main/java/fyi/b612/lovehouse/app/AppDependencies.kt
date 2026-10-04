@@ -66,6 +66,8 @@ import fyi.b612.lovehouse.feature.settings.AppBackendMcpConnectionRepository
 import fyi.b612.lovehouse.feature.settings.AppBackendSecretVaultRepository
 import fyi.b612.lovehouse.feature.settings.McpConnectionRepository
 import fyi.b612.lovehouse.feature.settings.SecretVaultRepository
+import fyi.b612.lovehouse.feature.settings.ApiConnectionRepository
+import fyi.b612.lovehouse.feature.settings.AppBackendApiConnectionRepository
 import fyi.b612.lovehouse.feature.settings.AppEffectiveToolResolver
 import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
 import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
@@ -98,6 +100,7 @@ data class AppDependencies(
     val remoteEventPush: RemoteEventPushRegistration,
     val mcpConnections: McpConnectionRepository,
     val secretVault: SecretVaultRepository,
+    val apiConnections: ApiConnectionRepository,
     val conversationPersonas: ConversationPersonaStore,
     val personaRuntimeSource: PersonaRuntimeSource,
     val effectiveTools: EffectiveToolResolver,
@@ -146,6 +149,10 @@ fun createAppDependencies(context: Context): AppDependencies {
         sessionCookie = appAccountSource::backendSessionCookie,
     )
     val secretVault: SecretVaultRepository = AppBackendSecretVaultRepository(
+        BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
+        sessionCookie = appAccountSource::backendSessionCookie,
+    )
+    val apiConnections: ApiConnectionRepository = AppBackendApiConnectionRepository(
         BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
         sessionCookie = appAccountSource::backendSessionCookie,
     )
@@ -226,6 +233,7 @@ fun createAppDependencies(context: Context): AppDependencies {
         remoteEventPush = remoteEventPush,
         mcpConnections = mcpConnections,
         secretVault = secretVault,
+        apiConnections = apiConnections,
         conversationPersonas = conversationPersonas,
         personaRuntimeSource = personaRuntimeSource,
         effectiveTools = effectiveTools,

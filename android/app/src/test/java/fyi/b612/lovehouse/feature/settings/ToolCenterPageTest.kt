@@ -56,14 +56,6 @@ class ToolCenterPageTest {
         assertEquals(listOf("bind s1 add c1", "unbind s1 drop"), repository.calls)
     }
 
-    @Test
-    fun `api key keeps the stored auth type and defaults to api key`() {
-        assertEquals(ToolConnectionAuth.None, apiAuthFor(ToolConnectionAuth.BearerToken, ""))
-        assertEquals(ToolConnectionAuth.BearerToken, apiAuthFor(ToolConnectionAuth.BearerToken, "secret"))
-        assertEquals(ToolConnectionAuth.ApiKey, apiAuthFor(ToolConnectionAuth.None, "secret"))
-        assertEquals(ToolConnectionAuth.ApiKey, apiAuthFor(null, "secret"))
-    }
-
     private fun connection(
         id: String,
         toolServiceId: String? = null,
