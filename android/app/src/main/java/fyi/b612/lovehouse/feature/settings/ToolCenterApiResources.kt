@@ -15,6 +15,7 @@ internal fun ApiModelResourceSection(
     connection: ApiBackendConnection,
     repository: ApiConnectionRepository,
     ui: TcUi,
+    autoDiscoveryRequest: Int = 0,
 ) {
     val scope = rememberCoroutineScope()
     var catalog by remember(connection.id) { mutableStateOf<ApiResourceCatalog?>(null) }
@@ -42,18 +43,34 @@ internal fun ApiModelResourceSection(
         loading = false
     }
     LaunchedEffect(repository, connection.id) { load() }
+    LaunchedEffect(autoDiscoveryRequest) {
+        if (autoDiscoveryRequest <= 0) return@LaunchedEffect
+        busy = true
+        runCatching { repository.previewResources(connection.id, ApiResourceDiscoverySource.ConnectionModels) }
+            .onSuccess { found ->
+                preview = found
+                selectedIds = buildSet {
+                    catalog?.resources?.filter { it.source == ApiResourceSource.Custom && it.selected }
+                        ?.forEach { add(it.id) }
+                    found.resources.filter(ApiResource::selected).forEach { add(it.id) }
+                }
+                error = null
+            }
+            .onFailure { error = it.message ?: "模型自动发现失败，原目录未改变" }
+        busy = false
+    }
 
     TcSection("模型目录", catalog?.let { "${it.resources.size} 项 · 第 ${it.revision} 版" } ?: "")
     TcFormCard("发现模型") {
         TcField("发现来源") {
-            TcPills(listOf("服务声明", "模型列表 URL"), setOf(sourceMode)) {
+            TcPills(listOf("自动来源", "手动模型 URL"), setOf(sourceMode)) {
                 sourceMode = it
                 preview = null
             }
         }
         if (sourceMode == 0) {
-            TcField("服务声明") {
-                TcHint("只读取服务目录明确声明的模型列表地址，不从 Base URL 猜测路径。")
+            TcField("自动来源") {
+                TcHint("优先读取服务预设；OpenAI-compatible 连接按标准协议从 Base URL 定位模型列表。")
             }
         } else {
             TcField("OpenAI-compatible 模型列表 URL") {
@@ -66,7 +83,7 @@ internal fun ApiModelResourceSection(
         error?.let { TcField("状态", last = true) { TcHint(it) } }
         TcSaveButton(if ((catalog?.revision ?: 0) == 0) "发现模型" else "重新发现模型", enabled = !busy && !loading) {
             val source = if (sourceMode == 0) {
-                ApiResourceDiscoverySource.PresetModels
+                ApiResourceDiscoverySource.ConnectionModels
             } else {
                 modelsUrl.takeIf(String::isNotBlank)?.let {
                     ApiResourceDiscoverySource.OpenAiModels(it, apiKeyHeader.ifBlank { null })

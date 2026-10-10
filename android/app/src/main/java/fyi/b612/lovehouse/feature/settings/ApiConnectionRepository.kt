@@ -28,6 +28,7 @@ data class ApiBackendConnection(
     val serviceId: String?,
     val serviceType: String?,
     val baseUrl: String?,
+    val apiProtocol: String,
     val displayName: String,
     val note: String?,
     val credentialId: String?,
@@ -107,6 +108,7 @@ data class ApiResourcePreview(
 )
 
 sealed interface ApiResourceDiscoverySource {
+    data object ConnectionModels : ApiResourceDiscoverySource
     data object PresetModels : ApiResourceDiscoverySource
     data class OpenAiModels(val url: String, val apiKeyHeaderName: String? = null) : ApiResourceDiscoverySource
 }
@@ -153,6 +155,7 @@ class ApiConnectionCreate(
     val serviceId: String? = null,
     val serviceType: String? = null,
     val baseUrl: String? = null,
+    val apiProtocol: String? = null,
     val displayName: String,
     val note: String?,
     val configJson: String = "{}",
@@ -168,6 +171,7 @@ data class ApiConnectionUpdate(
     val displayName: String? = null,
     val serviceType: String? = null,
     val baseUrl: String? = null,
+    val apiProtocol: String? = null,
     val note: String? = null,
     val configJson: String? = null,
     val enabled: Boolean? = null,
@@ -447,6 +451,7 @@ internal fun createApiConnectionBody(input: ApiConnectionCreate): JSONObject = J
         input.serviceId?.let { put("service_id", it) }
         input.serviceType?.let { put("service_type", it.trim()) }
         input.baseUrl?.let { put("base_url", it.trim()) }
+        input.apiProtocol?.let { put("api_protocol", it) }
         when (val binding = input.credential) {
             ApiCredentialBinding.None -> Unit
             is ApiCredentialBinding.Existing ->
@@ -469,6 +474,7 @@ internal fun updateApiConnectionBody(input: ApiConnectionUpdate): JSONObject = J
     input.displayName?.let { put("display_name", it.trim()) }
     input.serviceType?.let { put("service_type", it.trim()) }
     input.baseUrl?.let { put("base_url", it.trim()) }
+    input.apiProtocol?.let { put("api_protocol", it) }
     input.note?.let { put("note", it.trim().takeIf(String::isNotEmpty) ?: JSONObject.NULL) }
     input.configJson?.let { put("config", JSONObject(it)) }
     input.enabled?.let { put("enabled", it) }
@@ -493,6 +499,7 @@ internal fun JSONObject.toApiConnection(): ApiBackendConnection = ApiBackendConn
     serviceId = nullableApiString("service_id"),
     serviceType = nullableApiString("service_type"),
     baseUrl = nullableApiString("base_url"),
+    apiProtocol = optString("api_protocol", "CUSTOM"),
     displayName = getString("display_name"),
     note = nullableApiString("note"),
     credentialId = nullableApiString("credential_id"),
@@ -513,6 +520,7 @@ private fun ApiDiscoverySource.toApiJson(): JSONObject = when (this) {
 }
 
 private fun ApiResourceDiscoverySource.toApiJson(): JSONObject = when (this) {
+    ApiResourceDiscoverySource.ConnectionModels -> JSONObject().put("type", "connection_models")
     ApiResourceDiscoverySource.PresetModels -> JSONObject().put("type", "preset_models")
     is ApiResourceDiscoverySource.OpenAiModels -> JSONObject().put("type", "openai_models").put("url", url).apply {
         apiKeyHeaderName?.takeIf(String::isNotBlank)?.let { put("api_key_header_name", it) }

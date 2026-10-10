@@ -129,6 +129,7 @@ internal fun ApiDetailPage(
     var connections by remember(page.connectionId) { mutableStateOf<List<ApiBackendConnection>>(emptyList()) }
     var credentials by remember(page.connectionId) { mutableStateOf<List<SecretCredential>>(emptyList()) }
     var createdConnection by remember(page.connectionId) { mutableStateOf<ApiBackendConnection?>(null) }
+    var autoDiscoveryRequest by remember(page.connectionId) { mutableIntStateOf(0) }
     var loading by remember(page.connectionId) { mutableStateOf(true) }
     var loadError by remember(page.connectionId) { mutableStateOf<String?>(null) }
 
@@ -176,11 +177,14 @@ internal fun ApiDetailPage(
         )
     }
     if (existing != null) {
-        ApiCapabilityCatalogSection(existing, repository, ui)
-        ApiModelResourceSection(existing, repository, ui)
-        if (page.connectionId == null && createdConnection != null) {
-            TcLink("稍后设置") { onDone() }
+        TcSection("发现可用资源", "能力与模型分别保存")
+        TcFormCard("自动发现") {
+            TcHint("只使用服务预设或已明确选择的标准协议；不会扫描未知接口路径。")
+            TcSaveButton("自动发现", enabled = true) { autoDiscoveryRequest += 1 }
         }
+        ApiCapabilityCatalogSection(existing, repository, ui, autoDiscoveryRequest)
+        ApiModelResourceSection(existing, repository, ui, autoDiscoveryRequest)
+        TcLink(if (page.connectionId == null && createdConnection != null) "稍后设置" else "完成") { onDone() }
     }
 }
 
@@ -270,6 +274,9 @@ private fun CustomApiServiceForm(
     var name by remember(existing?.id) { mutableStateOf(existing?.displayName.orEmpty()) }
     var serviceType by remember(existing?.id) { mutableStateOf(existing?.serviceType.orEmpty()) }
     var endpoint by remember(existing?.id) { mutableStateOf(existing?.baseUrl.orEmpty()) }
+    var apiProtocol by remember(existing?.id) {
+        mutableIntStateOf(if (existing?.apiProtocol == "OPENAI_COMPATIBLE") 1 else 0)
+    }
     var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
     var credentialMode by remember(existing?.id) { mutableIntStateOf(if (existing == null) 0 else 1) }
     var credentialType by remember(existing?.id) { mutableIntStateOf(0) }
@@ -290,6 +297,14 @@ private fun CustomApiServiceForm(
         }
         TcField("Base URL（原样保存）") {
             TcInput(endpoint, { endpoint = it }, placeholder = "https://")
+        }
+        TcField("服务协议", last = true) {
+            TcPills(listOf("自定义 API", "OpenAI-compatible"), setOf(apiProtocol)) { apiProtocol = it }
+            TcHint(if (apiProtocol == 1) {
+                "按标准协议从 Base URL 定位模型列表，不扫描其他路径。"
+            } else {
+                "协议不明确时不猜测模型或描述地址，可在下方使用手动来源。"
+            })
         }
     }
 
@@ -360,6 +375,7 @@ private fun CustomApiServiceForm(
                                 ApiConnectionCreate(
                                     serviceType = serviceType,
                                     baseUrl = endpoint,
+                                    apiProtocol = if (apiProtocol == 1) "OPENAI_COMPATIBLE" else "CUSTOM",
                                     displayName = name,
                                     note = note,
                                     credential = binding,
@@ -374,6 +390,7 @@ private fun CustomApiServiceForm(
                                     displayName = name,
                                     serviceType = serviceType,
                                     baseUrl = endpoint,
+                                    apiProtocol = if (apiProtocol == 1) "OPENAI_COMPATIBLE" else "CUSTOM",
                                     note = note,
                                     credentialId = chosenCredential.takeIf { credentialEdited },
                                     updateCredential = credentialEdited && chosenCredential != existing.credentialId,
@@ -387,7 +404,7 @@ private fun CustomApiServiceForm(
                             onCreated(saved)
                         } else {
                             ui.toast("已保存")
-                            onDone()
+                            onCreated(saved)
                         }
                     }.onFailure { ui.toast(it.message ?: "保存失败") }
                     busy = false

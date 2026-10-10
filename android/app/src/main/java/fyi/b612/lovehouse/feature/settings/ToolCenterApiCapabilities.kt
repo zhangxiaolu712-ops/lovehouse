@@ -21,6 +21,7 @@ internal fun ApiCapabilityCatalogSection(
     connection: ApiBackendConnection,
     repository: ApiConnectionRepository,
     ui: TcUi,
+    autoDiscoveryRequest: Int = 0,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -52,6 +53,26 @@ internal fun ApiCapabilityCatalogSection(
         loading = false
     }
     LaunchedEffect(repository, connection.id) { load() }
+    LaunchedEffect(autoDiscoveryRequest) {
+        if (autoDiscoveryRequest <= 0) return@LaunchedEffect
+        if (connection.serviceId == null) {
+            error = "该自定义服务没有可信的能力描述来源；不会扫描 Swagger/OpenAPI 常见路径，请使用描述 URL、JSON 文件或手动添加。"
+            return@LaunchedEffect
+        }
+        busy = true
+        runCatching { repository.previewCapabilities(connection.id, ApiDiscoverySource.Preset) }
+            .onSuccess { found ->
+                preview = found
+                selectedIds = buildSet {
+                    catalog?.capabilities?.filter { it.source == ApiCapabilitySource.Custom && it.selected }
+                        ?.forEach { add(it.id) }
+                    found.capabilities.filter(ApiCapability::selected).forEach { add(it.id) }
+                }
+                error = null
+            }
+            .onFailure { error = it.message ?: "能力自动发现失败，原目录未改变" }
+        busy = false
+    }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult

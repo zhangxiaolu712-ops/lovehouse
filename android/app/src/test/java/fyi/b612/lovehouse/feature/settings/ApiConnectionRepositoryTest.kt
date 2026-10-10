@@ -81,6 +81,7 @@ class ApiConnectionRepositoryTest {
             ApiConnectionCreate(
                 serviceType = "Custom weather API",
                 baseUrl = "https://api.example.invalid/v1",
+                apiProtocol = "OPENAI_COMPATIBLE",
                 displayName = "Owner API",
                 note = "safe note",
                 credential = ApiCredentialBinding.Existing("credential-1"),
@@ -90,6 +91,7 @@ class ApiConnectionRepositoryTest {
         assertFalse(body.has("service_id"))
         assertEquals("Custom weather API", body.getString("service_type"))
         assertEquals("https://api.example.invalid/v1", body.getString("base_url"))
+        assertEquals("OPENAI_COMPATIBLE", body.getString("api_protocol"))
         assertEquals("credential-1", body.getJSONObject("credential").getString("credential_id"))
     }
 
@@ -100,6 +102,7 @@ class ApiConnectionRepositoryTest {
                 displayName = "Renamed",
                 serviceType = "Owner API",
                 baseUrl = "https://api.example.invalid/v2",
+                apiProtocol = "CUSTOM",
                 note = "updated note",
                 credentialId = "credential-2",
                 updateCredential = false,
@@ -109,6 +112,7 @@ class ApiConnectionRepositoryTest {
         assertEquals("Renamed", body.getString("display_name"))
         assertEquals("Owner API", body.getString("service_type"))
         assertEquals("https://api.example.invalid/v2", body.getString("base_url"))
+        assertEquals("CUSTOM", body.getString("api_protocol"))
         assertFalse(body.has("credential_id"))
     }
 

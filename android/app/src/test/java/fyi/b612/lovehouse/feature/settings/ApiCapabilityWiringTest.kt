@@ -122,6 +122,21 @@ class ApiCapabilityWiringTest {
     }
 
     @Test
+    fun `automatic model discovery uses authoritative connection protocol without client URL guessing`() = runBlocking {
+        val api = RecordingApi().apply {
+            responses += JSONObject().put("preview", resourcePreviewJson())
+        }
+        val repository = AppBackendApiConnectionRepository(api)
+
+        repository.previewResources("connection-1", ApiResourceDiscoverySource.ConnectionModels)
+
+        val source = JSONObject(api.calls.single().body!!).getJSONObject("source")
+        assertEquals("connection_models", source.getString("type"))
+        assertFalse(source.has("url"))
+        assertEquals("POST /api/api-connections/connection-1/resource-discovery/preview", api.calls.single().methodPath)
+    }
+
+    @Test
     fun `large mixed model directory supports search filter and independent identity`() {
         val values = (0 until 1_200).map { index ->
             ApiResource(
@@ -166,7 +181,7 @@ class ApiCapabilityWiringTest {
         val resourceUi = File(root, "src/main/java/fyi/b612/lovehouse/feature/settings/ToolCenterApiResources.kt").readText()
         assertTrue(resourceUi.contains("repository.previewResources"))
         assertTrue(resourceUi.contains("repository.commitResources"))
-        assertTrue(resourceUi.contains("不从 Base URL 猜测路径"))
+        assertTrue(resourceUi.contains("从 Base URL 定位模型列表"))
         assertFalse(ui.contains("HttpToolConnectionProbe"))
         assertFalse(ui.contains("ToolConnectionStore"))
         assertFalse(repository.contains("SharedPreferences"))
@@ -180,8 +195,10 @@ class ApiCapabilityWiringTest {
 
         assertTrue(ui.contains("onCreated = { createdConnection = it }"))
         assertTrue(ui.contains("连接已创建，可以继续发现能力"))
-        assertTrue(ui.contains("ApiCapabilityCatalogSection(existing, repository, ui)"))
-        assertTrue(ui.contains("TcLink(\"稍后设置\")"))
+        assertTrue(ui.contains("ApiCapabilityCatalogSection(existing, repository, ui, autoDiscoveryRequest)"))
+        assertTrue(ui.contains("ApiModelResourceSection(existing, repository, ui, autoDiscoveryRequest)"))
+        assertTrue(ui.contains("TcSaveButton(\"自动发现\""))
+        assertTrue(ui.contains("\"稍后设置\" else \"完成\""))
     }
 
     @Test
