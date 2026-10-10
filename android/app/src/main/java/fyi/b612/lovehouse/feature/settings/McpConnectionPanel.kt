@@ -14,8 +14,8 @@ fun McpOAuthResultScreen(
     repository: McpConnectionRepository,
     personaRuntimeSource: PersonaRuntimeSource,
     capabilityRegistry: CapabilityRegistry,
-    toolConnections: ToolConnectionStore,
-    toolConnectionProbe: ToolConnectionProbe,
+    apiConnections: ApiConnectionRepository,
+    secretVault: SecretVaultRepository,
     connectionId: String,
     callbackStatus: String,
     onBack: () -> Unit,
@@ -23,8 +23,8 @@ fun McpOAuthResultScreen(
 ) {
     ToolCenterPage(
         registry = capabilityRegistry,
-        connections = toolConnections,
-        probe = toolConnectionProbe,
+        apiConnections = apiConnections,
+        secretVault = secretVault,
         mcpRepository = repository,
         personaRuntimeSource = personaRuntimeSource,
         onBack = onBack,
