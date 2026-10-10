@@ -36,6 +36,60 @@ data class ApiBackendConnection(
     val updatedAt: String,
 )
 
+enum class ApiCapabilitySource { Discovered, Custom }
+enum class ApiCapabilityAvailability { Available, Missing }
+
+data class ApiCapability(
+    val id: String,
+    val source: ApiCapabilitySource,
+    val sourceKey: String,
+    val displayName: String,
+    val description: String?,
+    val method: String,
+    val path: String,
+    val inputSchema: String?,
+    val outputSchema: String?,
+    val availability: ApiCapabilityAvailability,
+    val selected: Boolean,
+)
+
+data class ApiCapabilityChanges(
+    val added: List<String> = emptyList(),
+    val changed: List<String> = emptyList(),
+    val removed: List<String> = emptyList(),
+)
+
+data class ApiCapabilityCatalog(
+    val connectionId: String,
+    val revision: Int,
+    val capabilities: List<ApiCapability>,
+    val lastDiscoverySummary: String? = null,
+)
+
+data class ApiCapabilityPreview(
+    val previewId: String,
+    val revision: Int,
+    val capabilities: List<ApiCapability>,
+    val changes: ApiCapabilityChanges,
+    val expiresAt: String,
+)
+
+sealed interface ApiDiscoverySource {
+    data object Preset : ApiDiscoverySource
+    data class Url(val url: String, val apiKeyHeaderName: String? = null) : ApiDiscoverySource
+    data class JsonDocument(val fileName: String, val documentJson: String) : ApiDiscoverySource
+}
+
+data class ApiCustomCapabilityInput(
+    val displayName: String,
+    val description: String?,
+    val method: String,
+    val path: String,
+    val inputSchemaJson: String? = null,
+    val outputSchemaJson: String? = null,
+    val selected: Boolean = false,
+)
+
 sealed interface ApiCredentialBinding {
     data object None : ApiCredentialBinding
     data class Existing(val credentialId: String) : ApiCredentialBinding
@@ -84,6 +138,21 @@ interface ApiConnectionRepository {
     suspend fun create(input: ApiConnectionCreate): ApiBackendConnection
     suspend fun update(connectionId: String, input: ApiConnectionUpdate): ApiBackendConnection
     suspend fun delete(connectionId: String): List<ApiBackendConnection>
+    suspend fun capabilityCatalog(connectionId: String): ApiCapabilityCatalog
+    suspend fun previewCapabilities(connectionId: String, source: ApiDiscoverySource): ApiCapabilityPreview
+    suspend fun commitCapabilities(
+        connectionId: String,
+        previewId: String,
+        selectedCapabilityIds: Set<String>,
+    ): ApiCapabilityCatalog
+    suspend fun selectCapabilities(connectionId: String, selectedCapabilityIds: Set<String>): ApiCapabilityCatalog
+    suspend fun createCustomCapability(connectionId: String, input: ApiCustomCapabilityInput): ApiCapabilityCatalog
+    suspend fun updateCustomCapability(
+        connectionId: String,
+        capabilityId: String,
+        input: ApiCustomCapabilityInput,
+    ): ApiCapabilityCatalog
+    suspend fun deleteCustomCapability(connectionId: String, capabilityId: String): ApiCapabilityCatalog
 }
 
 class AppBackendApiConnectionRepository private constructor(
@@ -127,6 +196,64 @@ class AppBackendApiConnectionRepository private constructor(
         }
         return connections()
     }
+
+    override suspend fun capabilityCatalog(connectionId: String): ApiCapabilityCatalog =
+        api.request("GET", "/api/api-connections/${encodeApiPath(connectionId)}/capabilities")
+            .requireApiCapabilityCatalog()
+
+    override suspend fun previewCapabilities(
+        connectionId: String,
+        source: ApiDiscoverySource,
+    ): ApiCapabilityPreview = api.request(
+        method = "POST",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/capability-discovery/preview",
+        body = JSONObject().put("source", source.toApiJson()).toString(),
+    ).requireApiCapabilityPreview()
+
+    override suspend fun commitCapabilities(
+        connectionId: String,
+        previewId: String,
+        selectedCapabilityIds: Set<String>,
+    ): ApiCapabilityCatalog = api.request(
+        method = "POST",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/capability-discovery/commit",
+        body = JSONObject().put("preview_id", previewId)
+            .put("selected_capability_ids", JSONArray(selectedCapabilityIds.toList())).toString(),
+    ).requireApiCapabilityCatalog()
+
+    override suspend fun selectCapabilities(
+        connectionId: String,
+        selectedCapabilityIds: Set<String>,
+    ): ApiCapabilityCatalog = api.request(
+        method = "PUT",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/capability-selections",
+        body = JSONObject().put("selected_capability_ids", JSONArray(selectedCapabilityIds.toList())).toString(),
+    ).requireApiCapabilityCatalog()
+
+    override suspend fun createCustomCapability(
+        connectionId: String,
+        input: ApiCustomCapabilityInput,
+    ): ApiCapabilityCatalog = api.request(
+        method = "POST",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/capabilities/custom",
+        body = input.toApiJson().toString(),
+    ).requireApiCapabilityCatalog()
+
+    override suspend fun updateCustomCapability(
+        connectionId: String,
+        capabilityId: String,
+        input: ApiCustomCapabilityInput,
+    ): ApiCapabilityCatalog = api.request(
+        method = "PUT",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/capabilities/custom/${encodeApiPath(capabilityId)}",
+        body = input.toApiJson().toString(),
+    ).requireApiCapabilityCatalog()
+
+    override suspend fun deleteCustomCapability(connectionId: String, capabilityId: String): ApiCapabilityCatalog =
+        api.request(
+            method = "DELETE",
+            path = "/api/api-connections/${encodeApiPath(connectionId)}/capabilities/custom/${encodeApiPath(capabilityId)}",
+        ).requireApiCapabilityCatalog()
 }
 
 internal interface ApiConnectionApi {
@@ -250,6 +377,92 @@ internal fun JSONObject.toApiConnection(): ApiBackendConnection = ApiBackendConn
     updatedAt = getString("updated_at"),
 )
 
+private fun ApiDiscoverySource.toApiJson(): JSONObject = when (this) {
+    ApiDiscoverySource.Preset -> JSONObject().put("type", "preset")
+    is ApiDiscoverySource.Url -> JSONObject().put("type", "url").put("url", url).apply {
+        apiKeyHeaderName?.takeIf(String::isNotBlank)?.let { put("api_key_header_name", it) }
+    }
+    is ApiDiscoverySource.JsonDocument -> JSONObject().put("type", "document")
+        .put("file_name", fileName).put("document", JSONObject(documentJson))
+}
+
+private fun ApiCustomCapabilityInput.toApiJson(): JSONObject = JSONObject()
+    .put("display_name", displayName)
+    .put("description", description ?: JSONObject.NULL)
+    .put("http_method", method)
+    .put("relative_path", path)
+    .put("selected", selected)
+    .apply {
+        inputSchemaJson?.takeIf(String::isNotBlank)?.let { put("input_schema", JSONObject(it)) }
+        outputSchemaJson?.takeIf(String::isNotBlank)?.let { put("output_schema", JSONObject(it)) }
+    }
+
+private fun JSONObject.toApiCapability(): ApiCapability = ApiCapability(
+    id = getString("capability_id"),
+    source = if (getString("source_kind") == "CUSTOM") ApiCapabilitySource.Custom else ApiCapabilitySource.Discovered,
+    sourceKey = getString("source_key"),
+    displayName = getString("display_name"),
+    description = nullableApiString("description"),
+    method = getString("http_method"),
+    path = getString("relative_path"),
+    inputSchema = optJSONObject("input_schema")?.toString(2),
+    outputSchema = optJSONObject("output_schema")?.toString(2),
+    availability = if (getString("availability") == "MISSING") {
+        ApiCapabilityAvailability.Missing
+    } else {
+        ApiCapabilityAvailability.Available
+    },
+    selected = optBoolean("selected", false),
+)
+
+private fun JSONObject.toApiCapabilityCatalog(): ApiCapabilityCatalog {
+    val values = optJSONArray("capabilities")
+    val capabilities = buildList {
+        if (values != null) for (index in 0 until values.length()) {
+            values.optJSONObject(index)?.let { add(it.toApiCapability()) }
+        }
+    }
+    val discovery = optJSONObject("last_discovery")
+    val changes = discovery?.optJSONObject("changes")
+    val summary = discovery?.let {
+        "第 ${it.optInt("revision")} 版 · +${changes?.optJSONArray("added")?.length() ?: 0} " +
+            "~${changes?.optJSONArray("changed")?.length() ?: 0} -${changes?.optJSONArray("removed")?.length() ?: 0}"
+    }
+    return ApiCapabilityCatalog(
+        connectionId = getString("connection_id"),
+        revision = optInt("revision"),
+        capabilities = capabilities,
+        lastDiscoverySummary = summary,
+    )
+}
+
+private fun JSONObject.toApiCapabilityChanges(): ApiCapabilityChanges = ApiCapabilityChanges(
+    added = optJSONArray("added").toStringValues(),
+    changed = optJSONArray("changed").toStringValues(),
+    removed = optJSONArray("removed").toStringValues(),
+)
+
+private fun JSONObject.requireApiCapabilityCatalog(): ApiCapabilityCatalog =
+    optJSONObject("catalog")?.toApiCapabilityCatalog()
+        ?: throw ApiConnectionException("App Backend 未返回能力目录，请刷新后重试")
+
+private fun JSONObject.requireApiCapabilityPreview(): ApiCapabilityPreview {
+    val preview = optJSONObject("preview")
+        ?: throw ApiConnectionException("App Backend 未返回能力预览，请重试")
+    val values = preview.optJSONArray("capabilities")
+    return ApiCapabilityPreview(
+        previewId = preview.getString("preview_id"),
+        revision = preview.optInt("revision"),
+        capabilities = buildList {
+            if (values != null) for (index in 0 until values.length()) {
+                values.optJSONObject(index)?.let { add(it.toApiCapability()) }
+            }
+        },
+        changes = preview.optJSONObject("changes")?.toApiCapabilityChanges() ?: ApiCapabilityChanges(),
+        expiresAt = preview.getString("expires_at"),
+    )
+}
+
 private fun JSONObject.requireApiConnection(): ApiBackendConnection =
     optJSONObject("connection")?.toApiConnection()
         ?: throw ApiConnectionException("App Backend 未返回 API 连接状态，请刷新后重试")
@@ -281,6 +494,14 @@ private fun encodeApiPath(value: String): String =
 private fun apiConnectionErrorText(status: Int, code: String): String = when {
     status == HttpURLConnection.HTTP_UNAUTHORIZED || code == "APP_AUTH_REQUIRED" ->
         "请先登录 LoveHouse App Account"
+    code == "API_CAPABILITY_NOT_FOUND" -> "这个能力已不存在，请刷新目录"
+    code == "API_DISCOVERY_SOURCE_REQUIRED" -> "请选择官方描述 URL 或 JSON 文件"
+    code == "API_DISCOVERY_SOURCE_UNAVAILABLE" -> "这个服务尚未提供官方能力描述，请填写描述 URL 或手动添加"
+    code == "API_DISCOVERY_PREVIEW_EXPIRED" -> "能力预览已过期，请重新发现"
+    code == "API_DISCOVERY_FETCH_FAILED" -> "官方能力描述读取失败，原目录未改变"
+    code.startsWith("OPENAPI_") -> "无法读取这个 OpenAPI 3.0/3.1 JSON 描述"
+    code == "API_DISCOVERY_AUTH_UNSUPPORTED" -> "当前凭证类型暂不支持读取受保护描述"
+    code == "INVALID_API_DISCOVERY_HEADER" -> "API Key Header 名称不可用"
     status == HttpURLConnection.HTTP_NOT_FOUND || code == "API_CONNECTION_NOT_FOUND" ->
         "这个 API 连接已不存在，请刷新列表"
     code == "API_SERVICE_NOT_FOUND" -> "这个 API 服务当前不可用，请刷新服务目录"

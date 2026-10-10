@@ -163,16 +163,17 @@ internal fun ApiDetailPage(
             ui = ui,
             onDone = onDone,
         )
-        return
+    } else {
+        RegisteredApiConnectionForm(
+            existing = existing,
+            service = services.firstOrNull { it.serviceId == existing.serviceId },
+            credentials = credentials,
+            repository = repository,
+            ui = ui,
+            onDone = onDone,
+        )
     }
-    RegisteredApiConnectionForm(
-        existing = existing,
-        service = services.firstOrNull { it.serviceId == existing.serviceId },
-        credentials = credentials,
-        repository = repository,
-        ui = ui,
-        onDone = onDone,
-    )
+    if (existing != null) ApiCapabilityCatalogSection(existing, repository, ui)
 }
 
 @Composable
