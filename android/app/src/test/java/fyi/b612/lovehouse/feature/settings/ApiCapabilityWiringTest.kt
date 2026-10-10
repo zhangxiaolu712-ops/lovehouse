@@ -97,6 +97,51 @@ class ApiCapabilityWiringTest {
     }
 
     @Test
+    fun `model discovery and selection use a separate authoritative resource catalog`() = runBlocking {
+        val api = RecordingApi().apply {
+            responses += JSONObject().put("preview", resourcePreviewJson())
+            responses += JSONObject().put("catalog", resourceCatalogJson())
+            responses += JSONObject().put("catalog", resourceCatalogJson())
+        }
+        val repository = AppBackendApiConnectionRepository(api)
+
+        val preview = repository.previewResources("connection-1", ApiResourceDiscoverySource.OpenAiModels(
+            "https://gateway.example.invalid/v1/models",
+            "X-Api-Key",
+        ))
+        repository.commitResources("connection-1", preview.previewId, setOf("resource_first"))
+        repository.selectResources("connection-1", setOf("resource_first"))
+
+        val source = JSONObject(api.calls[0].body!!).getJSONObject("source")
+        assertEquals("openai_models", source.getString("type"))
+        assertEquals("https://gateway.example.invalid/v1/models", source.getString("url"))
+        assertEquals("X-Api-Key", source.getString("api_key_header_name"))
+        assertEquals("vendor/model-alpha", preview.resources[0].providerResourceId)
+        assertEquals("POST /api/api-connections/connection-1/resource-discovery/commit", api.calls[1].methodPath)
+        assertEquals("PUT /api/api-connections/connection-1/resource-selections", api.calls[2].methodPath)
+    }
+
+    @Test
+    fun `large mixed model directory supports search filter and independent identity`() {
+        val values = (0 until 1_200).map { index ->
+            ApiResource(
+                id = "resource-$index",
+                type = "MODEL",
+                source = if (index == 1199) ApiResourceSource.Custom else ApiResourceSource.Discovered,
+                providerResourceId = "vendor-${index % 11}/model-$index",
+                displayName = "model-$index",
+                description = null,
+                providerOwner = "vendor-${index % 11}",
+                availability = if (index == 1198) ApiResourceAvailability.Missing else ApiResourceAvailability.Available,
+                selected = index == 777,
+            )
+        }
+        assertEquals(listOf("resource-777"), filterApiResources(values, setOf("resource-777"), "model-777", 1).map { it.id })
+        assertEquals(listOf("resource-1199"), filterApiResources(values, emptySet(), "", 3).map { it.id })
+        assertEquals(listOf("resource-1198"), filterApiResources(values, emptySet(), "", 4).map { it.id })
+    }
+
+    @Test
     fun `search and filters keep selection source and missing semantics separate`() {
         val values = listOf(
             capability("one", "天气", ApiCapabilitySource.Discovered, ApiCapabilityAvailability.Available),
@@ -118,6 +163,10 @@ class ApiCapabilityWiringTest {
         assertTrue(ui.contains("repository.previewCapabilities"))
         assertTrue(ui.contains("repository.commitCapabilities"))
         assertTrue(ui.contains("repository.createCustomCapability"))
+        val resourceUi = File(root, "src/main/java/fyi/b612/lovehouse/feature/settings/ToolCenterApiResources.kt").readText()
+        assertTrue(resourceUi.contains("repository.previewResources"))
+        assertTrue(resourceUi.contains("repository.commitResources"))
+        assertTrue(resourceUi.contains("不从 Base URL 猜测路径"))
         assertFalse(ui.contains("HttpToolConnectionProbe"))
         assertFalse(ui.contains("ToolConnectionStore"))
         assertFalse(repository.contains("SharedPreferences"))
@@ -217,6 +266,32 @@ class ApiCapabilityWiringTest {
         .put("capabilities", JSONArray()
             .put(capabilityJson("api_first", "Weather", true))
             .put(capabilityJson("api_second", "Forecast", false)))
+
+    private fun resourceJson(id: String, providerId: String, selected: Boolean, availability: String = "AVAILABLE") =
+        JSONObject()
+            .put("resource_id", id)
+            .put("resource_type", "MODEL")
+            .put("source_kind", "DISCOVERED")
+            .put("source_key", "MODEL:$providerId")
+            .put("provider_resource_id", providerId)
+            .put("display_name", providerId)
+            .put("description", JSONObject.NULL)
+            .put("provider_owner", providerId.substringBefore('/'))
+            .put("availability", availability)
+            .put("selected", selected)
+
+    private fun resourceCatalogJson() = JSONObject()
+        .put("connection_id", "connection-1")
+        .put("revision", 1)
+        .put("resources", JSONArray().put(resourceJson("resource_first", "vendor/model-alpha", true)))
+
+    private fun resourcePreviewJson() = JSONObject()
+        .put("preview_id", "preview-resource")
+        .put("revision", 1)
+        .put("expires_at", "2026-10-10T01:00:00.000Z")
+        .put("changes", JSONObject().put("added", JSONArray().put("resource_first"))
+            .put("changed", JSONArray()).put("removed", JSONArray()))
+        .put("resources", JSONArray().put(resourceJson("resource_first", "vendor/model-alpha", false)))
 
     private fun JSONArray.strings(): List<String> = buildList {
         for (index in 0 until length()) add(getString(index))

@@ -177,6 +177,7 @@ internal fun ApiDetailPage(
     }
     if (existing != null) {
         ApiCapabilityCatalogSection(existing, repository, ui)
+        ApiModelResourceSection(existing, repository, ui)
         if (page.connectionId == null && createdConnection != null) {
             TcLink("稍后设置") { onDone() }
         }

@@ -76,6 +76,48 @@ data class ApiCapabilityPreview(
     val expiresAt: String,
 )
 
+enum class ApiResourceSource { Discovered, Custom }
+enum class ApiResourceAvailability { Available, Missing }
+
+data class ApiResource(
+    val id: String,
+    val type: String,
+    val source: ApiResourceSource,
+    val providerResourceId: String,
+    val displayName: String,
+    val description: String?,
+    val providerOwner: String?,
+    val availability: ApiResourceAvailability,
+    val selected: Boolean,
+)
+
+data class ApiResourceCatalog(
+    val connectionId: String,
+    val revision: Int,
+    val resources: List<ApiResource>,
+    val lastDiscoverySummary: String? = null,
+)
+
+data class ApiResourcePreview(
+    val previewId: String,
+    val revision: Int,
+    val resources: List<ApiResource>,
+    val changes: ApiCapabilityChanges,
+    val expiresAt: String,
+)
+
+sealed interface ApiResourceDiscoverySource {
+    data object PresetModels : ApiResourceDiscoverySource
+    data class OpenAiModels(val url: String, val apiKeyHeaderName: String? = null) : ApiResourceDiscoverySource
+}
+
+data class ApiCustomResourceInput(
+    val providerResourceId: String,
+    val displayName: String,
+    val description: String?,
+    val selected: Boolean = false,
+)
+
 sealed interface ApiDiscoverySource {
     data object Preset : ApiDiscoverySource
     data class Url(val url: String, val apiKeyHeaderName: String? = null) : ApiDiscoverySource
@@ -155,6 +197,21 @@ interface ApiConnectionRepository {
         input: ApiCustomCapabilityInput,
     ): ApiCapabilityCatalog
     suspend fun deleteCustomCapability(connectionId: String, capabilityId: String): ApiCapabilityCatalog
+    suspend fun resourceCatalog(connectionId: String): ApiResourceCatalog
+    suspend fun previewResources(connectionId: String, source: ApiResourceDiscoverySource): ApiResourcePreview
+    suspend fun commitResources(
+        connectionId: String,
+        previewId: String,
+        selectedResourceIds: Set<String>,
+    ): ApiResourceCatalog
+    suspend fun selectResources(connectionId: String, selectedResourceIds: Set<String>): ApiResourceCatalog
+    suspend fun createCustomResource(connectionId: String, input: ApiCustomResourceInput): ApiResourceCatalog
+    suspend fun updateCustomResource(
+        connectionId: String,
+        resourceId: String,
+        input: ApiCustomResourceInput,
+    ): ApiResourceCatalog
+    suspend fun deleteCustomResource(connectionId: String, resourceId: String): ApiResourceCatalog
 }
 
 class AppBackendApiConnectionRepository private constructor(
@@ -256,6 +313,64 @@ class AppBackendApiConnectionRepository private constructor(
             method = "DELETE",
             path = "/api/api-connections/${encodeApiPath(connectionId)}/capabilities/custom/${encodeApiPath(capabilityId)}",
         ).requireApiCapabilityCatalog()
+
+    override suspend fun resourceCatalog(connectionId: String): ApiResourceCatalog =
+        api.request("GET", "/api/api-connections/${encodeApiPath(connectionId)}/resources")
+            .requireApiResourceCatalog()
+
+    override suspend fun previewResources(
+        connectionId: String,
+        source: ApiResourceDiscoverySource,
+    ): ApiResourcePreview = api.request(
+        method = "POST",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/resource-discovery/preview",
+        body = JSONObject().put("source", source.toApiJson()).toString(),
+    ).requireApiResourcePreview()
+
+    override suspend fun commitResources(
+        connectionId: String,
+        previewId: String,
+        selectedResourceIds: Set<String>,
+    ): ApiResourceCatalog = api.request(
+        method = "POST",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/resource-discovery/commit",
+        body = JSONObject().put("preview_id", previewId)
+            .put("selected_resource_ids", JSONArray(selectedResourceIds.toList())).toString(),
+    ).requireApiResourceCatalog()
+
+    override suspend fun selectResources(
+        connectionId: String,
+        selectedResourceIds: Set<String>,
+    ): ApiResourceCatalog = api.request(
+        method = "PUT",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/resource-selections",
+        body = JSONObject().put("selected_resource_ids", JSONArray(selectedResourceIds.toList())).toString(),
+    ).requireApiResourceCatalog()
+
+    override suspend fun createCustomResource(
+        connectionId: String,
+        input: ApiCustomResourceInput,
+    ): ApiResourceCatalog = api.request(
+        method = "POST",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/resources/custom",
+        body = input.toApiJson().toString(),
+    ).requireApiResourceCatalog()
+
+    override suspend fun updateCustomResource(
+        connectionId: String,
+        resourceId: String,
+        input: ApiCustomResourceInput,
+    ): ApiResourceCatalog = api.request(
+        method = "PUT",
+        path = "/api/api-connections/${encodeApiPath(connectionId)}/resources/custom/${encodeApiPath(resourceId)}",
+        body = input.toApiJson().toString(),
+    ).requireApiResourceCatalog()
+
+    override suspend fun deleteCustomResource(connectionId: String, resourceId: String): ApiResourceCatalog =
+        api.request(
+            method = "DELETE",
+            path = "/api/api-connections/${encodeApiPath(connectionId)}/resources/custom/${encodeApiPath(resourceId)}",
+        ).requireApiResourceCatalog()
 }
 
 internal interface ApiConnectionApi {
@@ -397,6 +512,19 @@ private fun ApiDiscoverySource.toApiJson(): JSONObject = when (this) {
         .put("file_name", fileName).put("document", JSONObject(documentJson))
 }
 
+private fun ApiResourceDiscoverySource.toApiJson(): JSONObject = when (this) {
+    ApiResourceDiscoverySource.PresetModels -> JSONObject().put("type", "preset_models")
+    is ApiResourceDiscoverySource.OpenAiModels -> JSONObject().put("type", "openai_models").put("url", url).apply {
+        apiKeyHeaderName?.takeIf(String::isNotBlank)?.let { put("api_key_header_name", it) }
+    }
+}
+
+private fun ApiCustomResourceInput.toApiJson(): JSONObject = JSONObject()
+    .put("provider_resource_id", providerResourceId)
+    .put("display_name", displayName)
+    .put("description", description ?: JSONObject.NULL)
+    .put("selected", selected)
+
 private fun ApiCustomCapabilityInput.toApiJson(): JSONObject = JSONObject()
     .put("display_name", displayName)
     .put("description", description ?: JSONObject.NULL)
@@ -474,6 +602,59 @@ private fun JSONObject.requireApiCapabilityPreview(): ApiCapabilityPreview {
     )
 }
 
+private fun JSONObject.toApiResource(): ApiResource = ApiResource(
+    id = getString("resource_id"),
+    type = getString("resource_type"),
+    source = if (getString("source_kind") == "CUSTOM") ApiResourceSource.Custom else ApiResourceSource.Discovered,
+    providerResourceId = getString("provider_resource_id"),
+    displayName = getString("display_name"),
+    description = nullableApiString("description"),
+    providerOwner = nullableApiString("provider_owner"),
+    availability = if (getString("availability") == "MISSING") {
+        ApiResourceAvailability.Missing
+    } else {
+        ApiResourceAvailability.Available
+    },
+    selected = optBoolean("selected", false),
+)
+
+private fun JSONObject.toApiResourceCatalog(): ApiResourceCatalog {
+    val values = optJSONArray("resources")
+    val resources = buildList {
+        if (values != null) for (index in 0 until values.length()) {
+            values.optJSONObject(index)?.let { add(it.toApiResource()) }
+        }
+    }
+    val discovery = optJSONObject("last_discovery")
+    val changes = discovery?.optJSONObject("changes")
+    val summary = discovery?.let {
+        "第 ${it.optInt("revision")} 版 · +${changes?.optJSONArray("added")?.length() ?: 0} " +
+            "~${changes?.optJSONArray("changed")?.length() ?: 0} -${changes?.optJSONArray("removed")?.length() ?: 0}"
+    }
+    return ApiResourceCatalog(getString("connection_id"), optInt("revision"), resources, summary)
+}
+
+private fun JSONObject.requireApiResourceCatalog(): ApiResourceCatalog =
+    optJSONObject("catalog")?.toApiResourceCatalog()
+        ?: throw ApiConnectionException("App Backend 未返回模型目录，请刷新后重试")
+
+private fun JSONObject.requireApiResourcePreview(): ApiResourcePreview {
+    val preview = optJSONObject("preview")
+        ?: throw ApiConnectionException("App Backend 未返回模型预览，请重试")
+    val values = preview.optJSONArray("resources")
+    return ApiResourcePreview(
+        previewId = preview.getString("preview_id"),
+        revision = preview.optInt("revision"),
+        resources = buildList {
+            if (values != null) for (index in 0 until values.length()) {
+                values.optJSONObject(index)?.let { add(it.toApiResource()) }
+            }
+        },
+        changes = preview.optJSONObject("changes")?.toApiCapabilityChanges() ?: ApiCapabilityChanges(),
+        expiresAt = preview.getString("expires_at"),
+    )
+}
+
 private fun JSONObject.requireApiConnection(): ApiBackendConnection =
     optJSONObject("connection")?.toApiConnection()
         ?: throw ApiConnectionException("App Backend 未返回 API 连接状态，请刷新后重试")
@@ -512,12 +693,21 @@ internal fun apiConnectionErrorText(status: Int, code: String, path: String): St
     code == "API_DISCOVERY_FETCH_FAILED" -> "官方能力描述读取失败，原目录未改变"
     code.startsWith("OPENAPI_") -> "无法读取这个 OpenAPI 3.0/3.1 JSON 描述"
     code == "API_DISCOVERY_AUTH_UNSUPPORTED" -> "当前凭证类型暂不支持读取受保护描述"
+    code == "API_RESOURCE_NOT_FOUND" -> "这个模型资源已不存在，请刷新目录"
+    code == "API_RESOURCE_DISCOVERY_SOURCE_REQUIRED" -> "请填写明确的模型列表 URL"
+    code == "API_RESOURCE_DISCOVERY_SOURCE_UNAVAILABLE" -> "这个服务尚未声明模型列表地址，请填写明确的模型列表 URL 或手动添加"
+    code == "API_RESOURCE_DISCOVERY_PREVIEW_EXPIRED" -> "模型预览已过期，请重新发现"
+    code == "INVALID_MODEL_DISCOVERY_DOCUMENT" || code == "MODEL_CONTENT_TYPE_UNSUPPORTED" ->
+        "无法读取这个 OpenAI-compatible 模型列表"
     code == "INVALID_API_DISCOVERY_HEADER" -> "API Key Header 名称不可用"
     code == "API_CONNECTION_NOT_FOUND" ->
         "这个 API 连接已不存在，请刷新列表"
     status == HttpURLConnection.HTTP_NOT_FOUND &&
         (path.contains("/capabilities") || path.contains("/capability-")) ->
         "当前 App Backend 尚未提供能力目录，请等待服务端更新后重试"
+    status == HttpURLConnection.HTTP_NOT_FOUND &&
+        (path.contains("/resources") || path.contains("/resource-")) ->
+        "当前 App Backend 尚未提供模型目录，请等待服务端更新后重试"
     status == HttpURLConnection.HTTP_NOT_FOUND ->
         "App Backend 接口不存在或版本不匹配，请稍后重试"
     code == "API_SERVICE_NOT_FOUND" -> "这个 API 服务当前不可用，请刷新服务目录"
