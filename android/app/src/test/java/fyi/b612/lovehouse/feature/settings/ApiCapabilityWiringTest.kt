@@ -1,6 +1,8 @@
 package fyi.b612.lovehouse.feature.settings
 
 import java.io.File
+import java.io.IOException
+import java.net.SocketTimeoutException
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -120,6 +122,47 @@ class ApiCapabilityWiringTest {
         assertFalse(ui.contains("ToolConnectionStore"))
         assertFalse(repository.contains("SharedPreferences"))
         assertFalse(repository.contains("DataStore"))
+    }
+
+    @Test
+    fun `new connection stays on page and enters capability setup with authoritative id`() {
+        val root = File(requireNotNull(System.getProperty("user.dir")))
+        val ui = File(root, "src/main/java/fyi/b612/lovehouse/feature/settings/ToolCenterApi.kt").readText()
+
+        assertTrue(ui.contains("onCreated = { createdConnection = it }"))
+        assertTrue(ui.contains("连接已创建，可以继续发现能力"))
+        assertTrue(ui.contains("ApiCapabilityCatalogSection(existing, repository, ui)"))
+        assertTrue(ui.contains("TcLink(\"稍后设置\")"))
+    }
+
+    @Test
+    fun `only explicit connection not found is reported as deleted`() {
+        val capabilityPath = "/api/api-connections/connection-1/capabilities"
+
+        assertEquals(
+            "这个 API 连接已不存在，请刷新列表",
+            apiConnectionErrorText(404, "API_CONNECTION_NOT_FOUND", capabilityPath),
+        )
+        assertEquals(
+            "当前 App Backend 尚未提供能力目录，请等待服务端更新后重试",
+            apiConnectionErrorText(404, "", capabilityPath),
+        )
+        assertEquals(
+            "App Backend 接口不存在或版本不匹配，请稍后重试",
+            apiConnectionErrorText(404, "", "/api/unknown"),
+        )
+        assertEquals(
+            "请先登录 LoveHouse App Account",
+            apiConnectionErrorText(401, "APP_AUTH_REQUIRED", capabilityPath),
+        )
+        assertEquals(
+            "连接 App Backend 超时，请检查网络后重试",
+            apiConnectionNetworkErrorText(SocketTimeoutException()),
+        )
+        assertEquals(
+            "无法连接 App Backend，请检查网络后重试",
+            apiConnectionNetworkErrorText(IOException()),
+        )
     }
 
     private class RecordingApi : ApiConnectionApi {

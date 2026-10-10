@@ -1,6 +1,8 @@
 package fyi.b612.lovehouse.feature.settings
 
+import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.URLEncoder
 import java.util.UUID
@@ -296,9 +298,11 @@ private class HttpApiConnectionApi(
             val payload = runCatching { JSONObject(text) }.getOrElse { JSONObject() }
             if (status !in 200..299) {
                 val code = payload.optJSONObject("error")?.optString("code").orEmpty()
-                throw ApiConnectionException(apiConnectionErrorText(status, code))
+                throw ApiConnectionException(apiConnectionErrorText(status, code, path))
             }
             payload
+        } catch (error: IOException) {
+            throw ApiConnectionException(apiConnectionNetworkErrorText(error))
         } finally {
             connection.disconnect()
         }
@@ -311,6 +315,13 @@ private class HttpApiConnectionApi(
 }
 
 internal class ApiConnectionException(message: String) : Exception(message)
+
+internal fun apiConnectionNetworkErrorText(error: IOException): String =
+    if (error is SocketTimeoutException) {
+        "连接 App Backend 超时，请检查网络后重试"
+    } else {
+        "无法连接 App Backend，请检查网络后重试"
+    }
 
 internal fun createApiConnectionBody(input: ApiConnectionCreate): JSONObject = JSONObject()
     .put("display_name", input.displayName.trim())
@@ -491,7 +502,7 @@ private fun SecretCredentialMetadata.toApiJson(): JSONObject = JSONObject().appl
 private fun encodeApiPath(value: String): String =
     URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 
-private fun apiConnectionErrorText(status: Int, code: String): String = when {
+internal fun apiConnectionErrorText(status: Int, code: String, path: String): String = when {
     status == HttpURLConnection.HTTP_UNAUTHORIZED || code == "APP_AUTH_REQUIRED" ->
         "请先登录 LoveHouse App Account"
     code == "API_CAPABILITY_NOT_FOUND" -> "这个能力已不存在，请刷新目录"
@@ -502,8 +513,13 @@ private fun apiConnectionErrorText(status: Int, code: String): String = when {
     code.startsWith("OPENAPI_") -> "无法读取这个 OpenAPI 3.0/3.1 JSON 描述"
     code == "API_DISCOVERY_AUTH_UNSUPPORTED" -> "当前凭证类型暂不支持读取受保护描述"
     code == "INVALID_API_DISCOVERY_HEADER" -> "API Key Header 名称不可用"
-    status == HttpURLConnection.HTTP_NOT_FOUND || code == "API_CONNECTION_NOT_FOUND" ->
+    code == "API_CONNECTION_NOT_FOUND" ->
         "这个 API 连接已不存在，请刷新列表"
+    status == HttpURLConnection.HTTP_NOT_FOUND &&
+        (path.contains("/capabilities") || path.contains("/capability-")) ->
+        "当前 App Backend 尚未提供能力目录，请等待服务端更新后重试"
+    status == HttpURLConnection.HTTP_NOT_FOUND ->
+        "App Backend 接口不存在或版本不匹配，请稍后重试"
     code == "API_SERVICE_NOT_FOUND" -> "这个 API 服务当前不可用，请刷新服务目录"
     code == "API_CREDENTIAL_NOT_FOUND" -> "所选密码库凭证已不存在，请重新选择"
     code == "API_CREDENTIAL_TYPE_UNSUPPORTED" -> "所选凭证类型不适用于这个 API 服务"

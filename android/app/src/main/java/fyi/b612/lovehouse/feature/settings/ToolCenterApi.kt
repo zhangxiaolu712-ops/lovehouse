@@ -128,6 +128,7 @@ internal fun ApiDetailPage(
     var services by remember(page.connectionId) { mutableStateOf<List<ApiServiceDescriptor>>(emptyList()) }
     var connections by remember(page.connectionId) { mutableStateOf<List<ApiBackendConnection>>(emptyList()) }
     var credentials by remember(page.connectionId) { mutableStateOf<List<SecretCredential>>(emptyList()) }
+    var createdConnection by remember(page.connectionId) { mutableStateOf<ApiBackendConnection?>(null) }
     var loading by remember(page.connectionId) { mutableStateOf(true) }
     var loadError by remember(page.connectionId) { mutableStateOf<String?>(null) }
 
@@ -154,13 +155,14 @@ internal fun ApiDetailPage(
         TcGlass { TcEmpty(it) }
         return
     }
-    val existing = page.connectionId?.let { id -> connections.firstOrNull { it.id == id } }
+    val existing = createdConnection ?: page.connectionId?.let { id -> connections.firstOrNull { it.id == id } }
     if (existing == null || existing.serviceId == null) {
         CustomApiServiceForm(
             existing = existing,
             credentials = credentials,
             repository = repository,
             ui = ui,
+            onCreated = { createdConnection = it },
             onDone = onDone,
         )
     } else {
@@ -173,7 +175,12 @@ internal fun ApiDetailPage(
             onDone = onDone,
         )
     }
-    if (existing != null) ApiCapabilityCatalogSection(existing, repository, ui)
+    if (existing != null) {
+        ApiCapabilityCatalogSection(existing, repository, ui)
+        if (page.connectionId == null && createdConnection != null) {
+            TcLink("稍后设置") { onDone() }
+        }
+    }
 }
 
 @Composable
@@ -255,6 +262,7 @@ private fun CustomApiServiceForm(
     credentials: List<SecretCredential>,
     repository: ApiConnectionRepository,
     ui: TcUi,
+    onCreated: (ApiBackendConnection) -> Unit,
     onDone: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -357,7 +365,6 @@ private fun CustomApiServiceForm(
                                     idempotencyKey = idempotencyKey,
                                 ),
                             )
-                            secret = ""
                         } else {
                             val chosenCredential = compatibleCredentials.getOrNull(credentialIndex)?.id
                             repository.update(
@@ -372,9 +379,15 @@ private fun CustomApiServiceForm(
                                 ),
                             )
                         }
-                    }.onSuccess {
-                        ui.toast("已保存")
-                        onDone()
+                    }.onSuccess { saved ->
+                        if (existing == null) {
+                            secret = ""
+                            ui.toast("连接已创建，可以继续发现能力")
+                            onCreated(saved)
+                        } else {
+                            ui.toast("已保存")
+                            onDone()
+                        }
                     }.onFailure { ui.toast(it.message ?: "保存失败") }
                     busy = false
                 }
