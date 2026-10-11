@@ -100,8 +100,10 @@ class ApiCapabilityWiringTest {
     fun `model discovery and selection use a separate authoritative resource catalog`() = runBlocking {
         val api = RecordingApi().apply {
             responses += JSONObject().put("preview", resourcePreviewJson())
-            responses += JSONObject().put("catalog", resourceCatalogJson())
-            responses += JSONObject().put("catalog", resourceCatalogJson())
+            responses += JSONObject().put("page", resourcePageJson())
+            responses += JSONObject().put("page", resourcePageJson())
+            responses += JSONObject().put("page", resourcePageJson())
+            responses += JSONObject().put("page", resourcePageJson())
         }
         val repository = AppBackendApiConnectionRepository(api)
 
@@ -117,8 +119,54 @@ class ApiCapabilityWiringTest {
         assertEquals("https://gateway.example.invalid/v1/models", source.getString("url"))
         assertEquals("X-Api-Key", source.getString("api_key_header_name"))
         assertEquals("vendor/model-alpha", preview.resources[0].providerResourceId)
-        assertEquals("POST /api/api-connections/connection-1/resource-discovery/commit", api.calls[1].methodPath)
-        assertEquals("PUT /api/api-connections/connection-1/resource-selections", api.calls[2].methodPath)
+        assertEquals("GET /api/api-connections/connection-1/resources", api.calls[1].methodPath)
+        assertEquals("POST /api/api-connections/connection-1/resource-discovery/commit", api.calls[2].methodPath)
+        assertEquals(1, JSONObject(api.calls[2].body!!).getInt("expected_revision"))
+        assertEquals("GET /api/api-connections/connection-1/resources", api.calls[3].methodPath)
+        assertEquals("PUT /api/api-connections/connection-1/resource-selections", api.calls[4].methodPath)
+        assertEquals("2026-10-11.v1", api.calls[1].headers["X-LoveHouse-Contract-Version"])
+    }
+
+    @Test
+    fun `resource pagination preserves cursor type metadata and server filters`() = runBlocking {
+        val api = RecordingApi().apply { responses += JSONObject().put("page", resourcePageJson(nextCursor = "next-1")) }
+        val repository = AppBackendApiConnectionRepository(api)
+
+        val page = repository.resourceCatalog(
+            connectionId = "connection-1",
+            cursor = "cursor-1",
+            query = "voice",
+            resourceType = "VOICE",
+            selected = true,
+            availability = "AVAILABLE",
+        )
+
+        assertEquals("next-1", page.nextCursor)
+        assertEquals(3, page.total)
+        assertTrue(api.calls.single().path.contains("cursor=cursor-1"))
+        assertTrue(api.calls.single().path.contains("resource_type=VOICE"))
+        assertTrue(api.calls.single().path.contains("selected=true"))
+        assertTrue(page.resources.single().typeMetadataJson!!.contains("preview_available"))
+    }
+
+    @Test
+    fun `manual resource sends an explicit type and converges through paged Backend state`() = runBlocking {
+        val api = RecordingApi().apply {
+            responses += JSONObject().put("resource", resourceJson("resource_first", "voice-owner", true))
+            responses += JSONObject().put("page", resourcePageJson())
+        }
+        val repository = AppBackendApiConnectionRepository(api)
+
+        repository.createCustomResource("connection-1", ApiCustomResourceInput(
+            providerResourceId = "voice-owner",
+            displayName = "Owner Voice",
+            description = null,
+            selected = true,
+            resourceType = "VOICE",
+        ))
+
+        assertEquals("VOICE", JSONObject(api.calls.first().body!!).getString("resource_type"))
+        assertEquals("GET /api/api-connections/connection-1/resources", api.calls.last().methodPath)
     }
 
     @Test
@@ -141,7 +189,7 @@ class ApiCapabilityWiringTest {
         val values = (0 until 1_200).map { index ->
             ApiResource(
                 id = "resource-$index",
-                type = "MODEL",
+                type = if (index == 100) "TTS" else "LLM",
                 source = if (index == 1199) ApiResourceSource.Custom else ApiResourceSource.Discovered,
                 providerResourceId = "vendor-${index % 11}/model-$index",
                 displayName = "model-$index",
@@ -154,6 +202,7 @@ class ApiCapabilityWiringTest {
         assertEquals(listOf("resource-777"), filterApiResources(values, setOf("resource-777"), "model-777", 1).map { it.id })
         assertEquals(listOf("resource-1199"), filterApiResources(values, emptySet(), "", 3).map { it.id })
         assertEquals(listOf("resource-1198"), filterApiResources(values, emptySet(), "", 4).map { it.id })
+        assertEquals(listOf("resource-100"), filterApiResources(values, emptySet(), "", 0, 3).map { it.id })
     }
 
     @Test
@@ -235,12 +284,12 @@ class ApiCapabilityWiringTest {
         val calls = mutableListOf<Call>()
         val responses = ArrayDeque<JSONObject>()
         override suspend fun request(method: String, path: String, body: String?, headers: Map<String, String>): JSONObject {
-            calls += Call(method, path, body)
+            calls += Call(method, path, body, headers)
             return responses.removeFirst()
         }
     }
 
-    private data class Call(val method: String, val path: String, val body: String?) {
+    private data class Call(val method: String, val path: String, val body: String?, val headers: Map<String, String>) {
         val methodPath: String get() = "$method $path"
     }
 
@@ -287,13 +336,14 @@ class ApiCapabilityWiringTest {
     private fun resourceJson(id: String, providerId: String, selected: Boolean, availability: String = "AVAILABLE") =
         JSONObject()
             .put("resource_id", id)
-            .put("resource_type", "MODEL")
+            .put("resource_type", "VOICE")
             .put("source_kind", "DISCOVERED")
             .put("source_key", "MODEL:$providerId")
             .put("provider_resource_id", providerId)
             .put("display_name", providerId)
             .put("description", JSONObject.NULL)
             .put("provider_owner", providerId.substringBefore('/'))
+            .put("type_metadata", JSONObject().put("kind", "VOICE").put("preview_available", true))
             .put("availability", availability)
             .put("selected", selected)
 
@@ -301,6 +351,13 @@ class ApiCapabilityWiringTest {
         .put("connection_id", "connection-1")
         .put("revision", 1)
         .put("resources", JSONArray().put(resourceJson("resource_first", "vendor/model-alpha", true)))
+
+    private fun resourcePageJson(nextCursor: String? = null) = JSONObject()
+        .put("connection_id", "connection-1")
+        .put("revision", 1)
+        .put("items", JSONArray().put(resourceJson("resource_first", "vendor/model-alpha", true)))
+        .put("next_cursor", nextCursor ?: JSONObject.NULL)
+        .put("total", 3)
 
     private fun resourcePreviewJson() = JSONObject()
         .put("preview_id", "preview-resource")

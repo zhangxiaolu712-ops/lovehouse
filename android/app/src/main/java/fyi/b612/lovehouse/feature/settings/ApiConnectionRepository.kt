@@ -90,12 +90,15 @@ data class ApiResource(
     val providerOwner: String?,
     val availability: ApiResourceAvailability,
     val selected: Boolean,
+    val typeMetadataJson: String? = null,
 )
 
 data class ApiResourceCatalog(
     val connectionId: String,
     val revision: Int,
     val resources: List<ApiResource>,
+    val nextCursor: String? = null,
+    val total: Int = resources.size,
     val lastDiscoverySummary: String? = null,
 )
 
@@ -118,6 +121,7 @@ data class ApiCustomResourceInput(
     val displayName: String,
     val description: String?,
     val selected: Boolean = false,
+    val resourceType: String = "LLM",
 )
 
 sealed interface ApiDiscoverySource {
@@ -201,7 +205,14 @@ interface ApiConnectionRepository {
         input: ApiCustomCapabilityInput,
     ): ApiCapabilityCatalog
     suspend fun deleteCustomCapability(connectionId: String, capabilityId: String): ApiCapabilityCatalog
-    suspend fun resourceCatalog(connectionId: String): ApiResourceCatalog
+    suspend fun resourceCatalog(
+        connectionId: String,
+        cursor: String? = null,
+        query: String? = null,
+        resourceType: String? = null,
+        selected: Boolean? = null,
+        availability: String? = null,
+    ): ApiResourceCatalog
     suspend fun previewResources(connectionId: String, source: ApiResourceDiscoverySource): ApiResourcePreview
     suspend fun commitResources(
         connectionId: String,
@@ -318,9 +329,29 @@ class AppBackendApiConnectionRepository private constructor(
             path = "/api/api-connections/${encodeApiPath(connectionId)}/capabilities/custom/${encodeApiPath(capabilityId)}",
         ).requireApiCapabilityCatalog()
 
-    override suspend fun resourceCatalog(connectionId: String): ApiResourceCatalog =
-        api.request("GET", "/api/api-connections/${encodeApiPath(connectionId)}/resources")
-            .requireApiResourceCatalog()
+    override suspend fun resourceCatalog(
+        connectionId: String,
+        cursor: String?,
+        query: String?,
+        resourceType: String?,
+        selected: Boolean?,
+        availability: String?,
+    ): ApiResourceCatalog {
+        val parameters = linkedMapOf<String, String>()
+        cursor?.let { parameters["cursor"] = it }
+        query?.trim()?.takeIf(String::isNotEmpty)?.let { parameters["q"] = it }
+        resourceType?.takeIf(String::isNotBlank)?.let { parameters["resource_type"] = it }
+        selected?.let { parameters["selected"] = it.toString() }
+        availability?.takeIf(String::isNotBlank)?.let { parameters["availability"] = it }
+        val suffix = parameters.entries.joinToString("&", prefix = if (parameters.isEmpty()) "" else "?") {
+            "${encodeApiPath(it.key)}=${encodeApiPath(it.value)}"
+        }
+        return api.request(
+            "GET",
+            "/api/api-connections/${encodeApiPath(connectionId)}/resources$suffix",
+            headers = mapOf(API_CONTRACT_HEADER to API_CONTRACT_VERSION),
+        ).requireApiResourcePage()
+    }
 
     override suspend fun previewResources(
         connectionId: String,
@@ -335,12 +366,17 @@ class AppBackendApiConnectionRepository private constructor(
         connectionId: String,
         previewId: String,
         selectedResourceIds: Set<String>,
-    ): ApiResourceCatalog = api.request(
-        method = "POST",
-        path = "/api/api-connections/${encodeApiPath(connectionId)}/resource-discovery/commit",
-        body = JSONObject().put("preview_id", previewId)
-            .put("selected_resource_ids", JSONArray(selectedResourceIds.toList())).toString(),
-    ).requireApiResourceCatalog()
+    ): ApiResourceCatalog {
+        val revision = resourceCatalog(connectionId).revision
+        return api.request(
+            method = "POST",
+            path = "/api/api-connections/${encodeApiPath(connectionId)}/resource-discovery/commit",
+            body = JSONObject().put("preview_id", previewId)
+                .put("expected_revision", revision)
+                .put("selected_resource_ids", JSONArray(selectedResourceIds.toList())).toString(),
+            headers = mapOf(API_CONTRACT_HEADER to API_CONTRACT_VERSION),
+        ).requireApiResourcePage()
+    }
 
     override suspend fun selectResources(
         connectionId: String,
@@ -348,17 +384,23 @@ class AppBackendApiConnectionRepository private constructor(
     ): ApiResourceCatalog = api.request(
         method = "PUT",
         path = "/api/api-connections/${encodeApiPath(connectionId)}/resource-selections",
-        body = JSONObject().put("selected_resource_ids", JSONArray(selectedResourceIds.toList())).toString(),
-    ).requireApiResourceCatalog()
+        body = JSONObject().put("revision", resourceCatalog(connectionId).revision)
+            .put("selected_resource_ids", JSONArray(selectedResourceIds.toList())).toString(),
+        headers = mapOf(API_CONTRACT_HEADER to API_CONTRACT_VERSION),
+    ).requireApiResourcePage()
 
     override suspend fun createCustomResource(
         connectionId: String,
         input: ApiCustomResourceInput,
-    ): ApiResourceCatalog = api.request(
+    ): ApiResourceCatalog {
+        api.request(
         method = "POST",
         path = "/api/api-connections/${encodeApiPath(connectionId)}/resources/custom",
         body = input.toApiJson().toString(),
-    ).requireApiResourceCatalog()
+        headers = mapOf(API_CONTRACT_HEADER to API_CONTRACT_VERSION),
+        ).requireApiResource()
+        return resourceCatalog(connectionId)
+    }
 
     override suspend fun updateCustomResource(
         connectionId: String,
@@ -528,6 +570,7 @@ private fun ApiResourceDiscoverySource.toApiJson(): JSONObject = when (this) {
 }
 
 private fun ApiCustomResourceInput.toApiJson(): JSONObject = JSONObject()
+    .put("resource_type", resourceType)
     .put("provider_resource_id", providerResourceId)
     .put("display_name", displayName)
     .put("description", description ?: JSONObject.NULL)
@@ -618,6 +661,7 @@ private fun JSONObject.toApiResource(): ApiResource = ApiResource(
     displayName = getString("display_name"),
     description = nullableApiString("description"),
     providerOwner = nullableApiString("provider_owner"),
+    typeMetadataJson = optJSONObject("type_metadata")?.toString(2),
     availability = if (getString("availability") == "MISSING") {
         ApiResourceAvailability.Missing
     } else {
@@ -639,16 +683,43 @@ private fun JSONObject.toApiResourceCatalog(): ApiResourceCatalog {
         "第 ${it.optInt("revision")} 版 · +${changes?.optJSONArray("added")?.length() ?: 0} " +
             "~${changes?.optJSONArray("changed")?.length() ?: 0} -${changes?.optJSONArray("removed")?.length() ?: 0}"
     }
-    return ApiResourceCatalog(getString("connection_id"), optInt("revision"), resources, summary)
+    return ApiResourceCatalog(
+        connectionId = getString("connection_id"),
+        revision = optInt("revision"),
+        resources = resources,
+        lastDiscoverySummary = summary,
+    )
 }
 
 private fun JSONObject.requireApiResourceCatalog(): ApiResourceCatalog =
     optJSONObject("catalog")?.toApiResourceCatalog()
-        ?: throw ApiConnectionException("App Backend 未返回模型目录，请刷新后重试")
+        ?: throw ApiConnectionException("App Backend 未返回资源目录，请刷新后重试")
+
+private fun JSONObject.requireApiResourcePage(): ApiResourceCatalog {
+    val page = optJSONObject("page")
+        ?: throw ApiConnectionException("App Backend 未返回资源目录，请刷新后重试")
+    val resources = buildList {
+        val values = page.optJSONArray("items")
+        if (values != null) for (index in 0 until values.length()) {
+            values.optJSONObject(index)?.let { add(it.toApiResource()) }
+        }
+    }
+    return ApiResourceCatalog(
+        connectionId = page.getString("connection_id"),
+        revision = page.optInt("revision"),
+        resources = resources,
+        nextCursor = page.nullableApiString("next_cursor"),
+        total = page.optInt("total", resources.size),
+    )
+}
+
+private fun JSONObject.requireApiResource(): ApiResource =
+    optJSONObject("resource")?.toApiResource()
+        ?: throw ApiConnectionException("App Backend 未返回资源状态，请刷新后重试")
 
 private fun JSONObject.requireApiResourcePreview(): ApiResourcePreview {
     val preview = optJSONObject("preview")
-        ?: throw ApiConnectionException("App Backend 未返回模型预览，请重试")
+        ?: throw ApiConnectionException("App Backend 未返回资源预览，请重试")
     val values = preview.optJSONArray("resources")
     return ApiResourcePreview(
         previewId = preview.getString("preview_id"),
@@ -691,6 +762,9 @@ private fun SecretCredentialMetadata.toApiJson(): JSONObject = JSONObject().appl
 private fun encodeApiPath(value: String): String =
     URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 
+private const val API_CONTRACT_HEADER = "X-LoveHouse-Contract-Version"
+private const val API_CONTRACT_VERSION = "2026-10-11.v1"
+
 internal fun apiConnectionErrorText(status: Int, code: String, path: String): String = when {
     status == HttpURLConnection.HTTP_UNAUTHORIZED || code == "APP_AUTH_REQUIRED" ->
         "请先登录 LoveHouse App Account"
@@ -701,10 +775,10 @@ internal fun apiConnectionErrorText(status: Int, code: String, path: String): St
     code == "API_DISCOVERY_FETCH_FAILED" -> "官方能力描述读取失败，原目录未改变"
     code.startsWith("OPENAPI_") -> "无法读取这个 OpenAPI 3.0/3.1 JSON 描述"
     code == "API_DISCOVERY_AUTH_UNSUPPORTED" -> "当前凭证类型暂不支持读取受保护描述"
-    code == "API_RESOURCE_NOT_FOUND" -> "这个模型资源已不存在，请刷新目录"
-    code == "API_RESOURCE_DISCOVERY_SOURCE_REQUIRED" -> "请填写明确的模型列表 URL"
-    code == "API_RESOURCE_DISCOVERY_SOURCE_UNAVAILABLE" -> "这个服务尚未声明模型列表地址，请填写明确的模型列表 URL 或手动添加"
-    code == "API_RESOURCE_DISCOVERY_PREVIEW_EXPIRED" -> "模型预览已过期，请重新发现"
+    code == "API_RESOURCE_NOT_FOUND" -> "这个资源已不存在，请刷新目录"
+    code == "API_RESOURCE_DISCOVERY_SOURCE_REQUIRED" -> "请选择自动来源或填写明确的资源列表 URL"
+    code == "API_RESOURCE_DISCOVERY_SOURCE_UNAVAILABLE" -> "这个服务尚未声明资源发现来源，请使用手动来源或手动添加"
+    code == "API_RESOURCE_DISCOVERY_PREVIEW_EXPIRED" -> "资源预览已过期，请重新发现"
     code == "INVALID_MODEL_DISCOVERY_DOCUMENT" || code == "MODEL_CONTENT_TYPE_UNSUPPORTED" ->
         "无法读取这个 OpenAI-compatible 模型列表"
     code == "INVALID_API_DISCOVERY_HEADER" -> "API Key Header 名称不可用"
@@ -715,7 +789,7 @@ internal fun apiConnectionErrorText(status: Int, code: String, path: String): St
         "当前 App Backend 尚未提供能力目录，请等待服务端更新后重试"
     status == HttpURLConnection.HTTP_NOT_FOUND &&
         (path.contains("/resources") || path.contains("/resource-")) ->
-        "当前 App Backend 尚未提供模型目录，请等待服务端更新后重试"
+        "当前 App Backend 尚未提供资源目录，请等待服务端更新后重试"
     status == HttpURLConnection.HTTP_NOT_FOUND ->
         "App Backend 接口不存在或版本不匹配，请稍后重试"
     code == "API_SERVICE_NOT_FOUND" -> "这个 API 服务当前不可用，请刷新服务目录"
