@@ -14,7 +14,7 @@ fun McpOAuthResultScreen(
     repository: McpConnectionRepository,
     personaRuntimeSource: PersonaRuntimeSource,
     capabilityRegistry: CapabilityRegistry,
-    apiConnections: ApiConnectionRepository,
+    apiConnections: GenericApiRepository,
     secretVault: SecretVaultRepository,
     connectionId: String,
     callbackStatus: String,

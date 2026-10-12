@@ -142,7 +142,7 @@ class DeploymentSelfCheckTest {
                 chatHistorySourceProduction = true,
                 mediaSourceProduction = true,
                 toolRegistrySourceProduction = true,
-                toolConnectionSourceProduction = true,
+                apiConnectionSourceProduction = true,
                 mcpSourceProduction = true,
                 appIdentitySourceProduction = true,
                 ownerSessionSourceProduction = true,

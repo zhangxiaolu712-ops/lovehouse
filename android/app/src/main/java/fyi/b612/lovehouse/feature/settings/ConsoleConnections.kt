@@ -19,7 +19,6 @@ internal enum class ConnectionKind(val title: String, val fields: List<String>) 
     Supabase("Supabase", listOf("Project Ref")),
     Tailscale("Tailscale", listOf("Tailnet", "Node")),
     Ollama("Ollama", listOf("Port")),
-    Http("Custom HTTP / API", listOf("Header 名称（不含值）", "参数名称（不含值）")),
 }
 internal enum class ConnectionAuth(val title: String) {
     None("None"), ApiKey("API Key"), Bearer("Bearer Token"), OAuth("OAuth"),
@@ -162,7 +161,6 @@ internal class ConsoleConnectionsState {
                 ProductField(field, draft.parameters[field].orEmpty(), { draft = draft.copy(parameters = draft.parameters + (field to it)) }, true)
             }
             if (draft.kind.fields.isEmpty()) ConnectionNote("Server URL 使用上方地址；Connection Key 通过认证区临时输入或凭据引用表示。")
-            if (draft.kind == ConnectionKind.Http) ConnectionNote("Header / 参数值待安全服务接入；本轮仅记录名称，不保存 Authorization 等值。")
         }
     }
     ProductPanel {

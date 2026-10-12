@@ -103,7 +103,7 @@ internal class TcUi {
 @Composable
 internal fun ToolCenterPage(
     registry: CapabilityRegistry,
-    apiConnections: ApiConnectionRepository,
+    apiConnections: GenericApiRepository,
     secretVault: SecretVaultRepository,
     mcpRepository: McpConnectionRepository,
     personaRuntimeSource: PersonaRuntimeSource,

@@ -131,7 +131,7 @@ fun SettingsScreen(
     ownerSession: OwnerSessionStore,
     capabilityRegistry: CapabilityRegistry,
     baseCapabilities: LoveHouseCapabilityRegistry,
-    apiConnections: ApiConnectionRepository,
+    apiConnections: GenericApiRepository,
     appAccount: AppAccountRepository,
     mcpConnections: McpConnectionRepository,
     secretVault: SecretVaultRepository,

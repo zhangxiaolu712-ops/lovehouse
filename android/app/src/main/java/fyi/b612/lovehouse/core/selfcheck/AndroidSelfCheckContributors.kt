@@ -238,7 +238,7 @@ data class ProductionWiringSnapshot(
     val chatHistorySourceProduction: Boolean,
     val mediaSourceProduction: Boolean,
     val toolRegistrySourceProduction: Boolean,
-    val toolConnectionSourceProduction: Boolean,
+    val apiConnectionSourceProduction: Boolean,
     val mcpSourceProduction: Boolean,
     val appIdentitySourceProduction: Boolean,
     val ownerSessionSourceProduction: Boolean,
@@ -252,7 +252,7 @@ class ProductionWiringSelfCheckContributor(
     override suspend fun checks(): List<SelfCheckResult> = listOf(
         wiringResult("wiring.settings", "Settings Native Source", wiring.permissionSourceProduction && wiring.settingsUsesGlobalRegistry, "Settings 使用真实权限源与全局 registry"),
         wiringResult("wiring.chat", "Chat Attachment Source", wiring.chatUsesGlobalRegistry && wiring.chatHistorySourceProduction && wiring.mediaSourceProduction, "Chat 使用 canonical attachment、SQLite 历史与真实媒体 client"),
-        wiringResult("wiring.tool-center", "Tool Center Source", wiring.toolRegistrySourceProduction && wiring.toolConnectionSourceProduction && wiring.mcpSourceProduction, "Tool Center 使用 production registry / connection source", SelfCheckGroup.ToolCenter),
+        wiringResult("wiring.tool-center", "Tool Center Source", wiring.toolRegistrySourceProduction && wiring.apiConnectionSourceProduction && wiring.mcpSourceProduction, "Tool Center 使用 App Backend API / MCP source", SelfCheckGroup.ToolCenter),
         wiringResult("wiring.account", "Account / Owner Session", wiring.appIdentitySourceProduction && wiring.ownerSessionSourceProduction, "App identity 与 Owner Session 使用 production provider", SelfCheckGroup.Account),
     )
 

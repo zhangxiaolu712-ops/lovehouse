@@ -53,11 +53,7 @@ import fyi.b612.lovehouse.feature.chat.HttpChatConnectionProbe
 import fyi.b612.lovehouse.feature.settings.AndroidToolProfilePreferenceStore
 import fyi.b612.lovehouse.feature.settings.AndroidCapabilityRegistry
 import fyi.b612.lovehouse.feature.settings.CapabilityRegistry
-import fyi.b612.lovehouse.feature.settings.AndroidToolConnectionStore
-import fyi.b612.lovehouse.feature.settings.HttpToolConnectionProbe
 import fyi.b612.lovehouse.feature.settings.HttpToolCenterRepository
-import fyi.b612.lovehouse.feature.settings.ToolConnectionProbe
-import fyi.b612.lovehouse.feature.settings.ToolConnectionStore
 import fyi.b612.lovehouse.feature.settings.ToolCenterRepository
 import fyi.b612.lovehouse.feature.settings.ToolProfilePreferenceStore
 import fyi.b612.lovehouse.feature.settings.AndroidAppAccountRepository
@@ -66,8 +62,8 @@ import fyi.b612.lovehouse.feature.settings.AppBackendMcpConnectionRepository
 import fyi.b612.lovehouse.feature.settings.AppBackendSecretVaultRepository
 import fyi.b612.lovehouse.feature.settings.McpConnectionRepository
 import fyi.b612.lovehouse.feature.settings.SecretVaultRepository
-import fyi.b612.lovehouse.feature.settings.ApiConnectionRepository
-import fyi.b612.lovehouse.feature.settings.AppBackendApiConnectionRepository
+import fyi.b612.lovehouse.feature.settings.GenericApiRepository
+import fyi.b612.lovehouse.feature.settings.AppBackendGenericApiRepository
 import fyi.b612.lovehouse.feature.settings.AppEffectiveToolResolver
 import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
 import fyi.b612.lovehouse.feature.chat.stableCodexThreadId
@@ -90,8 +86,6 @@ data class AppDependencies(
     val toolProfiles: ToolProfilePreferenceStore,
     val capabilityRegistry: CapabilityRegistry,
     val baseCapabilities: LoveHouseCapabilityRegistry,
-    val toolConnections: ToolConnectionStore,
-    val toolConnectionProbe: ToolConnectionProbe,
     val chatConnections: ChatConnectionStore,
     val chatConnectionProbe: ChatConnectionProbe,
     val appAccount: AppAccountRepository,
@@ -100,7 +94,7 @@ data class AppDependencies(
     val remoteEventPush: RemoteEventPushRegistration,
     val mcpConnections: McpConnectionRepository,
     val secretVault: SecretVaultRepository,
-    val apiConnections: ApiConnectionRepository,
+    val apiConnections: GenericApiRepository,
     val conversationPersonas: ConversationPersonaStore,
     val personaRuntimeSource: PersonaRuntimeSource,
     val effectiveTools: EffectiveToolResolver,
@@ -131,7 +125,6 @@ fun createAppDependencies(context: Context): AppDependencies {
     )
     val localStorage: LocalStorage = DataStoreLocalStorage(appContext)
     val mediaAttachments: MediaAttachmentClient = HttpMediaAttachmentClient(appContext, ownerSession)
-    val toolConnections: ToolConnectionStore = AndroidToolConnectionStore(appContext)
     val remoteEventPush = createRemoteEventPushCoordinator(appContext)
     val appAccountSource = AndroidAppAccountRepository(
         appContext,
@@ -152,7 +145,7 @@ fun createAppDependencies(context: Context): AppDependencies {
         BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
         sessionCookie = appAccountSource::backendSessionCookie,
     )
-    val apiConnections: ApiConnectionRepository = AppBackendApiConnectionRepository(
+    val apiConnections: GenericApiRepository = AppBackendGenericApiRepository(
         BuildConfig.LOVEHOUSE_APP_BACKEND_URL,
         sessionCookie = appAccountSource::backendSessionCookie,
     )
@@ -190,7 +183,7 @@ fun createAppDependencies(context: Context): AppDependencies {
                         chatHistorySourceProduction = chatMessages is SQLiteLocalChatMessageRepository,
                         mediaSourceProduction = mediaAttachments is HttpMediaAttachmentClient,
                         toolRegistrySourceProduction = capabilityRegistry is AndroidCapabilityRegistry,
-                        toolConnectionSourceProduction = toolConnections is AndroidToolConnectionStore,
+                        apiConnectionSourceProduction = apiConnections is AppBackendGenericApiRepository,
                         mcpSourceProduction = mcpConnections is AppBackendMcpConnectionRepository,
                         appIdentitySourceProduction = appAccount is AndroidAppAccountRepository,
                         ownerSessionSourceProduction = ownerSession is AndroidOwnerSessionStore,
@@ -223,8 +216,6 @@ fun createAppDependencies(context: Context): AppDependencies {
         toolProfiles = toolProfiles,
         capabilityRegistry = capabilityRegistry,
         baseCapabilities = baseCapabilities,
-        toolConnections = toolConnections,
-        toolConnectionProbe = HttpToolConnectionProbe(),
         chatConnections = AndroidChatConnectionStore(appContext),
         chatConnectionProbe = HttpChatConnectionProbe(),
         appAccount = appAccount,

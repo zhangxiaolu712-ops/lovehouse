@@ -8,91 +8,60 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import kotlinx.coroutines.launch
 
-private data class ApiCatalogState(
-    val services: List<ApiServiceDescriptor> = emptyList(),
-    val connections: List<ApiBackendConnection> = emptyList(),
+private data class GenericApiUiState(
+    val providers: List<GenericApiProvider> = emptyList(),
+    val connections: List<GenericApiConnection> = emptyList(),
     val loading: Boolean = true,
     val error: String? = null,
 )
 
 @Composable
-internal fun ApiTab(repository: ApiConnectionRepository, ui: TcUi, onOpen: (TcPage) -> Unit) {
+internal fun ApiTab(repository: GenericApiRepository, ui: TcUi, onOpen: (TcPage) -> Unit) {
     val scope = rememberCoroutineScope()
-    var catalog by remember { mutableStateOf(ApiCatalogState()) }
-    var enabledShell by remember { mutableStateOf(true) }
-    var openOverride by remember { mutableStateOf<Set<String>?>(null) }
-    val open = openOverride ?: setOfNotNull(catalog.connections.firstOrNull()?.id)
+    var state by remember { mutableStateOf(GenericApiUiState()) }
+    var openIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val reload: suspend () -> Unit = {
-        catalog = catalog.copy(loading = true, error = null)
-        catalog = runCatching {
-            ApiCatalogState(repository.services(), repository.connections(), loading = false)
-        }.getOrElse { ApiCatalogState(loading = false, error = it.message ?: "API 服务读取失败") }
+        state = state.copy(loading = true, error = null)
+        state = runCatching {
+            GenericApiUiState(repository.providers(), repository.connections(), loading = false)
+        }.getOrElse { GenericApiUiState(loading = false, error = it.message ?: "API 连接读取失败") }
     }
     LaunchedEffect(repository) { reload() }
 
-    TcGlass {
-        TcRow(first = true) {
-            TcRowText("启用 API 工具", "语音、地图等外部服务，统一从这里接入", Modifier.weight(1f))
-            TcSwitch(enabledShell, "启用 API 工具") {
-                enabledShell = it
-                ui.toast("该总开关尚未接入后端，未保存")
-            }
-        }
-    }
-    TcSection("API 服务", "${catalog.services.size} 个可接入 · ${catalog.connections.size} 个连接")
+    TcSection("我的 API 服务", "${state.connections.size} 个")
     when {
-        catalog.loading -> TcGlass { TcEmpty("正在读取 App Backend API 服务…") }
-        catalog.error != null -> TcGlass {
-            TcEmpty(catalog.error ?: "API 服务读取失败")
+        state.loading -> TcGlass { TcEmpty("正在读取 App Backend API 连接…") }
+        state.error != null -> TcGlass {
+            TcEmpty(state.error ?: "API 连接读取失败")
             TcLink("重试") { scope.launch { reload() } }
         }
-        catalog.services.isEmpty() && catalog.connections.isEmpty() -> TcGlass {
-            TcEmpty(apiEmptyRegistryMessage(catalog.services))
+        state.connections.isEmpty() -> TcGlass {
+            TcEmpty("还没有 API 服务。点击右上角添加，填写服务地址和密钥后即可测试。")
         }
     }
 
-    catalog.connections.forEach { connection ->
-        val service = catalog.services.firstOrNull { it.serviceId == connection.serviceId }
-        val mutate: suspend (ApiConnectionUpdate, String) -> Unit = { update, done ->
-            runCatching { repository.update(connection.id, update); reload() }
-                .onSuccess { ui.toast(done) }
-                .onFailure { ui.toast(it.message ?: "保存失败") }
-        }
+    state.connections.forEach { connection ->
+        val providerName = state.providers.firstOrNull { it.id == connection.providerId }?.displayName
+            ?: if (connection.providerId == "custom") "自定义 API" else connection.providerId
         TcServerCard(
             letter = connection.displayName.firstOrNull()?.uppercase() ?: "A",
             name = connection.displayName,
-            sub = service?.displayName ?: connection.serviceType ?: connection.serviceId ?: "自定义 API",
-            open = connection.id in open,
+            sub = providerName,
+            open = connection.id in openIds,
             onToggle = {
-                openOverride = if (connection.id in open) open - connection.id else open + connection.id
+                openIds = if (connection.id in openIds) openIds - connection.id else openIds + connection.id
             },
-            note = connection.note,
-            status = apiConnectionStatusLabel(connection),
-            statusOk = connection.enabled && connection.status == "active",
+            note = connection.baseUrl,
+            status = "已保存 · ${connection.selectedModels.size} 个模型",
+            statusOk = true,
             testLabel = "刷新",
             onTest = { scope.launch { reload() } },
-            onRename = {
-                ui.dialog = TcDialog("重命名", "修改 App Backend 中的连接显示名称。", input = connection.displayName, ok = "保存") { result ->
-                    if (result.text.isNotBlank()) scope.launch {
-                        mutate(ApiConnectionUpdate(displayName = result.text), "已保存")
-                    }
-                }
-            },
-            onNote = {
-                ui.dialog = TcDialog("备注", "写给自己看的说明。", input = connection.note.orEmpty(), ok = "保存") { result ->
-                    scope.launch { mutate(ApiConnectionUpdate(note = result.text), "备注已保存") }
-                }
-            },
+            onRename = { onOpen(TcPage.Api("编辑 API 服务", connection.id)) },
+            onNote = { onOpen(TcPage.Api("编辑 API 服务", connection.id)) },
             onDelete = {
-                ui.dialog = TcDialog(
-                    "删除这个 API 连接？",
-                    "连接会删除，密码库中的凭证会保留。",
-                    ok = "删除",
-                    danger = true,
-                ) {
+                ui.dialog = TcDialog("删除这个 API 服务？", "连接会删除，密码库中的凭证会保留。", ok = "删除", danger = true) {
                     scope.launch {
                         runCatching { repository.delete(connection.id); reload() }
                             .onSuccess { ui.toast("连接已删除，密码库凭证已保留") }
@@ -100,18 +69,15 @@ internal fun ApiTab(repository: ApiConnectionRepository, ui: TcUi, onOpen: (TcPa
                     }
                 }
             },
-            itemsLabel = "连接凭证",
+            itemsLabel = "已选模型",
             addLabel = "编辑连接",
-            onAdd = { onOpen(TcPage.Api("编辑 API 连接", connection.id)) },
-            emptyText = null,
+            onAdd = { onOpen(TcPage.Api("编辑 API 服务", connection.id)) },
+            emptyText = if (connection.selectedModels.isEmpty()) "尚未选择模型。" else null,
         ) {
-            TcAccount(
-                name = if (connection.credentialId == null) "无需凭证" else "密码库凭证",
-                meta = "由 App Backend 管理 · ${if (connection.enabled) "已开启" else "已关闭"}",
-                checked = connection.enabled,
-                onToggle = { on -> scope.launch { mutate(ApiConnectionUpdate(enabled = on), if (on) "已开启" else "已关闭") } },
-            ) {
-                TcAccLink("编辑") { onOpen(TcPage.Api("编辑 API 连接", connection.id)) }
+            connection.selectedModels.forEach { model ->
+                TcAccount(model.displayName, model.id, checked = null) {
+                    TcAccLink("查看") { onOpen(TcPage.Api("编辑 API 服务", connection.id)) }
+                }
             }
         }
     }
@@ -120,227 +86,165 @@ internal fun ApiTab(repository: ApiConnectionRepository, ui: TcUi, onOpen: (TcPa
 @Composable
 internal fun ApiDetailPage(
     page: TcPage.Api,
-    repository: ApiConnectionRepository,
+    repository: GenericApiRepository,
     secretVault: SecretVaultRepository,
     ui: TcUi,
     onDone: () -> Unit,
 ) {
-    var services by remember(page.connectionId) { mutableStateOf<List<ApiServiceDescriptor>>(emptyList()) }
-    var connections by remember(page.connectionId) { mutableStateOf<List<ApiBackendConnection>>(emptyList()) }
+    val scope = rememberCoroutineScope()
+    var providers by remember(page.connectionId) { mutableStateOf<List<GenericApiProvider>>(emptyList()) }
     var credentials by remember(page.connectionId) { mutableStateOf<List<SecretCredential>>(emptyList()) }
-    var createdConnection by remember(page.connectionId) { mutableStateOf<ApiBackendConnection?>(null) }
-    var autoDiscoveryRequest by remember(page.connectionId) { mutableIntStateOf(0) }
+    var existing by remember(page.connectionId) { mutableStateOf<GenericApiConnection?>(null) }
     var loading by remember(page.connectionId) { mutableStateOf(true) }
     var loadError by remember(page.connectionId) { mutableStateOf<String?>(null) }
+    var providerIndex by remember(page.connectionId) { mutableIntStateOf(0) }
+    var name by remember(page.connectionId) { mutableStateOf("") }
+    var baseUrl by remember(page.connectionId) { mutableStateOf("") }
+    var customProtocol by remember(page.connectionId) { mutableIntStateOf(0) }
+    var credentialMode by remember(page.connectionId) { mutableIntStateOf(0) }
+    var credentialType by remember(page.connectionId) { mutableIntStateOf(0) }
+    var credentialIndex by remember(page.connectionId) { mutableIntStateOf(0) }
+    var secret by remember(page.connectionId) { mutableStateOf("") }
+    var workingCredentialId by remember(page.connectionId) { mutableStateOf<String?>(null) }
+    var discoveredModels by remember(page.connectionId) { mutableStateOf<List<GenericApiModel>>(emptyList()) }
+    var selectedModelIds by remember(page.connectionId) { mutableStateOf<Set<String>>(emptySet()) }
+    var manualModelId by remember(page.connectionId) { mutableStateOf("") }
+    var testStatus by remember(page.connectionId) { mutableStateOf<String?>(null) }
+    var tested by remember(page.connectionId) { mutableStateOf(false) }
+    var busy by remember(page.connectionId) { mutableStateOf(false) }
 
     LaunchedEffect(repository, secretVault, page.connectionId) {
         loading = true
         loadError = null
         runCatching {
-            services = repository.services()
-            connections = repository.connections()
+            providers = repository.providers()
             credentials = secretVault.list()
-            page.connectionId?.let { id ->
-                connections.firstOrNull { it.id == id }
-                    ?: throw ApiConnectionException("这个 API 连接已不存在，请返回")
-            }
+            existing = page.connectionId?.let { repository.connection(it) }
+            val loaded = existing
+            val providerIds = providers.map { it.id } + "custom"
+            providerIndex = loaded?.let { providerIds.indexOf(it.providerId).takeIf { index -> index >= 0 } } ?: 0
+            name = loaded?.displayName.orEmpty()
+            baseUrl = loaded?.baseUrl ?: providers.firstOrNull()?.defaultBaseUrl.orEmpty()
+            customProtocol = if (loaded?.discoveryKind == "MANUAL") 1 else 0
+            workingCredentialId = loaded?.credentialId
+            credentialIndex = credentials.indexOfFirst { it.id == loaded?.credentialId }.coerceAtLeast(0)
+            credentialMode = if (loaded == null) 0 else 1
+            discoveredModels = loaded?.selectedModels.orEmpty()
+            selectedModelIds = loaded?.selectedModels?.mapTo(linkedSetOf()) { it.id }.orEmpty()
         }.onFailure { loadError = it.message ?: "API 连接读取失败" }
         loading = false
     }
 
-    if (loading) {
-        TcGlass { TcEmpty("正在读取 App Backend API 服务…") }
-        return
-    }
-    loadError?.let {
-        TcGlass { TcEmpty(it) }
-        return
-    }
-    val existing = createdConnection ?: page.connectionId?.let { id -> connections.firstOrNull { it.id == id } }
-    if (existing == null || existing.serviceId == null) {
-        CustomApiServiceForm(
-            existing = existing,
-            credentials = credentials,
-            repository = repository,
-            ui = ui,
-            onCreated = { createdConnection = it },
-            onDone = onDone,
-        )
-    } else {
-        RegisteredApiConnectionForm(
-            existing = existing,
-            service = services.firstOrNull { it.serviceId == existing.serviceId },
-            credentials = credentials,
-            repository = repository,
-            ui = ui,
-            onDone = onDone,
-        )
-    }
-    if (existing != null) {
-        TcSection("发现可用资源", "能力与模型分别保存")
-        TcFormCard("自动发现") {
-            TcHint("只使用服务预设或已明确选择的标准协议；不会扫描未知接口路径。")
-            TcSaveButton("自动发现", enabled = true) { autoDiscoveryRequest += 1 }
-        }
-        ApiCapabilityCatalogSection(existing, repository, ui, autoDiscoveryRequest)
-        ApiModelResourceSection(existing, repository, ui, autoDiscoveryRequest)
-        TcLink(if (page.connectionId == null && createdConnection != null) "稍后设置" else "完成") { onDone() }
-    }
-}
+    if (loading) { TcGlass { TcEmpty("正在读取 API 服务与密码库…") }; return }
+    loadError?.let { TcGlass { TcEmpty(it) }; return }
 
-@Composable
-private fun RegisteredApiConnectionForm(
-    existing: ApiBackendConnection,
-    service: ApiServiceDescriptor?,
-    credentials: List<SecretCredential>,
-    repository: ApiConnectionRepository,
-    ui: TcUi,
-    onDone: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var name by remember(existing.id) { mutableStateOf(existing.displayName) }
-    var note by remember(existing.id) { mutableStateOf(existing.note.orEmpty()) }
-    var enabled by remember(existing.id) { mutableStateOf(existing.enabled) }
-    val compatibleCredentials = credentials.filter { it.credentialType in service?.acceptedCredentialTypes.orEmpty() }
-    var credentialIndex by remember(existing.id, compatibleCredentials) {
-        mutableIntStateOf(compatibleCredentials.indexOfFirst { it.id == existing.credentialId }.coerceAtLeast(0))
-    }
-    var credentialEdited by remember(existing.id) { mutableStateOf(false) }
-    var busy by remember(existing.id) { mutableStateOf(false) }
+    val providerOptions = providers.map { it.displayName } + "自定义"
+    val selectedProvider = providers.getOrNull(providerIndex)
+    val providerId = selectedProvider?.id ?: "custom"
+    val discoveryKind = selectedProvider?.discoveryKind ?: if (customProtocol == 0) "OPENAI_COMPATIBLE" else "MANUAL"
+    val usableCredentials = credentials.filter { it.credentialType == "api_key" || it.credentialType == "bearer_token" }
 
-    TcFormCard("连接信息") {
-        TcField("API 服务") { TcHint(service?.displayName ?: existing.serviceId.orEmpty()) }
-        TcField("名称") { TcInput(name, { name = it }) }
-        TcField("备注") { TcInput(note, { note = it }, multiline = true) }
-        TcField("启用", last = true) { TcSwitch(enabled, "启用 API 连接") { enabled = it } }
+    suspend fun resolveCredential(): String {
+        val type = if (credentialType == 0) "api_key" else "bearer_token"
+        val id = resolveGenericApiCredential(
+            vault = secretVault,
+            bindExisting = credentialMode == 1,
+            selectedCredentialId = usableCredentials.getOrNull(credentialIndex)?.id,
+            currentCredentialId = workingCredentialId,
+            secret = secret,
+            credentialType = type,
+            displayName = name.ifBlank { selectedProvider?.displayName ?: "API" },
+        )
+        secret = ""
+        workingCredentialId = id
+        credentials = secretVault.list()
+        return id
     }
-    TcFormCard("凭证") {
-        TcField("当前绑定", last = compatibleCredentials.isEmpty()) {
-            TcHint(if (existing.credentialId == null) "无需凭证" else "密码库凭证 · $FIXED_SECRET_MASK")
-        }
-        if (compatibleCredentials.isNotEmpty()) {
-            TcField("改用已有凭证", last = true) {
-                TcSelect(
-                    compatibleCredentials.map { it.displayName },
-                    credentialIndex.coerceIn(compatibleCredentials.indices),
-                    "选择密码库凭证",
-                ) {
-                    credentialIndex = it
-                    credentialEdited = true
+
+    fun draft(credentialId: String) = GenericApiDraft(
+        providerId = providerId,
+        displayName = name,
+        baseUrl = baseUrl,
+        discoveryKind = discoveryKind,
+        credentialId = credentialId,
+        selectedModels = discoveredModels.filter { it.id in selectedModelIds },
+    )
+
+    TcFormCard("服务信息") {
+        TcField("服务商") {
+            TcSelect(providerOptions, providerIndex.coerceIn(providerOptions.indices), "选择服务商") { index ->
+                providerIndex = index
+                providers.getOrNull(index)?.let {
+                    if (existing == null) baseUrl = it.defaultBaseUrl
+                    if (name.isBlank()) name = it.displayName
                 }
+                tested = false
+            }
+        }
+        TcField("名称") { TcInput(name, { name = it }) }
+        TcField("Base URL") { TcInput(baseUrl, { baseUrl = it; tested = false }, placeholder = "https://") }
+        if (selectedProvider == null) {
+            TcField("模型发现", last = true) {
+                TcPills(listOf("OpenAI-compatible", "手动填写"), setOf(customProtocol)) { customProtocol = it; tested = false }
+            }
+        } else TcField("模型发现", last = true) { TcHint("${selectedProvider.displayName} · ${selectedProvider.discoveryKind}") }
+    }
+
+    TcFormCard("密钥") {
+        TcField("使用方式") {
+            TcPills(listOf(if (existing == null) "输入新 Secret" else "替换当前 Secret", "选择密码库凭证"), setOf(credentialMode)) {
+                credentialMode = it; tested = false
+            }
+        }
+        if (credentialMode == 0) {
+            TcField("鉴权方式") { TcPills(listOf("API Key", "Bearer Token"), setOf(credentialType)) { credentialType = it } }
+            TcField("Key / Token", last = true) {
+                TcInput(secret, { secret = it; tested = false }, secret = true)
+                TcHint(if (workingCredentialId != null) "已配置 · $FIXED_SECRET_MASK；留空会继续使用当前密钥。" else "Secret 只提交给 App Backend Vault，Android 不持久化。")
+            }
+        } else TcField("密码库凭证", last = true) {
+            if (usableCredentials.isEmpty()) TcHint("密码库中暂无 API Key / Bearer Token。")
+            else TcSelect(usableCredentials.map { it.displayName }, credentialIndex.coerceIn(usableCredentials.indices), "选择凭证") {
+                credentialIndex = it; tested = false
             }
         }
     }
-    TcSaveButton("保存", enabled = !busy) {
-        when {
-            name.isBlank() -> ui.toast("请填写连接名称")
-            service == null -> ui.toast("该预设 API 服务当前不可用")
-            else -> {
-                busy = true
-                scope.launch {
-                    val chosenCredential = compatibleCredentials.getOrNull(credentialIndex)?.id
-                    runCatching {
-                        repository.update(
-                            existing.id,
-                            ApiConnectionUpdate(
-                                displayName = name,
-                                note = note,
-                                enabled = enabled,
-                                credentialId = chosenCredential.takeIf { credentialEdited },
-                                updateCredential = credentialEdited && chosenCredential != existing.credentialId,
-                            ),
-                        )
-                    }.onSuccess {
-                        ui.toast("已保存")
-                        onDone()
-                    }.onFailure { ui.toast(it.message ?: "保存失败") }
+
+    TcFormCard("测试与模型") {
+        TcInlineStatus("测试连接", testStatus ?: "尚未测试", ok = tested, busy = busy) {
+            when {
+                name.isBlank() -> ui.toast("请填写名称")
+                baseUrl.isBlank() -> ui.toast("请填写 Base URL")
+                else -> scope.launch {
+                    busy = true
+                    runCatching { repository.test(draft(resolveCredential())) }
+                        .onSuccess { result ->
+                            tested = true
+                            if (result.status == "CONNECTED") {
+                                discoveredModels = result.models
+                                selectedModelIds = selectedModelIds.intersect(result.models.mapTo(linkedSetOf()) { it.id })
+                                testStatus = "连接成功 · ${result.models.size} 个模型"
+                            } else testStatus = "当前服务需要手动填写模型 ID"
+                        }.onFailure { testStatus = it.message ?: "测试失败" }
                     busy = false
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun CustomApiServiceForm(
-    existing: ApiBackendConnection?,
-    credentials: List<SecretCredential>,
-    repository: ApiConnectionRepository,
-    ui: TcUi,
-    onCreated: (ApiBackendConnection) -> Unit,
-    onDone: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var name by remember(existing?.id) { mutableStateOf(existing?.displayName.orEmpty()) }
-    var serviceType by remember(existing?.id) { mutableStateOf(existing?.serviceType.orEmpty()) }
-    var endpoint by remember(existing?.id) { mutableStateOf(existing?.baseUrl.orEmpty()) }
-    var apiProtocol by remember(existing?.id) {
-        mutableIntStateOf(if (existing?.apiProtocol == "OPENAI_COMPATIBLE") 1 else 0)
-    }
-    var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
-    var credentialMode by remember(existing?.id) { mutableIntStateOf(if (existing == null) 0 else 1) }
-    var credentialType by remember(existing?.id) { mutableIntStateOf(0) }
-    var secret by remember { mutableStateOf("") }
-    val compatibleCredentials = credentials.filter { it.credentialType == "api_key" || it.credentialType == "bearer_token" }
-    var credentialIndex by remember(existing?.id, compatibleCredentials) {
-        mutableIntStateOf(compatibleCredentials.indexOfFirst { it.id == existing?.credentialId }.coerceAtLeast(0))
-    }
-    var credentialEdited by remember(existing?.id) { mutableStateOf(false) }
-    var busy by remember(existing?.id) { mutableStateOf(false) }
-    val idempotencyKey = remember(existing?.id) { java.util.UUID.randomUUID().toString() }
-
-    TcFormCard("连接信息") {
-        TcField("名称") { TcInput(name, { name = it }) }
-        TcField("服务类型") { TcInput(serviceType, { serviceType = it }, placeholder = "例如：天气、翻译、语音") }
-        TcField("备注") {
-            TcInput(note, { note = it }, placeholder = "这个服务是做什么的，给自己看", multiline = true)
-        }
-        TcField("Base URL（原样保存）") {
-            TcInput(endpoint, { endpoint = it }, placeholder = "https://")
-        }
-        TcField("服务协议", last = true) {
-            TcPills(listOf("自定义 API", "OpenAI-compatible"), setOf(apiProtocol)) { apiProtocol = it }
-            TcHint(if (apiProtocol == 1) {
-                "按标准协议从 Base URL 定位模型列表，不扫描其他路径。"
-            } else {
-                "协议不明确时不猜测模型或描述地址，可在下方使用手动来源。"
-            })
-        }
-    }
-
-    TcFormCard("密钥") {
-        if (existing == null) {
-            TcField("使用方式") {
-                TcPills(listOf("直接输入新 Secret", "使用密码库已有凭证"), setOf(credentialMode)) {
-                    credentialMode = it
-                }
-            }
-        } else {
-            TcField("当前凭证") {
-                TcHint(if (existing.credentialId == null) "未绑定" else "密码库凭证 · $FIXED_SECRET_MASK")
+        if (discoveredModels.isNotEmpty()) TcField("选择模型", last = discoveryKind != "MANUAL") {
+            discoveredModels.forEach { model ->
+                TcAccount(model.displayName, model.id, checked = model.id in selectedModelIds, onToggle = { checked ->
+                    selectedModelIds = if (checked) selectedModelIds + model.id else selectedModelIds - model.id
+                }) {}
             }
         }
-        if (credentialMode == 0) {
-            TcField("鉴权方式") {
-                TcPills(listOf("API Key", "Bearer Token"), setOf(credentialType)) { credentialType = it }
-            }
-            TcField("Key / Token", last = true) {
-                TcInput(secret, { secret = it }, secret = true)
-                TcHint("只提交一次给 App Backend，并自动安全保存到密码库；Android 不会持久化。")
-            }
-        } else {
-            TcField(if (existing == null) "密码库凭证" else "更换凭证", last = true) {
-                if (compatibleCredentials.isEmpty()) {
-                    TcHint("密码库中暂无可选凭证。")
-                } else {
-                    TcSelect(
-                        compatibleCredentials.map { it.displayName },
-                        credentialIndex.coerceIn(compatibleCredentials.indices),
-                        "选择密码库凭证",
-                    ) {
-                        credentialIndex = it
-                        credentialEdited = true
-                    }
+        if (discoveryKind == "MANUAL") TcField("手动模型 ID", last = true) {
+            TcInput(manualModelId, { manualModelId = it }, placeholder = "例如：provider/model-name")
+            TcLink("添加模型") {
+                val id = manualModelId.trim()
+                if (id.isBlank()) ui.toast("请填写模型 ID") else {
+                    if (discoveredModels.none { it.id == id }) discoveredModels = discoveredModels + GenericApiModel(id, id)
+                    selectedModelIds = selectedModelIds + id
+                    manualModelId = ""
                 }
             }
         }
@@ -349,76 +253,20 @@ private fun CustomApiServiceForm(
     TcSaveButton("保存", enabled = !busy) {
         when {
             name.isBlank() -> ui.toast("请填写名称")
-            serviceType.isBlank() -> ui.toast("请填写服务类型")
-            endpoint.isBlank() -> ui.toast("请填写 Base URL")
-            existing == null && credentialMode == 0 && secret.isBlank() -> ui.toast("请输入 Key / Token")
-            existing == null && credentialMode == 1 && compatibleCredentials.isEmpty() ->
-                ui.toast("请选择密码库已有凭证，或直接输入新 Secret")
-            else -> {
+            baseUrl.isBlank() -> ui.toast("请填写 Base URL")
+            !tested -> ui.toast("请先测试连接")
+            selectedModelIds.isEmpty() -> ui.toast("请至少选择或添加一个模型")
+            else -> scope.launch {
                 busy = true
-                scope.launch {
-                    runCatching {
-                        if (existing == null) {
-                            val binding = if (credentialMode == 0) {
-                                ApiCredentialBinding.NewSecret(
-                                    displayName = "$name 密钥",
-                                    credentialType = if (credentialType == 0) "api_key" else "bearer_token",
-                                    secret = secret,
-                                    metadata = SecretCredentialMetadata(serviceName = name),
-                                )
-                            } else {
-                                ApiCredentialBinding.Existing(
-                                    compatibleCredentials[credentialIndex.coerceIn(compatibleCredentials.indices)].id,
-                                )
-                            }
-                            repository.create(
-                                ApiConnectionCreate(
-                                    serviceType = serviceType,
-                                    baseUrl = endpoint,
-                                    apiProtocol = if (apiProtocol == 1) "OPENAI_COMPATIBLE" else "CUSTOM",
-                                    displayName = name,
-                                    note = note,
-                                    credential = binding,
-                                    idempotencyKey = idempotencyKey,
-                                ),
-                            )
-                        } else {
-                            val chosenCredential = compatibleCredentials.getOrNull(credentialIndex)?.id
-                            repository.update(
-                                existing.id,
-                                ApiConnectionUpdate(
-                                    displayName = name,
-                                    serviceType = serviceType,
-                                    baseUrl = endpoint,
-                                    apiProtocol = if (apiProtocol == 1) "OPENAI_COMPATIBLE" else "CUSTOM",
-                                    note = note,
-                                    credentialId = chosenCredential.takeIf { credentialEdited },
-                                    updateCredential = credentialEdited && chosenCredential != existing.credentialId,
-                                ),
-                            )
-                        }
-                    }.onSuccess { saved ->
-                        if (existing == null) {
-                            secret = ""
-                            ui.toast("连接已创建，可以继续发现能力")
-                            onCreated(saved)
-                        } else {
-                            ui.toast("已保存")
-                            onCreated(saved)
-                        }
-                    }.onFailure { ui.toast(it.message ?: "保存失败") }
-                    busy = false
-                }
+                runCatching {
+                    val input = draft(resolveCredential())
+                    val saved = existing?.let { repository.update(it.id, input) } ?: repository.create(input)
+                    repository.connection(saved.id)
+                }.onSuccess { secret = ""; ui.toast("API 服务已保存"); onDone() }
+                    .onFailure { ui.toast(it.message ?: "保存失败") }
+                busy = false
             }
         }
     }
-}
-
-internal fun apiEmptyRegistryMessage(services: List<ApiServiceDescriptor>): String =
-    if (services.isEmpty()) "暂无可接入 API 服务。服务目录由 App Backend 提供。" else "还没有 API 连接。"
-
-private fun apiConnectionStatusLabel(connection: ApiBackendConnection): String = when {
-    !connection.enabled || connection.status == "disabled" -> "已关闭"
-    connection.status == "active" -> "已连接"
-    else -> connection.status
+    TcLink("取消") { secret = ""; onDone() }
 }
