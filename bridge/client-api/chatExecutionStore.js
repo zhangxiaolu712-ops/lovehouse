@@ -37,6 +37,17 @@ function validateAppAccountId(appAccountId) {
   }
 }
 
+function validateMessageIdentity(record) {
+  const values = [record.userMessageId, record.assistantMessageId]
+  if (values.every(value => value == null)) return
+  const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  if (values.some(value => typeof value !== 'string' || !uuidV7.test(value)) || values[0] === values[1]) {
+    throw new ClientApiError('INVALID_MESSAGE_IDENTITY', 'Canonical message ids must be distinct UUIDv7 values', {
+      stage: 'validation', status: 400,
+    })
+  }
+}
+
 function validateState(state) {
   if (!state || state.version !== 1 || typeof state.records !== 'object' || Array.isArray(state.records)) {
     throw new Error('unsupported chat execution file shape')
@@ -134,6 +145,7 @@ export class FileChatExecutionStore {
   async reserve(record) {
     validateIdentity(record)
     validateAppAccountId(record.appAccountId)
+    validateMessageIdentity(record)
     await this.#ready
     const operation = this.#queue.then(async () => {
       const state = await this.#read()
@@ -142,7 +154,9 @@ export class FileChatExecutionStore {
       const current = state.records[key]
       if (current) {
         if (current.input_fingerprint !== record.inputFingerprint ||
-          current.thread_id !== record.threadId || current.provider !== record.provider) {
+          current.thread_id !== record.threadId || current.provider !== record.provider ||
+          (current.user_message_id || null) !== (record.userMessageId || null) ||
+          (current.assistant_message_id || null) !== (record.assistantMessageId || null)) {
           throw new ClientApiError('EXECUTION_ID_CONFLICT', 'execution_id is already bound to another chat request', {
             stage: 'validation', status: 409,
           })
@@ -167,6 +181,10 @@ export class FileChatExecutionStore {
         updated_at: timestamp,
       }
       if (record.appAccountId) value.app_account_id = record.appAccountId
+      if (record.userMessageId) {
+        value.user_message_id = record.userMessageId
+        value.assistant_message_id = record.assistantMessageId
+      }
       state.records[key] = value
       await this.#write(state)
       return { created: true, record: clone(value) }
@@ -252,9 +270,11 @@ export class ChatExecutionCoordinator {
     return `${ownerUserId}\0${executionId}`
   }
 
-  async observeOrStart({ ownerUserId, appAccountId, executionId, threadId, provider, inputFingerprint, execute, onEvent }) {
+  async observeOrStart({ ownerUserId, appAccountId, executionId, threadId, provider, inputFingerprint,
+    userMessageId = null, assistantMessageId = null, execute, onEvent }) {
     const reserved = await this.store.reserve({
       ownerUserId, appAccountId, executionId, threadId, provider, inputFingerprint,
+      userMessageId, assistantMessageId,
     })
     const key = this.#key(ownerUserId, executionId)
     let active = this.active.get(key)

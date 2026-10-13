@@ -32,6 +32,8 @@ import {
 const OWNER_ID = 'owner-user'
 const THREAD_ID = '11111111-1111-4111-8111-111111111111'
 const PROVIDER_SESSION_ID = '22222222-2222-4222-8222-222222222222'
+const USER_MESSAGE_ID = '0199db1d-6c00-7001-8001-000000000001'
+const ASSISTANT_MESSAGE_ID = '0199db1d-6c00-7002-8002-000000000002'
 
 function fakeAdapter(runtime, overrides = {}) {
   return {
@@ -594,6 +596,72 @@ test('recoverable Chat pins verified App Account identity without leaking the se
   const persisted = await readFile(filePath, 'utf8')
   assert.equal(persisted.includes('fake-session-secret'), false)
   assert.equal(persisted.includes('forged-client-account'), false)
+})
+
+test('recoverable Chat preserves phone message ids through identity registration and execution persistence', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-message-identity-execution-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') })
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {} })
+  const registrations = []
+  const appIdentityVerifier = {
+    async verifySession(_cookie, messageIdentity) {
+      registrations.push(messageIdentity)
+      return { id: 'stable-app-account-id', email: 'owner@example.com' }
+    },
+  }
+  const base = await startHarness(t, { chatExecutionCoordinator, appIdentityVerifier })
+  const executionId = '98989898-9898-4898-8898-989898989898'
+  const requestBody = chatBody({
+    execution_id: executionId,
+    user_message_id: USER_MESSAGE_ID,
+    assistant_message_id: ASSISTANT_MESSAGE_ID,
+  })
+  const response = await fetch(`${base}/v1/chat`, {
+    method: 'POST',
+    headers: { ...authHeaders(), Cookie: 'lovehouse_app_session=<redacted>' },
+    body: JSON.stringify(requestBody),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+
+  assert.deepEqual(registrations, [{
+    thread_id: THREAD_ID,
+    user_message_id: USER_MESSAGE_ID,
+    assistant_message_id: ASSISTANT_MESSAGE_ID,
+  }])
+  const stored = await store.get({ ownerUserId: OWNER_ID, executionId })
+  assert.equal(stored.user_message_id, USER_MESSAGE_ID)
+  assert.equal(stored.assistant_message_id, ASSISTANT_MESSAGE_ID)
+  assert.equal(stored.thread_id, THREAD_ID)
+})
+
+test('canonical message identity fails closed without verified App Account while legacy Chat stays compatible', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-message-identity-auth-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') })
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {} })
+  const base = await startHarness(t, {
+    chatExecutionCoordinator,
+    appIdentityVerifier: { verifySession: async () => null },
+  })
+  const canonical = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { ...authHeaders(), Cookie: 'lovehouse_app_session=invalid' },
+    body: JSON.stringify(chatBody({
+      execution_id: '97979797-9797-4797-8797-979797979797',
+      user_message_id: USER_MESSAGE_ID,
+      assistant_message_id: ASSISTANT_MESSAGE_ID,
+    })),
+  })
+  assert.equal(canonical.status, 401)
+  assert.equal((await canonical.json()).error.code, 'MESSAGE_IDENTITY_ACCOUNT_REQUIRED')
+
+  const legacy = await fetch(`${base}/v1/chat`, {
+    method: 'POST', headers: { ...authHeaders(), Cookie: 'lovehouse_app_session=invalid' },
+    body: JSON.stringify(chatBody({ execution_id: '96969696-9696-4696-8696-969696969696' })),
+  })
+  assert.equal(legacy.status, 200)
+  await legacy.text()
 })
 
 test('invalid unavailable and timed-out identity verification never blocks recoverable Chat', async t => {

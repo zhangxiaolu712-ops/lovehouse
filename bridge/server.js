@@ -53,6 +53,7 @@ import {
   createLivingroomRest,
   createPostgresLivingroomReadCutover,
   createPostgresLivingroomWriteCutover,
+  preparePostgresLivingroomIdentity,
 } from './livingroom.js'
 import { SupabaseLivingroomTaskRepository } from './livingroom-tasks/repository.js'
 import { CODEX_VPS_ROUTE } from './livingroom-tasks/routing.js'
@@ -300,10 +301,14 @@ const livingroomReadRest = postgresMemoryV2ReadRepository
       pool: postgresMemoryV2ReadRepository.pool,
     })
   : supabaseLivingroomRest
+const livingroomIdentity = postgresMemoryV2WriteRepository
+  ? await preparePostgresLivingroomIdentity({ pool: postgresMemoryV2WriteRepository.pool })
+  : null
 const livingroomRest = postgresMemoryV2WriteRepository
   ? createPostgresLivingroomWriteCutover({
       legacy: livingroomReadRest,
       pool: postgresMemoryV2WriteRepository.pool,
+      identity: livingroomIdentity,
     })
   : livingroomReadRest
 const railwayEngineeringRepository = ENGINEERING_DATABASE_URL
@@ -595,6 +600,7 @@ app.post('/livingroom', verifyLivingroom, async (req, res) => {
     const rows = await livingroomRest('POST', 'livingroom', {
       sender: req.sender,
       message: req.body.message.trim(),
+      ...(req.body.message_id ? { message_id: req.body.message_id } : {}),
     })
     return res.json(rows[0])
   } catch (error) {

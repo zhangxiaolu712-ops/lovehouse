@@ -16,6 +16,7 @@ import {
   normalizeRuntimeTrace,
   runtimeFailureCategory,
 } from '../../services/chat-runtime/runtimeProvenance.js'
+import { isUuidV7 } from '../messageIdentity.js'
 
 export const CLIENT_API_VERSION = 1
 export const CLIENT_STREAM_EVENTS = Object.freeze([
@@ -323,6 +324,15 @@ function normalizeThread(body, { requireThread = false } = {}) {
       stage: 'validation', status: 400,
     })
   }
+  const hasUserMessageId = body.user_message_id !== undefined && body.user_message_id !== null
+  const hasAssistantMessageId = body.assistant_message_id !== undefined && body.assistant_message_id !== null
+  if (hasUserMessageId !== hasAssistantMessageId ||
+    (hasUserMessageId && (!isUuidV7(body.user_message_id) || !isUuidV7(body.assistant_message_id) ||
+      body.user_message_id === body.assistant_message_id))) {
+    throw new ClientApiError('INVALID_MESSAGE_IDENTITY', 'user_message_id and assistant_message_id must be distinct UUIDv7 values', {
+      stage: 'validation', status: 400,
+    })
+  }
   return {
     personaId: body.persona_id,
     threadId: body.thread_id || crypto.randomUUID(),
@@ -335,6 +345,8 @@ function normalizeThread(body, { requireThread = false } = {}) {
     personaRuntime,
     traceId: body.trace_id || null,
     executionId: body.execution_id || null,
+    userMessageId: hasUserMessageId ? body.user_message_id : null,
+    assistantMessageId: hasAssistantMessageId ? body.assistant_message_id : null,
   }
 }
 
@@ -344,6 +356,8 @@ function executionFingerprint(normalized) {
     thread_id: normalized.threadId,
     window_id: normalized.windowId,
     scene: normalized.requestedScene,
+    user_message_id: normalized.userMessageId,
+    assistant_message_id: normalized.assistantMessageId,
     allowed_tool_ids: [...normalized.allowedToolIds].sort(),
     message: {
       type: normalized.message.type,
@@ -762,10 +776,28 @@ export function installClientApi(app, {
       const sessionCookie = appSessionCookieHeader(req)
       if (sessionCookie && appIdentityVerifier) {
         try {
-          appAccountId = (await appIdentityVerifier.verifySession(sessionCookie))?.id || null
-        } catch {
+          appAccountId = (await appIdentityVerifier.verifySession(sessionCookie,
+            normalized.userMessageId ? {
+              thread_id: normalized.threadId,
+              user_message_id: normalized.userMessageId,
+              assistant_message_id: normalized.assistantMessageId,
+            } : null))?.id || null
+        } catch (error) {
+          if (normalized.userMessageId) {
+            return sendJsonError(res, new ClientApiError(
+              error?.code === 'MESSAGE_IDENTITY_CONFLICT' ? 'MESSAGE_IDENTITY_CONFLICT' : 'MESSAGE_IDENTITY_REGISTRATION_FAILED',
+              'Message identity could not be registered',
+              { stage: 'identity', status: error?.status === 409 ? 409 : 503, retryable: error?.status !== 409, cause: error },
+            ), req.clientRequestId)
+          }
           // Identity enrichment is best-effort and must never become a Chat dependency.
         }
+      }
+      if (normalized.userMessageId && !appAccountId) {
+        return sendJsonError(res, new ClientApiError(
+          'MESSAGE_IDENTITY_ACCOUNT_REQUIRED', 'Verified App Account identity is required for canonical message identity',
+          { stage: 'identity', status: 401 },
+        ), req.clientRequestId)
       }
       let ended = false
       let sawText = false
@@ -791,6 +823,8 @@ export function installClientApi(app, {
           threadId: normalized.threadId,
           provider: resolved.persona.id,
           inputFingerprint: executionFingerprint(normalized),
+          userMessageId: normalized.userMessageId,
+          assistantMessageId: normalized.assistantMessageId,
           async execute(publish) {
             let assistantText = ''
             emitRuntimeProvenance('bridge_provider_dispatch', runtimeTrace)
