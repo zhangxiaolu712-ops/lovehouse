@@ -13,6 +13,9 @@ interface ConversationPersonaStore {
     fun setReanchorPending(threadId: String, pending: Boolean) = Unit
     fun materializedPersonaVersion(threadId: String): Int? = null
     fun setMaterializedPersonaVersion(threadId: String, version: Int) = Unit
+    fun canonicalThreadId(alias: String): String? = null
+    fun localAliasForCanonicalThread(canonicalThreadId: String): String? = null
+    fun setThreadAlias(alias: String, canonicalThreadId: String) = Unit
 }
 
 class AndroidConversationPersonaStore(context: Context) : ConversationPersonaStore {
@@ -58,9 +61,27 @@ class AndroidConversationPersonaStore(context: Context) : ConversationPersonaSto
         preferences.edit().putInt("version:$threadId", version).apply()
     }
 
+    override fun canonicalThreadId(alias: String): String? =
+        preferences.getString("$THREAD_ALIAS_PREFIX$alias", null)?.takeIf(String::isNotBlank)
+
+    override fun localAliasForCanonicalThread(canonicalThreadId: String): String? =
+        preferences.all.entries.firstOrNull { (key, value) ->
+            key.startsWith(THREAD_ALIAS_PREFIX) && value == canonicalThreadId
+        }?.key?.removePrefix(THREAD_ALIAS_PREFIX)
+
+    override fun setThreadAlias(alias: String, canonicalThreadId: String) {
+        require(alias.isNotBlank()) { "thread alias must not be blank" }
+        require(canonicalThreadId.isNotBlank()) { "canonical thread id must not be blank" }
+        val key = "$THREAD_ALIAS_PREFIX$alias"
+        val existing = preferences.getString(key, null)
+        require(existing == null || existing == canonicalThreadId) { "thread alias is already bound" }
+        preferences.edit().putString(key, canonicalThreadId).apply()
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "lovehouse_conversation_personas_v1"
         const val THREADS_KEY = "saved_threads"
+        const val THREAD_ALIAS_PREFIX = "thread_alias:"
     }
 }
 
@@ -69,6 +90,7 @@ internal class InMemoryConversationPersonaStore : ConversationPersonaStore {
     private val threads = linkedMapOf<String, ChatThreadSummary>()
     private val pending = linkedMapOf<String, Boolean>()
     private val versions = linkedMapOf<String, Int>()
+    private val aliases = linkedMapOf<String, String>()
 
     override fun personaId(threadId: String): String? = values[threadId]
 
@@ -86,6 +108,13 @@ internal class InMemoryConversationPersonaStore : ConversationPersonaStore {
     override fun setReanchorPending(threadId: String, pending: Boolean) { this.pending[threadId] = pending }
     override fun materializedPersonaVersion(threadId: String): Int? = versions[threadId]
     override fun setMaterializedPersonaVersion(threadId: String, version: Int) { versions[threadId] = version }
+    override fun canonicalThreadId(alias: String): String? = aliases[alias]
+    override fun localAliasForCanonicalThread(canonicalThreadId: String): String? =
+        aliases.entries.firstOrNull { it.value == canonicalThreadId }?.key
+    override fun setThreadAlias(alias: String, canonicalThreadId: String) {
+        require(aliases[alias] == null || aliases[alias] == canonicalThreadId) { "thread alias is already bound" }
+        aliases[alias] = canonicalThreadId
+    }
 }
 
 internal fun legacyPersonaIdForThread(threadId: String): String? = when (threadId) {

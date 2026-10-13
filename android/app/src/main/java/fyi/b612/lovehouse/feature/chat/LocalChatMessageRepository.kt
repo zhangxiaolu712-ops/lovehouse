@@ -24,6 +24,8 @@ data class LocalChatExecution(
     val reanchorIntent: Boolean = false,
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
+    val userCanonicalMessageId: String = newMessageId(),
+    val assistantCanonicalMessageId: String = newMessageId(),
 )
 
 data class LocalChatMessage(
@@ -39,6 +41,7 @@ data class LocalChatMessage(
     val adapterId: String? = null,
     val attachments: List<ChatAttachment> = emptyList(),
     val processEvents: List<ChatProcessEvent> = emptyList(),
+    val messageId: String = newMessageId(),
 )
 
 interface LocalChatMessageRepository {
@@ -92,6 +95,7 @@ class SQLiteLocalChatMessageRepository(
                     add(
                         LocalChatMessage(
                             localMessageId = messageId,
+                            messageId = cursor.getString(cursor.getColumnIndexOrThrow("message_id")),
                             threadId = cursor.getString(cursor.getColumnIndexOrThrow("thread_id")),
                             role = LocalChatRole.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("role"))),
                             sender = cursor.getString(cursor.getColumnIndexOrThrow("sender")),
@@ -203,6 +207,8 @@ class SQLiteLocalChatMessageRepository(
                     reanchorIntent = cursor.getInt(cursor.getColumnIndexOrThrow("reanchor_intent")) == 1,
                     createdAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("created_at_epoch_ms")),
                     updatedAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at_epoch_ms")),
+                    userCanonicalMessageId = cursor.getString(cursor.getColumnIndexOrThrow("user_canonical_message_id")),
+                    assistantCanonicalMessageId = cursor.getString(cursor.getColumnIndexOrThrow("assistant_canonical_message_id")),
                 ))
             }
         }
@@ -217,6 +223,8 @@ class SQLiteLocalChatMessageRepository(
             put("canonical_thread_id", execution.canonicalThreadId)
             put("user_message_id", execution.userMessageId)
             put("assistant_message_id", execution.assistantMessageId)
+            put("user_canonical_message_id", execution.userCanonicalMessageId)
+            put("assistant_canonical_message_id", execution.assistantCanonicalMessageId)
             put("status", execution.status.name)
             execution.lastError?.let { put("last_error", it) } ?: putNull("last_error")
             execution.personaVersion?.let { put("persona_version", it) } ?: putNull("persona_version")
@@ -357,8 +365,10 @@ class SQLiteLocalChatMessageRepository(
     }
 
     private fun write(db: SQLiteDatabase, message: LocalChatMessage) {
+        require(isMessageId(message.messageId)) { "Canonical message_id must be UUIDv7" }
         val values = ContentValues().apply {
             put("local_message_id", message.localMessageId)
+            put("message_id", message.messageId)
             put("thread_id", message.threadId)
             put("role", message.role.name)
             put("sender", message.sender)
@@ -526,8 +536,18 @@ class SQLiteLocalChatMessageRepository(
             if (migratedVersion == 1 && newVersion >= 2) {
                 db.execSQL("ALTER TABLE $TABLE_MESSAGES RENAME TO chat_messages_v1")
                 db.execSQL("DROP INDEX IF EXISTS chat_messages_thread_time_idx")
-                createMessagesTable(db)
-                db.execSQL("INSERT INTO $TABLE_MESSAGES SELECT * FROM chat_messages_v1")
+                createMessagesTable(db, canonicalIdentityRequired = false)
+                db.execSQL(
+                    """
+                    INSERT INTO $TABLE_MESSAGES(
+                        local_message_id, thread_id, role, sender, content, created_at_epoch_ms,
+                        received_at_epoch_ms, status, runtime, adapter_id
+                    ) SELECT
+                        local_message_id, thread_id, role, sender, content, created_at_epoch_ms,
+                        received_at_epoch_ms, status, runtime, adapter_id
+                    FROM chat_messages_v1
+                    """.trimIndent(),
+                )
                 db.execSQL("DROP TABLE chat_messages_v1")
                 createAttachmentsTable(db)
                 migratedVersion = 3
@@ -547,16 +567,22 @@ class SQLiteLocalChatMessageRepository(
                 createToolDetailsTable(db)
                 migratedVersion = 6
             }
+            if (migratedVersion == 6 && newVersion >= 7) {
+                migrateMessageIdentity(db)
+                migratedVersion = 7
+            }
             if (migratedVersion != newVersion) {
                 error("A non-destructive chat history migration is required from version $oldVersion to $newVersion")
             }
         }
 
-        private fun createMessagesTable(db: SQLiteDatabase) {
+        private fun createMessagesTable(db: SQLiteDatabase, canonicalIdentityRequired: Boolean = true) {
+            val canonicalIdentityColumn = if (canonicalIdentityRequired) "message_id TEXT NOT NULL" else "message_id TEXT"
             db.execSQL(
                 """
                 CREATE TABLE $TABLE_MESSAGES (
                     local_message_id TEXT PRIMARY KEY NOT NULL,
+                    $canonicalIdentityColumn,
                     thread_id TEXT NOT NULL,
                     role TEXT NOT NULL CHECK(role IN ('User', 'Assistant')),
                     sender TEXT NOT NULL,
@@ -570,6 +596,9 @@ class SQLiteLocalChatMessageRepository(
                 """.trimIndent(),
             )
             db.execSQL("CREATE INDEX chat_messages_thread_time_idx ON $TABLE_MESSAGES(thread_id, created_at_epoch_ms)")
+            if (canonicalIdentityRequired) {
+                db.execSQL("CREATE UNIQUE INDEX chat_messages_message_id_idx ON $TABLE_MESSAGES(message_id)")
+            }
         }
 
         private fun createAttachmentsTable(db: SQLiteDatabase) {
@@ -613,6 +642,8 @@ class SQLiteLocalChatMessageRepository(
                     canonical_thread_id TEXT NOT NULL,
                     user_message_id TEXT NOT NULL,
                     assistant_message_id TEXT NOT NULL,
+                    user_canonical_message_id TEXT NOT NULL,
+                    assistant_canonical_message_id TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('Running', 'Completed', 'Failed')),
                     last_error TEXT,
                     persona_version INTEGER,
@@ -624,6 +655,84 @@ class SQLiteLocalChatMessageRepository(
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS chat_executions_status_idx ON $TABLE_EXECUTIONS(status, updated_at_epoch_ms)")
         }
+
+        private fun migrateMessageIdentity(db: SQLiteDatabase) {
+            if (!columnExists(db, TABLE_MESSAGES, "message_id")) {
+                db.execSQL("ALTER TABLE $TABLE_MESSAGES ADD COLUMN message_id TEXT")
+            }
+            db.query(
+                TABLE_MESSAGES,
+                arrayOf("local_message_id"),
+                "message_id IS NULL OR trim(message_id) = ''",
+                null,
+                null,
+                null,
+                "created_at_epoch_ms ASC, rowid ASC",
+            ).use { cursor ->
+                val update = db.compileStatement(
+                    "UPDATE $TABLE_MESSAGES SET message_id=? WHERE local_message_id=? AND (message_id IS NULL OR trim(message_id)='')",
+                )
+                while (cursor.moveToNext()) {
+                    update.clearBindings()
+                    update.bindString(1, newMessageId())
+                    update.bindString(2, cursor.getString(0))
+                    check(update.executeUpdateDelete() == 1) { "Could not backfill canonical message identity" }
+                }
+            }
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_message_id_idx ON $TABLE_MESSAGES(message_id)")
+
+            if (!columnExists(db, TABLE_EXECUTIONS, "user_canonical_message_id")) {
+                db.execSQL("ALTER TABLE $TABLE_EXECUTIONS ADD COLUMN user_canonical_message_id TEXT")
+            }
+            if (!columnExists(db, TABLE_EXECUTIONS, "assistant_canonical_message_id")) {
+                db.execSQL("ALTER TABLE $TABLE_EXECUTIONS ADD COLUMN assistant_canonical_message_id TEXT")
+            }
+            db.query(
+                TABLE_EXECUTIONS,
+                arrayOf("execution_id", "user_message_id", "assistant_message_id", "user_canonical_message_id", "assistant_canonical_message_id"),
+                null,
+                null,
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                val update = db.compileStatement(
+                    "UPDATE $TABLE_EXECUTIONS SET user_canonical_message_id=?, assistant_canonical_message_id=? WHERE execution_id=?",
+                )
+                while (cursor.moveToNext()) {
+                    val userCanonical = cursor.getString(3)?.takeIf(::isMessageId)
+                        ?: canonicalMessageId(db, cursor.getString(1))
+                        ?: newMessageId()
+                    val assistantCanonical = cursor.getString(4)?.takeIf(::isMessageId)
+                        ?: canonicalMessageId(db, cursor.getString(2))
+                        ?: newMessageId()
+                    update.clearBindings()
+                    update.bindString(1, userCanonical)
+                    update.bindString(2, assistantCanonical)
+                    update.bindString(3, cursor.getString(0))
+                    check(update.executeUpdateDelete() == 1) { "Could not backfill execution message identity" }
+                }
+            }
+        }
+
+        private fun canonicalMessageId(db: SQLiteDatabase, localMessageId: String): String? =
+            db.query(
+                TABLE_MESSAGES,
+                arrayOf("message_id"),
+                "local_message_id=?",
+                arrayOf(localMessageId),
+                null,
+                null,
+                null,
+                "1",
+            ).use { cursor -> cursor.takeIf { it.moveToFirst() }?.getString(0)?.takeIf(::isMessageId) }
+
+        private fun columnExists(db: SQLiteDatabase, table: String, column: String): Boolean =
+            db.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                generateSequence { cursor.takeIf { it.moveToNext() } }
+                    .any { cursor.getString(nameIndex) == column }
+            }
 
         private fun createProcessEventsTable(db: SQLiteDatabase) {
             db.execSQL(
@@ -695,7 +804,7 @@ class SQLiteLocalChatMessageRepository(
 
     private companion object {
         const val DATABASE_NAME = "lovehouse_chat.db"
-        const val DATABASE_VERSION = 6
+        const val DATABASE_VERSION = 7
         const val TABLE_MESSAGES = "chat_messages"
         const val TABLE_ATTACHMENTS = "chat_message_attachments"
         const val TABLE_EXECUTIONS = "chat_executions"
@@ -704,6 +813,7 @@ class SQLiteLocalChatMessageRepository(
         const val MAX_TOOL_DETAIL_BYTES = 256 * 1024
         val MESSAGE_COLUMNS = arrayOf(
             "local_message_id",
+            "message_id",
             "thread_id",
             "role",
             "sender",
@@ -716,7 +826,8 @@ class SQLiteLocalChatMessageRepository(
         )
         val EXECUTION_COLUMNS = arrayOf(
             "execution_id", "local_thread_id", "provider", "canonical_thread_id",
-            "user_message_id", "assistant_message_id", "status", "last_error",
+            "user_message_id", "assistant_message_id", "user_canonical_message_id", "assistant_canonical_message_id",
+            "status", "last_error",
             "persona_version", "reanchor_intent", "created_at_epoch_ms", "updated_at_epoch_ms",
         )
         val PROCESS_EVENT_COLUMNS = arrayOf(
