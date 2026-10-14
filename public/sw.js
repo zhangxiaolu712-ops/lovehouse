@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lovehouse-shell-v2'
+const CACHE_NAME = 'lovehouse-shell-v3'
 const APP_ROOT = new URL('./', self.registration.scope).toString()
 const SHELL_FILES = [
   APP_ROOT,
@@ -34,7 +34,7 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET' || url.origin !== self.location.origin) return
 
   event.respondWith(
-    fetch(request)
+    fetch(request, request.mode === 'navigate' ? { cache: 'no-store' } : undefined)
       .then(response => {
         if (response.ok) {
           const copy = response.clone()
