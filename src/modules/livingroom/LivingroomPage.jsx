@@ -3,8 +3,9 @@ import { Link } from 'react-router'
 import { supabase } from '../../core/supabase'
 import LineIcon from '../../shared/LineIcon'
 import { readLivingroom } from './livingroomApi'
+import { mergeLivingroomMessages, readLivingroomCache, writeLivingroomCache } from './livingroomCache'
 
-const POLL_MS = 5_000
+const POLL_MS = 30_000
 const HOUSE_TIME_ZONE = 'Asia/Shanghai'
 const TICKET_MARKER = /工单|任务卡|功能需求|升级需求|补充需求|完成报告/
 
@@ -162,62 +163,144 @@ export default function LivingroomPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [ticketsOpen, setTicketsOpen] = useState(false)
+  const [syncReady, setSyncReady] = useState(false)
   const listRef = useRef(null)
+  const messagesRef = useRef([])
   const lastCreatedAtRef = useRef('')
+  const ownerIdRef = useRef('')
+  const syncInFlightRef = useRef(false)
   const didInitRef = useRef(false)
 
   const tickets = useMemo(() => collectTickets(messages), [messages])
 
-  const ownerAccessToken = useCallback(async () => {
+  const ownerSession = useCallback(async () => {
     const { data, error: sessionError } = await supabase.auth.getSession()
     if (sessionError || !data.session?.access_token) throw new Error('Owner session is unavailable')
-    return data.session.access_token
+    if (!data.session.user?.id) throw new Error('Owner identity is unavailable')
+    return { accessToken: data.session.access_token, ownerId: data.session.user.id }
   }, [])
 
-  const loadMessages = useCallback(async ({ quiet = false } = {}) => {
-    if (quiet) setRefreshing(true)
-    else setLoading(true)
+  const displayMessages = useCallback((ownerId, rows, { persist = true } = {}) => {
+    const bounded = mergeLivingroomMessages(rows)
+    ownerIdRef.current = ownerId
+    messagesRef.current = bounded
+    lastCreatedAtRef.current = bounded.at(-1)?.created_at || ''
+    setMessages(bounded)
+    if (persist) writeLivingroomCache(ownerId, bounded).catch(() => {})
+    return bounded
+  }, [])
+
+  const hydrateOwner = useCallback(async ({ accessToken, ownerId }) => {
+    ownerIdRef.current = ownerId
+    let cached = []
     try {
-      const accessToken = await ownerAccessToken()
-      const data = await readLivingroom({ accessToken, limit: 200 })
+      cached = await readLivingroomCache(ownerId)
+    } catch {
+      cached = []
+    }
+
+    if (cached.length) {
+      displayMessages(ownerId, cached, { persist: false })
+      setLoading(false)
+      try {
+        const incremental = await readLivingroom({
+          accessToken,
+          limit: 200,
+          since: cached.at(-1).created_at,
+        })
+        displayMessages(ownerId, mergeLivingroomMessages(cached, incremental))
+        setError('')
+      } catch {
+        setError('已显示本地缓存；小客厅增量同步暂时没有连上。')
+      }
+      return
+    }
+
+    try {
+      const bootstrap = await readLivingroom({ accessToken, limit: 200 })
+      displayMessages(ownerId, bootstrap)
       setError('')
-      setMessages(data)
-      lastCreatedAtRef.current = data.at(-1)?.created_at || ''
     } catch {
       setError('小客厅暂时没有连上，请稍后再试。')
+    }
+  }, [displayMessages])
+
+  const syncIncremental = useCallback(async ({ manual = false } = {}) => {
+    if (syncInFlightRef.current) return
+    syncInFlightRef.current = true
+    if (manual) setRefreshing(true)
+    try {
+      const session = await ownerSession()
+      if (ownerIdRef.current !== session.ownerId) {
+        messagesRef.current = []
+        lastCreatedAtRef.current = ''
+        setMessages([])
+        setLoading(true)
+        await hydrateOwner(session)
+      } else if (!lastCreatedAtRef.current) {
+        setLoading(messagesRef.current.length === 0)
+        await hydrateOwner(session)
+      } else {
+        const incremental = await readLivingroom({
+          accessToken: session.accessToken,
+          limit: 200,
+          since: lastCreatedAtRef.current,
+        })
+        displayMessages(session.ownerId, mergeLivingroomMessages(messagesRef.current, incremental))
+        setError('')
+      }
+    } catch {
+      setError(manual ? '手动刷新暂时没有连上，请稍后重试。' : '小客厅自动刷新暂时中断，可以手动重试。')
     } finally {
       setLoading(false)
       setRefreshing(false)
+      syncInFlightRef.current = false
     }
-  }, [ownerAccessToken])
-
-  const pollNew = useCallback(async () => {
-    if (!lastCreatedAtRef.current) return
-    try {
-      const accessToken = await ownerAccessToken()
-      const data = await readLivingroom({ accessToken, limit: 200, since: lastCreatedAtRef.current })
-      if (data.length) {
-        setMessages(previous => {
-          const known = new Set(previous.map(item => String(item.id)))
-          return [...previous, ...data.filter(item => !known.has(String(item.id)))]
-        })
-        lastCreatedAtRef.current = data.at(-1).created_at
-      }
-    } catch {
-      setError('小客厅自动刷新暂时中断，可以手动重试。')
-    }
-  }, [ownerAccessToken])
+  }, [displayMessages, hydrateOwner, ownerSession])
 
   useEffect(() => {
     if (didInitRef.current) return
     didInitRef.current = true
-    loadMessages()
-  }, [loadMessages])
+    setLoading(true)
+    ownerSession()
+      .then(hydrateOwner)
+      .catch(() => setError('小客厅暂时没有连上，请稍后再试。'))
+      .finally(() => {
+        setLoading(false)
+        setSyncReady(true)
+      })
+  }, [hydrateOwner, ownerSession])
 
   useEffect(() => {
-    const interval = setInterval(pollNew, POLL_MS)
-    return () => clearInterval(interval)
-  }, [pollNew])
+    if (!syncReady) return undefined
+    let interval
+
+    const stopPolling = () => {
+      if (interval) clearInterval(interval)
+      interval = undefined
+    }
+    const startPolling = () => {
+      stopPolling()
+      if (document.visibilityState === 'visible') {
+        interval = setInterval(() => syncIncremental(), POLL_MS)
+      }
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        stopPolling()
+        return
+      }
+      syncIncremental()
+      startPolling()
+    }
+
+    startPolling()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      stopPolling()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [syncIncremental, syncReady])
 
   useEffect(() => {
     const list = listRef.current
@@ -303,7 +386,7 @@ export default function LivingroomPage() {
         {error && <div className="livingroom-error" role="status">{error}</div>}
         <div className="livingroom-readonly-row">
           <span>现役工作区 · 只读查看</span>
-          <button type="button" className="livingroom-refresh" disabled={refreshing} onClick={() => loadMessages({ quiet: true })}>
+          <button type="button" className="livingroom-refresh" disabled={refreshing} onClick={() => syncIncremental({ manual: true })}>
             {refreshing ? '刷新中…' : '刷新'}
           </button>
         </div>
