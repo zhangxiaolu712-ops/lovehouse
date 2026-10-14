@@ -111,6 +111,7 @@ class ChatSessionStore(
     private val recoveringExecutionIds = ConcurrentHashMap.newKeySet<String>()
 
     init {
+        conversationPersonas.setThreadAlias("agent-codex", stableCodexThreadId())
         messagesByThread["persona-gpt"] = mutableStateListOf()
         messagesByThread["living-room"] = mutableStateListOf()
         // The production Codex window starts empty: assistant text must only
@@ -136,6 +137,9 @@ class ChatSessionStore(
     fun thread(threadId: String): ChatThreadSummary? = threads.firstOrNull { it.threadId == threadId }
     fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? {
         if (thread(canonicalThreadId) != null) return canonicalThreadId
+        conversationPersonas.localAliasForCanonicalThread(canonicalThreadId)
+            ?.takeIf { thread(it) != null }
+            ?.let { return it }
         val localThreadId = runCatching {
             messageRepository.localThreadIdForCanonicalThread(canonicalThreadId)
         }.getOrNull() ?: return null
@@ -382,10 +386,14 @@ class ChatSessionStore(
         val displayBody = body.trim()
         val previewBody = displayBody.ifEmpty { attachments.joinToString(" · ", transform = ChatAttachment::displaySummary) }
         val canonicalThreadId = runtime.threadId
+        conversationPersonas.setThreadAlias(localThreadId, canonicalThreadId)
         val userId = "user:$executionId"
+        val userCanonicalMessageId = newMessageId()
+        val assistantCanonicalMessageId = newMessageId()
         val createdAt = now()
         var user = LocalChatMessage(
             localMessageId = userId,
+            messageId = userCanonicalMessageId,
             threadId = canonicalThreadId,
             role = LocalChatRole.User,
             sender = "owner",
@@ -461,6 +469,8 @@ class ChatSessionStore(
                 reanchorIntent = turnSnapshot?.reanchorIntent == true,
                 createdAtEpochMillis = createdAt,
                 updatedAtEpochMillis = createdAt,
+                userCanonicalMessageId = userCanonicalMessageId,
+                assistantCanonicalMessageId = assistantCanonicalMessageId,
             )
             withContext(Dispatchers.IO) { messageRepository.upsertExecution(execution) }
             val result = withContext(Dispatchers.IO) {
@@ -471,6 +481,7 @@ class ChatSessionStore(
                     requestedToolIds = requestedToolIds,
                     attachments = attachments,
                     personaRuntime = turnSnapshot,
+                    messageIdentity = ChatMessageIdentity(userCanonicalMessageId, assistantCanonicalMessageId),
                     onStarted = {
                         remoteStarted = true
                         user = user.copy(status = LocalChatDeliveryStatus.Sent)
@@ -501,6 +512,7 @@ class ChatSessionStore(
             user = user.copy(status = LocalChatDeliveryStatus.Sent)
             val assistant = LocalChatMessage(
                 localMessageId = assistantId,
+                messageId = assistantCanonicalMessageId,
                 threadId = canonicalThreadId,
                 role = LocalChatRole.Assistant,
                 sender = runtime.personaId,
@@ -550,6 +562,7 @@ class ChatSessionStore(
             if (assistantText.isNotBlank()) {
                 val failedAssistant = LocalChatMessage(
                     localMessageId = assistantId,
+                    messageId = assistantCanonicalMessageId,
                     threadId = canonicalThreadId,
                     role = LocalChatRole.Assistant,
                     sender = runtime.personaId,
@@ -698,6 +711,7 @@ class ChatSessionStore(
         val receivedAt = now()
         val assistant = LocalChatMessage(
             localMessageId = execution.assistantMessageId,
+            messageId = execution.assistantCanonicalMessageId,
             threadId = execution.canonicalThreadId,
             role = LocalChatRole.Assistant,
             sender = execution.provider,

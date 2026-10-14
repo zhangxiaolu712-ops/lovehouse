@@ -15,6 +15,7 @@ import fyi.b612.lovehouse.feature.chat.LocalChatExecution
 import fyi.b612.lovehouse.feature.chat.LocalChatExecutionStatus
 import fyi.b612.lovehouse.feature.chat.LocalChatMessage
 import fyi.b612.lovehouse.feature.chat.LocalChatRole
+import fyi.b612.lovehouse.feature.chat.isMessageId
 import fyi.b612.lovehouse.feature.chat.SQLiteLocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.TOOL_DETAIL_CACHE_TTL_MILLIS
 import fyi.b612.lovehouse.feature.chat.ToolDetailEnvelope
@@ -105,6 +106,8 @@ class ChatHistoryMigrationTest {
         val reopened = SQLiteLocalChatMessageRepository(context, databaseName)
         val messages = reopened.messages("thread")
         assertEquals(listOf("old-text", "new-media"), messages.map { it.localMessageId })
+        assertTrue(messages.all { isMessageId(it.messageId) })
+        val canonicalIds = messages.map(LocalChatMessage::messageId)
         assertEquals(1, messages.last().attachments.size)
         assertTrue(messages.last().content.isEmpty())
         assertEquals("11111111-1111-4111-8111-111111111111", reopened.pendingExecutions().single().executionId)
@@ -112,6 +115,10 @@ class ChatHistoryMigrationTest {
         assertEquals(null, reopened.localThreadIdForCanonicalThread("missing-canonical-thread"))
         assertTrue(reopened.messages("thread").all { it.processEvents.isEmpty() })
         reopened.close()
+
+        val reopenedAgain = SQLiteLocalChatMessageRepository(context, databaseName)
+        assertEquals(canonicalIds, reopenedAgain.messages("thread").map(LocalChatMessage::messageId))
+        reopenedAgain.close()
         context.deleteDatabase(databaseName)
     }
 

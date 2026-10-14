@@ -30,6 +30,17 @@ data class ChatRuntimeConfig(
         get() = attachmentCapabilities.supported
 }
 
+data class ChatMessageIdentity(
+    val userMessageId: String,
+    val assistantMessageId: String,
+) {
+    init {
+        require(isMessageId(userMessageId)) { "user message_id must be UUIDv7" }
+        require(isMessageId(assistantMessageId)) { "assistant message_id must be UUIDv7" }
+        require(userMessageId != assistantMessageId) { "user and assistant message_id must differ" }
+    }
+}
+
 data class CodexToolCallEvidence(
     val name: String,
     val status: String,
@@ -272,6 +283,7 @@ interface CodexChatClient {
         requestedToolIds: Set<String>,
         attachments: List<ChatAttachment>,
         personaRuntime: PersonaRuntimeSnapshot?,
+        messageIdentity: ChatMessageIdentity? = null,
         onStarted: () -> Unit,
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
@@ -335,12 +347,13 @@ class HttpCodexChatClient(
         requestedToolIds: Set<String>,
         attachments: List<ChatAttachment>,
         personaRuntime: PersonaRuntimeSnapshot?,
+        messageIdentity: ChatMessageIdentity?,
         onStarted: () -> Unit,
         onText: (String) -> Unit,
         onProcess: (ChatProcessEvent) -> Unit,
     ): CodexChatResult = streamInternal(
         config, message, requestedToolIds, attachments, onText, onProcess, personaRuntime,
-        executionId = executionId, onStarted = onStarted,
+        executionId = executionId, messageIdentity = messageIdentity, onStarted = onStarted,
     )
 
     override suspend fun chatExecution(executionId: String): ChatExecutionRemoteSnapshot {
@@ -384,6 +397,7 @@ class HttpCodexChatClient(
         onProcess: (ChatProcessEvent) -> Unit,
         personaRuntime: PersonaRuntimeSnapshot? = null,
         executionId: String? = null,
+        messageIdentity: ChatMessageIdentity? = null,
         onStarted: () -> Unit = {},
     ): CodexChatResult {
         require(config.attachmentsEnabled || attachments.isEmpty()) { "${config.personaId} Runtime 尚未启用附件" }
@@ -411,6 +425,7 @@ class HttpCodexChatClient(
             personaRuntime,
             traceId,
             executionId,
+            messageIdentity,
         )
         Log.i(
             "RuntimeProvenance",
@@ -574,6 +589,7 @@ internal fun buildChatPayload(
     personaRuntime: PersonaRuntimeSnapshot? = null,
     traceId: String? = null,
     executionId: String? = null,
+    messageIdentity: ChatMessageIdentity? = null,
 ): String {
     val tools = allowedToolIds.sorted().joinToString(",") { "\"${jsonEscape(it)}\"" }
     val toolField = if (config.toolCenterEnabled && allowedToolIds.isNotEmpty()) "\"allowed_tool_ids\":[$tools]," else ""
@@ -590,7 +606,11 @@ internal fun buildChatPayload(
     }.orEmpty()
     val traceField = traceId?.let { "\"trace_id\":\"${jsonEscape(it)}\"," }.orEmpty()
     val executionField = executionId?.let { "\"execution_id\":\"${jsonEscape(it)}\"," }.orEmpty()
-    return """{$traceField$executionField"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$personaField$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
+    val identityField = messageIdentity?.let {
+        "\"user_message_id\":\"${jsonEscape(it.userMessageId)}\"," +
+            "\"assistant_message_id\":\"${jsonEscape(it.assistantMessageId)}\","
+    }.orEmpty()
+    return """{$traceField$executionField$identityField"persona_id":"${config.personaId}","thread_id":"${config.threadId}","window_id":"${config.windowId}","scene":"work",$personaField$toolField"message":{"type":"text","text":"${jsonEscape(message)}"$attachmentField}}"""
 }
 
 internal fun androidRuntimeProvenanceJson(
