@@ -34,7 +34,7 @@ export function createAppIdentityVerifier({
       if (!response.ok) throw new Error(`App Identity unavailable: HTTP ${response.status}`)
       return verifiedUser(await response.json())
     },
-    async verifySession(cookieHeader) {
+    async verifySession(cookieHeader, messageIdentity = null) {
       if (typeof cookieHeader !== 'string' || !cookieHeader) return null
       const controller = new AbortController()
       let rejectTimeout
@@ -48,14 +48,25 @@ export function createAppIdentityVerifier({
         const response = await Promise.race([
           fetchImpl(sessionEndpoint, {
             method: 'POST',
-            headers: { Cookie: cookieHeader, 'X-LoveHouse-Internal-Key': internalKey },
+            headers: {
+              Cookie: cookieHeader,
+              'X-LoveHouse-Internal-Key': internalKey,
+              ...(messageIdentity ? { 'Content-Type': 'application/json' } : {}),
+            },
+            ...(messageIdentity ? { body: JSON.stringify({ message_identity: messageIdentity }) } : {}),
             signal: controller.signal,
           }),
           timedOut,
         ])
         if (response.status === 401) return null
-        if (!response.ok) throw new Error(`App Identity unavailable: HTTP ${response.status}`)
-        return verifiedUser(await response.json())
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          const error = new Error(`App Identity unavailable: HTTP ${response.status}`)
+          error.code = payload?.error?.code || 'APP_IDENTITY_UNAVAILABLE'
+          error.status = response.status
+          throw error
+        }
+        return verifiedUser(payload)
       } catch (error) {
         if (controller.signal.aborted) {
           throw Object.assign(new Error('App Identity verification timed out'), { code: 'APP_IDENTITY_TIMEOUT' })

@@ -1,4 +1,5 @@
 import pg from 'pg'
+import { isUuidV7, newUuidV7 } from './messageIdentity.js'
 
 const LIVINGROOM_TABLE = 'livingroom'
 const LIVINGROOM_FENCE = Symbol('lovehouse.livingroom.fence')
@@ -72,7 +73,7 @@ export function createLivingroomRest({ rest }) {
 const LIVINGROOM_READ_SQL = `
   select coalesce(jsonb_agg(to_jsonb(room) order by room.created_at desc), '[]'::jsonb) as result
   from (
-    select id, sender, message, created_at
+    select id, message_id, thread_id, sender, message, created_at
     from public.livingroom
     where ($1::timestamptz is null or created_at > $1::timestamptz)
     order by created_at desc
@@ -82,13 +83,74 @@ const LIVINGROOM_READ_SQL = `
 
 const LIVINGROOM_WRITE_SQL = `
   with inserted as (
-    insert into public.livingroom (sender, message)
-    values ($1::text, $2::text)
-    returning id, sender, message, created_at
+    insert into public.livingroom (sender, message, message_id, thread_id)
+    values ($1::text, $2::text, $3::uuid, $4::uuid)
+    returning id, message_id, thread_id, sender, message, created_at
   )
   select to_jsonb(inserted) as result
   from inserted
 `
+
+export async function preparePostgresLivingroomIdentity({ pool, createUuid = () => newUuidV7() } = {}) {
+  if (!pool || typeof pool.connect !== 'function') throw new TypeError('PostgreSQL pool is required')
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    await client.query('alter table public.livingroom add column if not exists message_id uuid')
+    await client.query('alter table public.livingroom add column if not exists thread_id uuid')
+    await client.query(`
+      create table if not exists public.livingroom_identity_scopes (
+        scope text primary key check (scope = 'work-area'),
+        thread_id uuid not null unique,
+        created_at timestamptz not null default now()
+      )
+    `)
+    await client.query(`
+      insert into public.livingroom_identity_scopes(scope, thread_id)
+      values ('work-area', $1::uuid)
+      on conflict (scope) do nothing
+    `, [createUuid()])
+    const scope = await client.query(
+      "select thread_id::text as thread_id from public.livingroom_identity_scopes where scope='work-area'",
+    )
+    const workAreaThreadId = scope.rows[0]?.thread_id
+    if (!isUuidV7(workAreaThreadId)) throw new Error('LivingRoom work-area thread identity is unavailable')
+    const recent = await client.query(`
+      select id, message_id::text as message_id, thread_id::text as thread_id
+      from public.livingroom
+      order by created_at desc, id desc
+      limit 30
+      for update
+    `)
+    let backfilled = 0
+    for (const row of recent.rows) {
+      const messageId = row.message_id || createUuid()
+      if (!isUuidV7(messageId)) throw new Error('LivingRoom contains an invalid canonical message identity')
+      if (row.thread_id && row.thread_id !== workAreaThreadId) {
+        throw new Error('LivingRoom message is bound to another canonical thread')
+      }
+      if (!row.message_id || !row.thread_id) {
+        await client.query(`
+          update public.livingroom
+          set message_id=coalesce(message_id, $1::uuid), thread_id=coalesce(thread_id, $2::uuid)
+          where id=$3
+        `, [messageId, workAreaThreadId, row.id])
+        backfilled += 1
+      }
+    }
+    await client.query(`
+      create unique index if not exists livingroom_message_id_unique
+      on public.livingroom(message_id) where message_id is not null
+    `)
+    await client.query('commit')
+    return Object.freeze({ workAreaThreadId, backfilled, recentCount: recent.rows.length })
+  } catch (error) {
+    await client.query('rollback').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
 
 function parseLivingroomReadPath(path) {
   const [table, query = ''] = String(path || '').split('?', 2)
@@ -134,10 +196,14 @@ export function createPostgresLivingroomWriteCutover({
   legacy,
   connectionString,
   pool = null,
+  identity,
   ssl = { rejectUnauthorized: false },
 }) {
   if (!isLivingroomRest(legacy)) throw new TypeError('A fenced livingroom REST function is required')
   if (!pool && !connectionString) throw new TypeError('LIFE_MEMORY_READ_DATABASE_URL is required')
+  if (!identity || !isUuidV7(identity.workAreaThreadId)) {
+    throw new TypeError('LivingRoom work-area identity is required')
+  }
   const postgresPool = pool || new pg.Pool({ connectionString, ssl, max: 5, idleTimeoutMillis: 30_000 })
 
   const livingroomRest = async function livingroomRest(method, path, body) {
@@ -145,7 +211,11 @@ export function createPostgresLivingroomWriteCutover({
     if (normalizedMethod === 'GET') return legacy(normalizedMethod, path, body)
     if (normalizedMethod !== 'POST' || String(path || '') !== LIVINGROOM_TABLE) throw scopeViolation()
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw scopeViolation()
-    const result = await postgresPool.query(LIVINGROOM_WRITE_SQL, [body.sender, body.message])
+    const messageId = body.message_id == null ? newUuidV7() : body.message_id
+    if (!isUuidV7(messageId)) throw scopeViolation()
+    const result = await postgresPool.query(LIVINGROOM_WRITE_SQL, [
+      body.sender, body.message, messageId, identity.workAreaThreadId,
+    ])
     const row = result.rows[0]?.result
     return validateLivingroomRows(row ? [row] : [], {
       operation: 'write',

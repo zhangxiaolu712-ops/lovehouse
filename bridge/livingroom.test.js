@@ -6,7 +6,12 @@ import {
   createPostgresLivingroomReadCutover,
   createPostgresLivingroomWriteCutover,
   isLivingroomRest,
+  preparePostgresLivingroomIdentity,
 } from './livingroom.js'
+import { isUuidV7 } from './messageIdentity.js'
+
+const WORK_AREA_THREAD_ID = '0199db1d-6c00-7000-8000-000000000000'
+const NEW_MESSAGE_ID = '0199db1d-6c00-7001-8001-000000000001'
 
 test('privileged livingroom REST allows only livingroom reads and inserts', async () => {
   const calls = []
@@ -121,7 +126,9 @@ test('PostgreSQL livingroom write cutover inserts through SQL and preserves sele
       } }] }
     },
   }
-  const adapter = createPostgresLivingroomWriteCutover({ legacy, pool })
+  const adapter = createPostgresLivingroomWriteCutover({
+    legacy, pool, identity: { workAreaThreadId: WORK_AREA_THREAD_ID },
+  })
 
   const read = await adapter('GET', 'livingroom?order=created_at.desc&limit=20')
   const written = await adapter('POST', 'livingroom', { sender: 'GPT', message: 'written' })
@@ -130,8 +137,11 @@ test('PostgreSQL livingroom write cutover inserts through SQL and preserves sele
   assert.deepEqual(read, [])
   assert.deepEqual(legacyCalls, [['GET', 'livingroom?order=created_at.desc&limit=20', undefined]])
   assert.match(poolCalls[0].text, /insert into public\.livingroom/)
-  assert.match(poolCalls[0].text, /returning id, sender, message, created_at/)
-  assert.deepEqual(poolCalls[0].values, ['GPT', 'written'])
+  assert.match(poolCalls[0].text, /returning id, message_id, thread_id, sender, message, created_at/)
+  assert.equal(poolCalls[0].values[0], 'GPT')
+  assert.equal(poolCalls[0].values[1], 'written')
+  assert.equal(isUuidV7(poolCalls[0].values[2]), true)
+  assert.equal(poolCalls[0].values[3], WORK_AREA_THREAD_ID)
   assert.equal(written[0].id, 9)
 })
 
@@ -140,6 +150,7 @@ test('PostgreSQL livingroom write cutover rejects other mutations and unconfirme
   const adapter = createPostgresLivingroomWriteCutover({
     legacy,
     pool: { query: async () => ({ rows: [] }) },
+    identity: { workAreaThreadId: WORK_AREA_THREAD_ID },
   })
 
   await assert.rejects(adapter('PATCH', 'livingroom', {}), /restricted/)
@@ -148,4 +159,82 @@ test('PostgreSQL livingroom write cutover rejects other mutations and unconfirme
     adapter('POST', 'livingroom', { sender: 'GPT', message: 'missing result' }),
     error => error.code === 'LIVINGROOM_WRITE_NOT_CONFIRMED',
   )
+})
+
+test('PostgreSQL livingroom write preserves a caller UUIDv7 and never replaces the numeric legacy id', async () => {
+  const calls = []
+  const adapter = createPostgresLivingroomWriteCutover({
+    legacy: createLivingroomRest({ rest: async () => [] }),
+    identity: { workAreaThreadId: WORK_AREA_THREAD_ID },
+    pool: { async query(text, values) {
+      calls.push({ text, values })
+      return { rows: [{ result: {
+        id: 214,
+        message_id: values[2],
+        thread_id: values[3],
+        sender: values[0],
+        message: values[1],
+        created_at: '2026-10-13T00:00:00.000Z',
+      } }] }
+    } },
+  })
+
+  const [row] = await adapter('POST', 'livingroom', {
+    sender: 'GPT', message: 'hello', message_id: NEW_MESSAGE_ID,
+  })
+
+  assert.equal(row.id, 214)
+  assert.equal(row.message_id, NEW_MESSAGE_ID)
+  assert.equal(row.thread_id, WORK_AREA_THREAD_ID)
+  assert.deepEqual(calls[0].values, ['GPT', 'hello', NEW_MESSAGE_ID, WORK_AREA_THREAD_ID])
+})
+
+test('LivingRoom identity preparation persists one work-area thread and backfills only latest 30 idempotently', async () => {
+  const rows = Array.from({ length: 31 }, (_, index) => ({
+    id: 31 - index,
+    message_id: index === 0 ? NEW_MESSAGE_ID : null,
+    thread_id: index === 0 ? WORK_AREA_THREAD_ID : null,
+  }))
+  let storedThreadId = null
+  const updates = new Map()
+  const statements = []
+  const client = {
+    async query(text, values = []) {
+      statements.push({ text, values })
+      if (/insert into public\.livingroom_identity_scopes/i.test(text) && !storedThreadId) storedThreadId = values[0]
+      if (/select thread_id::text/i.test(text)) return { rows: [{ thread_id: storedThreadId }] }
+      if (/from public\.livingroom\s+order by/i.test(text)) return { rows: rows.slice(0, 30).map(row => ({ ...row })) }
+      if (/update public\.livingroom/i.test(text)) {
+        updates.set(values[2], { message_id: values[0], thread_id: values[1] })
+      }
+      return { rows: [] }
+    },
+    release() {},
+  }
+  const pool = { async connect() { return client } }
+  let sequence = 2
+  const createUuid = () => {
+    if (sequence++ === 2) return WORK_AREA_THREAD_ID
+    return `0199db1d-6c00-7${String(sequence).padStart(3, '0')}-8000-${String(sequence).padStart(12, '0')}`
+  }
+
+  const first = await preparePostgresLivingroomIdentity({ pool, createUuid })
+  assert.equal(first.workAreaThreadId, WORK_AREA_THREAD_ID)
+  assert.equal(first.recentCount, 30)
+  assert.equal(first.backfilled, 29)
+  assert.equal(updates.size, 29)
+  assert.equal(updates.has(1), false)
+  assert.equal(statements.some(call => /limit 30/i.test(call.text)), true)
+
+  for (const [id, identity] of updates) {
+    const row = rows.find(candidate => candidate.id === id)
+    Object.assign(row, identity)
+  }
+  updates.clear()
+  const second = await preparePostgresLivingroomIdentity({ pool, createUuid })
+  assert.equal(second.workAreaThreadId, first.workAreaThreadId)
+  assert.equal(second.backfilled, 0)
+  assert.equal(updates.size, 0)
+  assert.equal(rows[30].message_id, null)
+  assert.equal(rows[30].thread_id, null)
 })

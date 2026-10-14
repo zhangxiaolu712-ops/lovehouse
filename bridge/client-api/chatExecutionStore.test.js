@@ -13,6 +13,8 @@ import {
 const OWNER = 'owner-user'
 const EXECUTION = '11111111-1111-4111-8111-111111111111'
 const THREAD = '22222222-2222-4222-8222-222222222222'
+const USER_MESSAGE = '0199db1d-6c00-7001-8001-000000000001'
+const ASSISTANT_MESSAGE = '0199db1d-6c00-7002-8002-000000000002'
 
 async function fixture(t, options = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-chat-execution-'))
@@ -105,6 +107,33 @@ test('verified App Account identity is fixed at first reserve without changing e
   const persisted = await readFile(filePath, 'utf8')
   assert.equal(persisted.includes('account-a'), true)
   assert.equal(persisted.includes('fake-session-secret'), false)
+})
+
+test('execution persists canonical user and assistant ids and rejects rebinding', async t => {
+  const { filePath, store } = await fixture(t)
+  const identity = {
+    ownerUserId: OWNER,
+    appAccountId: 'account-a',
+    executionId: '12121212-1212-4212-8212-121212121212',
+    threadId: THREAD,
+    provider: 'claude',
+    inputFingerprint: chatExecutionFingerprint({ turn: 'identity' }),
+    userMessageId: USER_MESSAGE,
+    assistantMessageId: ASSISTANT_MESSAGE,
+  }
+  const first = await store.reserve(identity)
+  const repeated = await store.reserve(identity)
+  assert.equal(repeated.created, false)
+  assert.equal(first.record.user_message_id, USER_MESSAGE)
+  assert.equal(first.record.assistant_message_id, ASSISTANT_MESSAGE)
+  await assert.rejects(
+    store.reserve({ ...identity, assistantMessageId: '0199db1d-6c00-7003-8003-000000000003' }),
+    error => error.code === 'EXECUTION_ID_CONFLICT' && error.status === 409,
+  )
+  const persisted = JSON.parse(await readFile(filePath, 'utf8'))
+  const record = Object.values(persisted.records)[0]
+  assert.equal(record.user_message_id, USER_MESSAGE)
+  assert.equal(record.assistant_message_id, ASSISTANT_MESSAGE)
 })
 
 test('execution created without verified identity never backfills owner on reconnect', async t => {

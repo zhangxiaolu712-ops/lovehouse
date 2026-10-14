@@ -44,6 +44,32 @@ test('App Identity verifier exchanges a session cookie through the internal cont
   assert.equal(JSON.stringify(await verifier.verifySession(credential)).includes(credential), false)
 })
 
+test('session verification carries canonical message metadata in the same existing request', async () => {
+  const calls = []
+  const verifier = createAppIdentityVerifier({
+    endpoint: 'http://127.0.0.1:3005/internal/identity/verify-credentials',
+    internalKey: 'internal-key',
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init })
+      return new Response(JSON.stringify({
+        authenticated: true,
+        user: { id: 'stable-app-account-id', email: 'owner@example.com' },
+        message_identity: { registered: true },
+      }), { status: 200 })
+    },
+  })
+  const messageIdentity = {
+    thread_id: '7c814f9a-7588-4e35-b4b6-a216f172c012',
+    user_message_id: '0199db1d-6c00-7001-8001-000000000001',
+    assistant_message_id: '0199db1d-6c00-7002-8002-000000000002',
+  }
+
+  await verifier.verifySession('lovehouse_app_session=<redacted>', messageIdentity)
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(JSON.parse(calls[0].init.body), { message_identity: messageIdentity })
+})
+
 test('App Identity session verification is bounded and invalid sessions return no identity', async () => {
   const invalid = createAppIdentityVerifier({
     endpoint: 'http://identity/internal/identity/verify-credentials', internalKey: 'key',
