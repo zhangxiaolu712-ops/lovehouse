@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { supabase } from '../../core/supabase'
 import LineIcon from '../../shared/LineIcon'
+import { readLivingroom } from './livingroomApi'
 
 const POLL_MS = 5_000
 const HOUSE_TIME_ZONE = 'Asia/Shanghai'
@@ -157,48 +158,55 @@ function TicketDrawer({ tickets, onClose, onOpenMessage }) {
 
 export default function LivingroomPage() {
   const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [ticketsOpen, setTicketsOpen] = useState(false)
   const listRef = useRef(null)
-  const lastIdRef = useRef(0)
+  const lastCreatedAtRef = useRef('')
   const didInitRef = useRef(false)
 
   const tickets = useMemo(() => collectTickets(messages), [messages])
 
-  const loadMessages = useCallback(async () => {
-    setLoading(true)
-    const { data, error: loadError } = await supabase
-      .from('livingroom')
-      .select('*')
-      .order('created_at', { ascending: true })
-      .limit(200)
-
-    if (loadError) {
-      setError('小客厅暂时没有连上，请稍后再试。')
-    } else {
-      setError('')
-      setMessages(data || [])
-      if (data?.length) lastIdRef.current = data[data.length - 1].id
-    }
-    setLoading(false)
+  const ownerAccessToken = useCallback(async () => {
+    const { data, error: sessionError } = await supabase.auth.getSession()
+    if (sessionError || !data.session?.access_token) throw new Error('Owner session is unavailable')
+    return data.session.access_token
   }, [])
+
+  const loadMessages = useCallback(async ({ quiet = false } = {}) => {
+    if (quiet) setRefreshing(true)
+    else setLoading(true)
+    try {
+      const accessToken = await ownerAccessToken()
+      const data = await readLivingroom({ accessToken, limit: 200 })
+      setError('')
+      setMessages(data)
+      lastCreatedAtRef.current = data.at(-1)?.created_at || ''
+    } catch {
+      setError('小客厅暂时没有连上，请稍后再试。')
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [ownerAccessToken])
 
   const pollNew = useCallback(async () => {
-    if (!lastIdRef.current) return
-    const { data } = await supabase
-      .from('livingroom')
-      .select('*')
-      .gt('id', lastIdRef.current)
-      .order('created_at', { ascending: true })
-
-    if (data?.length) {
-      setMessages(previous => [...previous, ...data])
-      lastIdRef.current = data[data.length - 1].id
+    if (!lastCreatedAtRef.current) return
+    try {
+      const accessToken = await ownerAccessToken()
+      const data = await readLivingroom({ accessToken, limit: 200, since: lastCreatedAtRef.current })
+      if (data.length) {
+        setMessages(previous => {
+          const known = new Set(previous.map(item => String(item.id)))
+          return [...previous, ...data.filter(item => !known.has(String(item.id)))]
+        })
+        lastCreatedAtRef.current = data.at(-1).created_at
+      }
+    } catch {
+      setError('小客厅自动刷新暂时中断，可以手动重试。')
     }
-  }, [])
+  }, [ownerAccessToken])
 
   useEffect(() => {
     if (didInitRef.current) return
@@ -224,34 +232,6 @@ export default function LivingroomPage() {
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [ticketsOpen])
-
-  async function send(event) {
-    event.preventDefault()
-    const text = input.trim()
-    if (!text || sending) return
-
-    setSending(true)
-    setInput('')
-    setError('')
-
-    try {
-      const { data, error: sendError } = await supabase
-        .from('livingroom')
-        .insert({ sender: '小婷', message: text })
-        .select()
-
-      if (sendError) throw sendError
-      if (data?.length) {
-        setMessages(previous => [...previous, ...data])
-        lastIdRef.current = data[data.length - 1].id
-      }
-    } catch {
-      setInput(text)
-      setError('消息没有送出去，内容已经替你保留。')
-    } finally {
-      setSending(false)
-    }
-  }
 
   function openTicketMessage(id) {
     setTicketsOpen(false)
@@ -308,27 +288,26 @@ export default function LivingroomPage() {
                 {!isMe && <span className="livingroom-sender">{message.sender}</span>}
                 <div className="livingroom-bubble">{message.message}</div>
                 <time dateTime={message.created_at}>{fmtTime(message.created_at)}</time>
+                <div className="livingroom-identity" aria-label="消息身份">
+                  <span>#{message.id}</span>
+                  <span>{message.message_id || 'legacy only'}</span>
+                  {message.thread_id && <span>thread {message.thread_id}</span>}
+                </div>
               </div>
             </article>
           )
         })}
       </div>
 
-      <form className="livingroom-compose" onSubmit={send}>
+      <div className="livingroom-readonly-bar">
         {error && <div className="livingroom-error" role="status">{error}</div>}
-        <div className="livingroom-compose-row">
-          <input
-            type="text"
-            value={input}
-            onChange={event => setInput(event.target.value)}
-            placeholder="在小客厅说点什么…"
-            aria-label="小客厅消息"
-          />
-          <button type="submit" className="livingroom-send" disabled={sending || !input.trim()} aria-label="发送消息">
-            <LineIcon name="send" size={18} />
+        <div className="livingroom-readonly-row">
+          <span>现役工作区 · 只读查看</span>
+          <button type="button" className="livingroom-refresh" disabled={refreshing} onClick={() => loadMessages({ quiet: true })}>
+            {refreshing ? '刷新中…' : '刷新'}
           </button>
         </div>
-      </form>
+      </div>
 
       {ticketsOpen && (
         <TicketDrawer tickets={tickets} onClose={() => setTicketsOpen(false)} onOpenMessage={openTicketMessage} />
