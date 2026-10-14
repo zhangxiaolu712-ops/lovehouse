@@ -2809,6 +2809,59 @@ body {
   text-align: right;
 }
 
+.livingroom-identity {
+  display: flex;
+  max-width: min(76vw, 600px);
+  margin: 3px 3px 0;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  color: var(--text-muted);
+  font-family: var(--font-num);
+  font-size: 8px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.livingroom-message.is-me .livingroom-identity {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.livingroom-readonly-bar {
+  padding: 10px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 86%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.livingroom-readonly-row {
+  display: flex;
+  max-width: 760px;
+  min-height: 38px;
+  margin: 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.livingroom-refresh {
+  padding: 7px 14px;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.livingroom-refresh:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .livingroom-compose {
   padding: 10px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   border-top: 1px solid var(--border);
