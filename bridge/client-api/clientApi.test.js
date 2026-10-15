@@ -602,7 +602,9 @@ test('recoverable Chat preserves phone message ids through identity registration
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-message-identity-execution-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') })
-  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {} })
+  const deliveredActions = []
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {},
+    toolActionProducer: { async produce(action) { deliveredActions.push(action); return action } } })
   const registrations = []
   const appIdentityVerifier = {
     async verifySession(_cookie, messageIdentity) {
@@ -610,7 +612,15 @@ test('recoverable Chat preserves phone message ids through identity registration
       return { id: 'stable-app-account-id', email: 'owner@example.com' }
     },
   }
-  const base = await startHarness(t, { chatExecutionCoordinator, appIdentityVerifier })
+  const base = await startHarness(t, { chatExecutionCoordinator, appIdentityVerifier, adapters: {
+    claude: fakeAdapter('claude', { async chat({ onEvent, onText }) {
+      onEvent('tool_call', { call_id: 'toolu_identity_1', tool_type: 'claude_tool', name: 'Read' })
+      onEvent('tool_result', { call_id: 'toolu_identity_1', summary: 'done' })
+      onText('reply')
+      return { usage: null }
+    } }),
+    codex: fakeAdapter('codex'),
+  } })
   const executionId = '98989898-9898-4898-8898-989898989898'
   const requestBody = chatBody({
     execution_id: executionId,
@@ -623,7 +633,7 @@ test('recoverable Chat preserves phone message ids through identity registration
     body: JSON.stringify(requestBody),
   })
   assert.equal(response.status, 200)
-  await response.text()
+  const events = parseSse(await response.text())
 
   assert.deepEqual(registrations, [{
     thread_id: THREAD_ID,
@@ -634,6 +644,19 @@ test('recoverable Chat preserves phone message ids through identity registration
   assert.equal(stored.user_message_id, USER_MESSAGE_ID)
   assert.equal(stored.assistant_message_id, ASSISTANT_MESSAGE_ID)
   assert.equal(stored.thread_id, THREAD_ID)
+  const toolEvents = events.filter(item => ['tool_call', 'tool_result'].includes(item.event))
+  assert.equal(toolEvents.length, 2)
+  assert.match(toolEvents[0].data.tool_action_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  assert.equal(toolEvents[1].data.tool_action_id, toolEvents[0].data.tool_action_id)
+  assert.equal(toolEvents[0].data.execution_id, executionId)
+  assert.equal(toolEvents[0].data.assistant_message_id, ASSISTANT_MESSAGE_ID)
+  assert.equal(toolEvents[0].data.thread_id, THREAD_ID)
+  assert.equal(toolEvents[0].data.provider_raw_call_id, 'toolu_identity_1')
+  assert.equal(deliveredActions.at(-1).lifecycle_state, 'succeeded')
+  assert.equal(deliveredActions.at(-1).tool_identity, 'Read')
+  assert.deepEqual(deliveredActions.at(-1).provider_metadata, { tool_type: 'claude_tool' })
+  assert.equal(stored.tool_actions.toolu_identity_1.tool_action_id, toolEvents[0].data.tool_action_id)
 })
 
 test('canonical message identity fails closed without verified App Account while legacy Chat stays compatible', async t => {

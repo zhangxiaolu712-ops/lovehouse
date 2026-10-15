@@ -213,6 +213,51 @@ export class FileChatExecutionStore {
     return clone(state.records[keyOf(query.ownerUserId, query.executionId)] || null)
   }
 
+  async recordToolAction(query, action) {
+    validateIdentity(query)
+    if (!action || typeof action.tool_action_id !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(action.tool_action_id) ||
+      typeof action.provider_raw_call_id !== 'string' || !action.provider_raw_call_id) {
+      throw new ClientApiError('INVALID_TOOL_ACTION_IDENTITY', 'Tool action identity is invalid', {
+        stage: 'validation', status: 400,
+      })
+    }
+    await this.#ready
+    const operation = this.#queue.then(async () => {
+      const state = await this.#read()
+      const record = state.records[keyOf(query.ownerUserId, query.executionId)]
+      if (!record) throw new ClientApiError('CHAT_EXECUTION_NOT_FOUND', 'Chat execution was not found', {
+        stage: 'storage', status: 404,
+      })
+      const actions = record.tool_actions || {}
+      const current = actions[action.provider_raw_call_id]
+      if (current && current.tool_action_id !== action.tool_action_id) {
+        throw new ClientApiError('TOOL_ACTION_IDENTITY_CONFLICT', 'Provider call identity changed', {
+          stage: 'identity', status: 409,
+        })
+      }
+      if (current && ['app_account_id', 'execution_id', 'assistant_message_id', 'thread_id',
+        'tool_identity', 'provider_source', 'provider_raw_call_id'].some(key => current[key] !== action[key])) {
+        throw new ClientApiError('TOOL_ACTION_IDENTITY_CONFLICT', 'Tool action relation changed', {
+          stage: 'identity', status: 409,
+        })
+      }
+      if (current && ['succeeded', 'failed', 'cancelled'].includes(current.lifecycle_state) &&
+        current.lifecycle_state !== action.lifecycle_state) {
+        throw new ClientApiError('TOOL_ACTION_LIFECYCLE_CONFLICT', 'Tool action lifecycle cannot move backwards', {
+          stage: 'identity', status: 409,
+        })
+      }
+      actions[action.provider_raw_call_id] = clone(action)
+      record.tool_actions = actions
+      record.updated_at = new Date(this.now()).toISOString()
+      await this.#write(state)
+      return clone(actions[action.provider_raw_call_id])
+    })
+    this.#queue = operation.catch(() => {})
+    return operation
+  }
+
   async complete(query, result) {
     return this.#finish(query, { status: 'completed', result: clone(result), error: undefined })
   }
@@ -255,15 +300,32 @@ export class FileChatExecutionStore {
 }
 
 export class ChatExecutionCoordinator {
-  constructor({ store, replyCompletedProducer = null, log = console } = {}) {
+  constructor({ store, replyCompletedProducer = null, toolActionProducer = null, log = console } = {}) {
     if (!store) throw new TypeError('Chat execution coordinator requires a store')
     if (replyCompletedProducer && typeof replyCompletedProducer.produce !== 'function') {
       throw new TypeError('Chat execution coordinator reply-completed producer is invalid')
     }
+    if (toolActionProducer && typeof toolActionProducer.produce !== 'function') {
+      throw new TypeError('Chat execution coordinator tool-action producer is invalid')
+    }
     this.store = store
     this.replyCompletedProducer = replyCompletedProducer
+    this.toolActionProducer = toolActionProducer
     this.log = log
     this.active = new Map()
+  }
+
+  async recordToolAction({ ownerUserId, executionId, action }) {
+    const stored = await this.store.recordToolAction({ ownerUserId, executionId }, action)
+    if (this.toolActionProducer) {
+      try { await this.toolActionProducer.produce(stored) } catch (error) {
+        this.log.warn?.('[tool-action-producer]', JSON.stringify({
+          execution_id: executionId, tool_action_id: stored.tool_action_id,
+          status: 'delivery_failed', error_code: error?.code || 'TOOL_ACTION_DELIVERY_FAILED',
+        }))
+      }
+    }
+    return stored
   }
 
   #key(ownerUserId, executionId) {
@@ -328,6 +390,7 @@ export class ChatExecutionCoordinator {
       const event = await this.replyCompletedProducer.produce({
         appAccountId: record.app_account_id,
         executionId: record.execution_id,
+        assistantMessageId: record.assistant_message_id,
         threadId: record.thread_id,
       })
       this.log.info?.('[chat-event-producer]', JSON.stringify({

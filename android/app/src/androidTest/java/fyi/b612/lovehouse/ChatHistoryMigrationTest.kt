@@ -20,6 +20,7 @@ import fyi.b612.lovehouse.feature.chat.SQLiteLocalChatMessageRepository
 import fyi.b612.lovehouse.feature.chat.TOOL_DETAIL_CACHE_TTL_MILLIS
 import fyi.b612.lovehouse.feature.chat.ToolDetailEnvelope
 import fyi.b612.lovehouse.feature.chat.ToolDetailValue
+import fyi.b612.lovehouse.feature.chat.ToolActionRelation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -129,11 +130,29 @@ class ChatHistoryMigrationTest {
         context.deleteDatabase(databaseName)
         val firstAssistantId = "assistant:execution-one"
         val secondAssistantId = "assistant:execution-two"
+        val relation = ToolActionRelation(
+            toolActionId = "019a0000-0000-7000-8000-000000000001",
+            executionId = "019a0000-0000-7000-8000-000000000002",
+            assistantMessageId = "019a0000-0000-7000-8000-000000000003",
+            canonicalThreadId = "canonical-thread",
+            providerRawCallId = "call-one",
+        )
         val firstTimeline = listOf(
             ChatProcessEvent("thinking", ChatProcessKind.Thinking, "Thinking", ChatProcessStatus.Running, "让我仔细想想"),
             ChatProcessEvent("reasoning", ChatProcessKind.ReasoningStatus, "思考状态", ChatProcessStatus.Running, "正在核对"),
             ChatProcessEvent("tool-call:pending", ChatProcessKind.ToolCall, "读取 LivingRoom", ChatProcessStatus.Running, "准备读取"),
-            ChatProcessEvent("tool-call:one", ChatProcessKind.ToolResult, "读取 LivingRoom", ChatProcessStatus.Succeeded, "读取完成"),
+            ChatProcessEvent(
+                "tool-call:one",
+                ChatProcessKind.ToolResult,
+                "读取 LivingRoom",
+                ChatProcessStatus.Succeeded,
+                "读取完成",
+                toolActionId = relation.toolActionId,
+                executionId = relation.executionId,
+                assistantMessageId = relation.assistantMessageId,
+                canonicalThreadId = relation.canonicalThreadId,
+                providerRawCallId = relation.providerRawCallId,
+            ),
             ChatProcessEvent("workflow", ChatProcessKind.WorkflowStatus, "执行状态", ChatProcessStatus.Running, "整理回答"),
         )
         val secondTimeline = listOf(
@@ -153,13 +172,15 @@ class ChatHistoryMigrationTest {
         assertEquals(listOf(firstAssistantId, secondAssistantId), messages.map(LocalChatMessage::localMessageId))
         assertEquals(firstTimeline, messages[0].processEvents)
         assertEquals(secondTimeline, messages[1].processEvents)
+        assertEquals(relation.toolActionId, messages[0].processEvents[3].toolActionId)
+        assertEquals(relation.executionId, messages[0].processEvents[3].executionId)
         assertEquals(1, messages[0].processEvents.count { it.id == "thinking" })
         reopened.close()
         context.deleteDatabase(databaseName)
     }
 
     @Test
-    fun v5MigratesToV6WithoutChangingMessagesOrProcessTimeline() {
+    fun v5MigratesToCurrentWithoutChangingMessagesOrProcessTimelineOrGuessingRelations() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val databaseName = "chat-tool-detail-v5-migration-${System.nanoTime()}.db"
         context.deleteDatabase(databaseName)
@@ -272,6 +293,7 @@ class ChatHistoryMigrationTest {
         assertEquals("old answer", message.content)
         assertEquals("tool-call:old", message.processEvents.single().id)
         assertEquals("old lightweight detail", message.processEvents.single().detail)
+        assertNull(message.processEvents.single().toolActionId)
         val cached = repository.upsert(
             "thread",
             "assistant:old",
@@ -282,7 +304,7 @@ class ChatHistoryMigrationTest {
         val version = context.getDatabasePath(databaseName).let { path ->
             SQLiteDatabase.openDatabase(path.path, null, SQLiteDatabase.OPEN_READONLY).use { it.version }
         }
-        assertEquals(6, version)
+        assertEquals(8, version)
         repository.close()
         context.deleteDatabase(databaseName)
     }
@@ -295,6 +317,13 @@ class ChatHistoryMigrationTest {
         var clock = 10_000L
         val assistantId = "assistant:execution-one"
         val eventId = "tool-call:call-one"
+        val relation = ToolActionRelation(
+            toolActionId = "019a0000-0000-7000-8000-000000000011",
+            executionId = "019a0000-0000-7000-8000-000000000012",
+            assistantMessageId = "019a0000-0000-7000-8000-000000000013",
+            canonicalThreadId = "canonical-thread",
+            providerRawCallId = "call-one",
+        )
         val repository = SQLiteLocalChatMessageRepository(context, databaseName, nowEpochMillis = { clock })
         repository.upsert(LocalChatMessage(
             assistantId,
@@ -311,6 +340,7 @@ class ChatHistoryMigrationTest {
             assistantId,
             eventId,
             genericDetail("call-one", arguments = ToolDetailValue.Text("safe argument"), truncated = true),
+            relation,
         )!!
         clock += 60_000L
         val completed = repository.upsert(
@@ -318,6 +348,7 @@ class ChatHistoryMigrationTest {
             assistantId,
             eventId,
             genericDetail("call-one", result = ToolDetailValue.Text("safe result"), originalLength = 99),
+            relation,
         )!!
         assertEquals(initial.createdAtEpochMillis, completed.createdAtEpochMillis)
         assertEquals(initial.expiresAtEpochMillis, completed.expiresAtEpochMillis)
@@ -333,6 +364,7 @@ class ChatHistoryMigrationTest {
         assertEquals(completed.detail, restored?.detail)
         assertEquals(initial.createdAtEpochMillis, restored?.createdAtEpochMillis)
         assertEquals(initial.expiresAtEpochMillis, restored?.expiresAtEpochMillis)
+        assertEquals(relation, restored?.relation)
         assertEquals(1, reopened.messages("thread").single().processEvents.size)
         reopened.close()
 

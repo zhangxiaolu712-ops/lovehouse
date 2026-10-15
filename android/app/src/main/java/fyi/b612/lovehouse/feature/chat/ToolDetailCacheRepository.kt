@@ -12,6 +12,15 @@ data class CachedToolDetail(
     val detail: ToolDetailEnvelope,
     val createdAtEpochMillis: Long,
     val expiresAtEpochMillis: Long,
+    val relation: ToolActionRelation? = null,
+)
+
+data class ToolActionRelation(
+    val toolActionId: String,
+    val executionId: String,
+    val assistantMessageId: String,
+    val canonicalThreadId: String,
+    val providerRawCallId: String,
 )
 
 interface ToolDetailCacheRepository {
@@ -21,6 +30,13 @@ interface ToolDetailCacheRepository {
         eventId: String,
         detail: ToolDetailEnvelope,
     ): CachedToolDetail?
+    fun upsert(
+        threadId: String,
+        assistantMessageId: String,
+        eventId: String,
+        detail: ToolDetailEnvelope,
+        relation: ToolActionRelation?,
+    ): CachedToolDetail? = upsert(threadId, assistantMessageId, eventId, detail)
 
     fun detail(
         assistantMessageId: String,

@@ -27,7 +27,7 @@ export function createReplyCompletedEventProducer({
     throw new TypeError('reply-completed producer timeout must be positive')
   }
   return {
-    async produce({ appAccountId, executionId, threadId }) {
+    async produce({ appAccountId, executionId, assistantMessageId, threadId }) {
       const controller = new AbortController()
       let rejectTimeout
       const timedOut = new Promise((_resolve, reject) => { rejectTimeout = reject })
@@ -49,6 +49,7 @@ export function createReplyCompletedEventProducer({
             body: JSON.stringify({
               app_account_id: requiredId(appAccountId, 'appAccountId'),
               execution_id: requiredId(executionId, 'executionId'),
+              assistant_message_id: requiredId(assistantMessageId, 'assistantMessageId'),
               thread_id: requiredId(threadId, 'threadId'),
             }),
             signal: controller.signal,
@@ -63,7 +64,9 @@ export function createReplyCompletedEventProducer({
         }
         const payload = await response.json()
         if (payload?.event?.kind !== 'reply_completed' || payload.event.origin_id !== executionId ||
-          payload.event.app_account_id !== appAccountId || payload.event.thread_id !== threadId) {
+          payload.event.app_account_id !== appAccountId || payload.event.thread_id !== threadId ||
+          payload.event.execution_id !== executionId || payload.event.message_id !== assistantMessageId ||
+          payload.event.relation_status !== 'linked') {
           throw Object.assign(new Error('reply-completed delivery returned an invalid event'), {
             code: 'REPLY_COMPLETED_INVALID_RESPONSE',
           })

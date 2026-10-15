@@ -411,7 +411,13 @@ class ChatSessionStore(
         fun updateProcess(event: ChatProcessEvent) {
             val cachedEvent = event.toolDetail?.let { detail ->
                 val cached = runCatching {
-                    toolDetailCache.upsert(canonicalThreadId, assistantId, event.id, detail)
+                    val relation = if (event.toolActionId != null && event.executionId != null &&
+                        event.assistantMessageId != null && event.canonicalThreadId != null &&
+                        event.providerRawCallId != null) ToolActionRelation(
+                        event.toolActionId, event.executionId, event.assistantMessageId,
+                        event.canonicalThreadId, event.providerRawCallId,
+                    ) else null
+                    toolDetailCache.upsert(canonicalThreadId, assistantId, event.id, detail, relation)
                 }.getOrNull()
                 cached?.let { event.copy(toolDetail = it.detail) } ?: event
             } ?: event
@@ -450,6 +456,8 @@ class ChatSessionStore(
                 requestedToolIds,
                 pending,
                 canonicalThreadId,
+                executionId,
+                assistantCanonicalMessageId,
             )
             val needsReanchor = pending || (snapshot != null &&
                 conversationPersonas.materializedPersonaVersion(localThreadId) != snapshot.personaVersion)
