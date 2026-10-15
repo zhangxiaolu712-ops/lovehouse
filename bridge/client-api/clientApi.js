@@ -872,6 +872,8 @@ export function installClientApi(app, {
                             thread_id: normalized.threadId,
                             tool_identity: toolIdentity, provider_source: providerSource,
                             provider_raw_call_id: payload.call_id,
+                            ...(payload.relation_provenance?.source_call_id
+                              ? { mcp_source_call_id: payload.relation_provenance.source_call_id } : {}),
                             lifecycle_state: event === 'tool_call' ? 'running'
                               : (event === 'tool_result' ? 'succeeded' : 'failed'),
                             provider_metadata: { tool_type: toolType },

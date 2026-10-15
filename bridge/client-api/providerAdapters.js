@@ -242,6 +242,9 @@ function safeRuntimeEvent(event, data, profile) {
       ...(event === 'tool_call'
         ? {}
         : { summary: typeof data?.summary === 'string' ? data.summary.slice(0, 500) : null }),
+      ...(typeof data?.relation_provenance?.source_call_id === 'string' &&
+        /^mcp-live:[0-9a-f]{64}$/.test(data.relation_provenance.source_call_id)
+        ? { relation_provenance: { source_call_id: data.relation_provenance.source_call_id } } : {}),
       ...(toolDetail ? { tool_detail: toolDetail } : {}),
     }
   }

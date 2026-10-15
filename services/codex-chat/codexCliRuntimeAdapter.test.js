@@ -448,6 +448,8 @@ test('file and MCP tool items preserve native started, updated and completed lif
       } },
       { type: 'item.completed', item: {
         id: 'mcp-1', type: 'mcp_tool_call', server: 'lovehouse', tool: 'wake_up', status: 'completed',
+        result: { _meta: { lovehouse_relation: { version: 1,
+          source_call_id: `mcp-live:${'a'.repeat(64)}` } } },
       } },
       { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Done.' } },
       { type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 2 } },
@@ -465,6 +467,8 @@ test('file and MCP tool items preserve native started, updated and completed lif
     'file_change', 'file_change', 'file_change', 'mcp', 'mcp', 'mcp',
   ])
   assert.equal(tools.at(-1).data.name, 'lovehouse.wake_up')
+  assert.deepEqual(tools.at(-1).data.relation_provenance,
+    { source_call_id: `mcp-live:${'a'.repeat(64)}` })
 })
 
 test('Codex 0.151 MCP, file change and web search shapes emit safe generic detail by stable item id', async () => {

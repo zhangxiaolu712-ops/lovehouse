@@ -615,7 +615,8 @@ test('recoverable Chat preserves phone message ids through identity registration
   const base = await startHarness(t, { chatExecutionCoordinator, appIdentityVerifier, adapters: {
     claude: fakeAdapter('claude', { async chat({ onEvent, onText }) {
       onEvent('tool_call', { call_id: 'toolu_identity_1', tool_type: 'claude_tool', name: 'Read' })
-      onEvent('tool_result', { call_id: 'toolu_identity_1', summary: 'done' })
+      onEvent('tool_result', { call_id: 'toolu_identity_1', summary: 'done',
+        relation_provenance: { source_call_id: `mcp-live:${'c'.repeat(64)}` } })
       onText('reply')
       return { usage: null }
     } }),
@@ -655,6 +656,7 @@ test('recoverable Chat preserves phone message ids through identity registration
   assert.equal(toolEvents[0].data.provider_raw_call_id, 'toolu_identity_1')
   assert.equal(deliveredActions.at(-1).lifecycle_state, 'succeeded')
   assert.equal(deliveredActions.at(-1).tool_identity, 'Read')
+  assert.equal(deliveredActions.at(-1).mcp_source_call_id, `mcp-live:${'c'.repeat(64)}`)
   assert.deepEqual(deliveredActions.at(-1).provider_metadata, { tool_type: 'claude_tool' })
   assert.equal(stored.tool_actions.toolu_identity_1.tool_action_id, toolEvents[0].data.tool_action_id)
 })
@@ -1230,7 +1232,7 @@ test('Codex adapter does not forward Login auth and preserves the sidecar SSE co
         'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"codex_native_thread","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"reasoning":{"enabled":true,"available":true,"status":"completed","summary":"Native summary","source":"codex_native_thread","active_context":true,"resumes_with_thread":true,"compaction":"codex_native"},"estimated_tokens":2}',
         'event: session\ndata: {"session_id":"22222222-2222-4222-8222-222222222222"}',
         'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","lifecycle":"updated","command":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":12,"command":"pwd","unknown":"drop"}}',
-        'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","aggregated_output":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":16,"command":"pwd","output":"/tmp","exit_code":0,"status":"completed","raw_payload":"drop"}}',
+        `event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","relation_provenance":{"source_call_id":"mcp-live:${'d'.repeat(64)}"},"aggregated_output":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":16,"command":"pwd","output":"/tmp","exit_code":0,"status":"completed","raw_payload":"drop"}}`,
         'event: text\ndata: {"text":"hello"}',
         'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"codex_cli"}',
         'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"cached_input_tokens":2,"actual_output_tokens":4,"reasoning_output_tokens":1,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_cached_input_tokens":82,"cumulative_output_tokens":24,"cumulative_reasoning_output_tokens":6,"cumulative_total_tokens":127,"previous_cumulative_input_tokens":100,"previous_cumulative_cached_input_tokens":80,"previous_cumulative_output_tokens":20,"previous_cumulative_reasoning_output_tokens":5,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
@@ -1262,6 +1264,8 @@ test('Codex adapter does not forward Login auth and preserves the sidecar SSE co
   assert.equal(events[3].data.tool_detail.command, 'pwd')
   assert.equal(events[4].data.tool_detail.output, '/tmp')
   assert.equal(events[4].data.tool_detail.raw_payload, undefined)
+  assert.deepEqual(events[4].data.relation_provenance,
+    { source_call_id: `mcp-live:${'d'.repeat(64)}` })
   assert.equal(JSON.stringify(events).includes('session_id'), false)
   assert.equal(events[0].data.capabilities.reasoning_summary, 'detailed')
   assert.equal(events[2].data.reasoning.summary, 'Native summary')

@@ -437,6 +437,8 @@ test('Claude tool lifecycle carries only normalized typed detail on the same cal
         message: { content: [{
           type: 'tool_result', tool_use_id: 'tool-1', content: 'secret body', is_error: false,
         }] },
+        tool_use_result: { tool_use_id: 'tool-1', _meta: { lovehouse_relation: { version: 1,
+          source_call_id: `mcp-live:${'b'.repeat(64)}` } } },
       },
       ...successEvents().slice(1),
     ]),
@@ -453,6 +455,8 @@ test('Claude tool lifecycle carries only normalized typed detail on the same cal
   assert.match(JSON.stringify(events[1].data.tool_detail), /\/secret/)
   assert.match(JSON.stringify(events[1].data.tool_detail), /secret body/)
   assert.equal('raw_payload' in events[1].data.tool_detail, false)
+  assert.deepEqual(events[1].data.relation_provenance,
+    { source_call_id: `mcp-live:${'b'.repeat(64)}` })
 })
 
 test('Claude assembles streamed MCP inputs before preserving wake recall and remember results', async () => {
