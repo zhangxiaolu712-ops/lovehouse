@@ -2,6 +2,8 @@ package fyi.b612.lovehouse.feature.events
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -262,13 +264,18 @@ fun ChatConfirmationCard(
     event: ServerEvent,
     repository: ServerEventRepository,
     modifier: Modifier = Modifier,
+    navigationFocused: Boolean = false,
 ) {
     var current by remember(event.id) { mutableStateOf(event) }
     var feedback by remember(event.id) { mutableStateOf<String?>(null) }
     var deciding by remember(event.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    EventGlassPanel(modifier) {
+    EventGlassPanel(
+        modifier,
+        border = if (navigationFocused) BorderStroke(1.dp, NavigationTerracotta.copy(alpha = .55f)) else null,
+    ) {
+        if (navigationFocused) NavigationFocusTag(current)
         Text(current.safeSummary, color = LoveHouseGlass.Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         current.expiresAt?.let { Text("有效期至 $it", color = LoveHouseGlass.MutedInk, fontSize = 9.sp) }
         if (current.canDecide) {
@@ -305,6 +312,29 @@ fun ChatConfirmationCard(
         }
         feedback?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 9.sp) }
         Text("服务器决定为最终依据；本卡片不直接执行工具。", color = LoveHouseGlass.MutedInk, fontSize = 9.sp)
+    }
+}
+
+private val NavigationTerracotta = Color(0xFFC96442)
+private val NavigationDecidedGreen = Color(0xFF2F6A55)
+
+/** Small "where this came from" line shown only while the card is a navigation focus hint. */
+@Composable
+private fun NavigationFocusTag(event: ServerEvent) {
+    val dot = when (event.status) {
+        "approved" -> NavigationDecidedGreen
+        "denied", "expired" -> NavigationTerracotta
+        else -> NavigationTerracotta.copy(alpha = .55f)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(6.dp).background(dot, CircleShape))
+        Text(
+            "定位自通知 · ${event.statusLabel()}",
+            color = NavigationTerracotta,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = .4.sp,
+        )
     }
 }
 
@@ -419,12 +449,16 @@ private fun EventInfoPanel(message: String) {
 }
 
 @Composable
-private fun EventGlassPanel(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+private fun EventGlassPanel(
+    modifier: Modifier = Modifier,
+    border: BorderStroke? = null,
+    content: @Composable () -> Unit,
+) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(17.dp),
         color = LoveHouseGlass.Background,
-        border = BorderStroke(1.dp, LoveHouseGlass.Border),
+        border = border ?: BorderStroke(1.dp, LoveHouseGlass.Border),
     ) {
         Column(Modifier.fillMaxWidth().padding(13.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) { content() }
     }

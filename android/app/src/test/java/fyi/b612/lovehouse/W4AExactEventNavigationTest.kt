@@ -223,6 +223,18 @@ class W4AExactEventNavigationTest {
         assertTrue(chat.contains("navigationConfirmation = null"))
     }
 
+    @Test
+    fun `navigation focus hints use terracotta message focus and deep green Tool Action focus`() {
+        val root = File(System.getProperty("user.dir"))
+        val chat = File(root, "src/main/java/fyi/b612/lovehouse/feature/chat/PersonaChatScreen.kt").readText()
+        val events = File(root, "src/main/java/fyi/b612/lovehouse/feature/events/ServerEventsScreen.kt").readText()
+
+        assertTrue(chat.contains("NavigationFocusTerracotta = Color(0xFFC96442)"))
+        assertTrue(chat.contains("NavigationFocusDeepGreen = Color(0xFF2F6A55)"))
+        assertTrue(chat.contains("navigationFocused = focused"))
+        assertTrue(events.contains("定位自通知 · ${'$'}{event.statusLabel()}"))
+    }
+
     private fun replyEvent() = ServerEvent(
         id = EVENT_ID,
         kind = ServerEventKind.ReplyCompleted,

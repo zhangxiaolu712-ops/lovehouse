@@ -20,7 +20,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -158,6 +160,9 @@ import kotlin.math.roundToInt
 private val PersonaInk = Color(0xFF3E4847)
 private val PersonaMuted = Color(0xFF7F8B88)
 private val PersonaAccent = Color(0xFF718E87)
+// Navigation focus hints: terracotta for "you are here", deep green for the exact Tool Action.
+private val NavigationFocusTerracotta = Color(0xFFC96442)
+private val NavigationFocusDeepGreen = Color(0xFF2F6A55)
 
 internal const val CHAT_TEXT_SIZE_KEY = "chat_appearance_text_size_sp_v1"
 internal const val CHAT_BUBBLE_SCALE_KEY = "chat_appearance_bubble_scale_v1"
@@ -858,12 +863,24 @@ fun ChatShellScreen(
                 ?: pendingConfirmation?.takeUnless {
                     navigationFocusPhase == NavigationFocusPhase.Dismissed && it.id == sourceEventId
                 }
-            visibleConfirmation?.let { event ->
-                ChatConfirmationCard(
-                    event = event,
-                    repository = serverEvents,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                )
+            // Hold the last card so it can fade out instead of vanishing.
+            val heldConfirmation = remember { mutableStateOf<Pair<ServerEvent, Boolean>?>(null) }
+            if (visibleConfirmation != null) {
+                heldConfirmation.value = visibleConfirmation to (visibleConfirmation.id == navigationConfirmation?.id)
+            }
+            AnimatedVisibility(
+                visible = visibleConfirmation != null,
+                enter = fadeIn(tween(220)) + expandVertically(tween(220)),
+                exit = fadeOut(tween(260)) + shrinkVertically(tween(260)),
+            ) {
+                heldConfirmation.value?.let { (event, focused) ->
+                    ChatConfirmationCard(
+                        event = event,
+                        repository = serverEvents,
+                        navigationFocused = focused,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
             }
             actionNotice?.let { Text(it, Modifier.align(Alignment.CenterHorizontally).padding(vertical = 2.dp), color = PersonaMuted, fontSize = 8.sp) }
             if (selectedMessages.isNotEmpty()) MultiSelectBar(selectedMessages.size, onCancel = { selectedMessages = emptySet() }) {
@@ -1277,6 +1294,7 @@ internal fun findChatEventNavigationTarget(
             val failed = processTimelineIsFailed(event)
             val focused = focusedToolActionId != null && event.toolActionId == focusedToolActionId
             val connectorColor = PersonaMuted.copy(alpha = .28f)
+            val focusAmount by animateFloatAsState(if (focused) 1f else 0f, tween(280), label = "toolActionFocus")
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1305,7 +1323,16 @@ internal fun findChatEventNavigationTarget(
                     }
                     .testTag("process-timeline-item:${event.id}")
                     .clip(RoundedCornerShape(8.dp))
-                    .background(if (focused) PersonaAccent.copy(alpha = .16f) else Color.Transparent)
+                    .background(NavigationFocusDeepGreen.copy(alpha = .13f * focusAmount))
+                    .border(.8.dp, NavigationFocusDeepGreen.copy(alpha = .5f * focusAmount), RoundedCornerShape(8.dp))
+                    .drawBehind {
+                        if (focusAmount > 0f) {
+                            drawRect(
+                                color = NavigationFocusDeepGreen.copy(alpha = focusAmount),
+                                size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height),
+                            )
+                        }
+                    }
                     .clickable(enabled = interactive) {
                         if (toolEvent) onOpenToolDetail(event)
                         else expandedEventIds = toggleProcessTimelineExpansion(expandedEventIds, event)
@@ -1416,8 +1443,21 @@ private fun BreathingDots() {
                 },
                 onLongClick = onToggleSelection,
             )
+            // Arrival: rise slightly past full strength, settle; dismissal: fade out.
+            val navigationGlow = remember { Animatable(0f) }
+            LaunchedEffect(navigationFocused) {
+                if (navigationFocused) {
+                    navigationGlow.animateTo(1.3f, tween(240))
+                    navigationGlow.animateTo(1f, tween(360))
+                } else {
+                    navigationGlow.animateTo(0f, tween(320))
+                }
+            }
             val bubbleBorder = when {
-                navigationFocused -> BorderStroke(1.5.dp, PersonaAccent)
+                navigationGlow.value > .01f -> BorderStroke(
+                    (1.2f + .8f * navigationGlow.value).dp,
+                    NavigationFocusTerracotta.copy(alpha = navigationGlow.value.coerceAtMost(1f)),
+                )
                 selected -> BorderStroke(1.5.dp, PersonaAccent)
                 style != BubbleStyle.None -> BorderStroke(.8.dp, Color.White.copy(alpha = .62f))
                 else -> null
