@@ -4,6 +4,9 @@ import fyi.b612.lovehouse.feature.chat.ChatEventNavigationTarget
 import fyi.b612.lovehouse.feature.chat.ChatPersona
 import fyi.b612.lovehouse.feature.chat.ChatSessionStore
 import fyi.b612.lovehouse.feature.chat.InMemoryConversationPersonaStore
+import fyi.b612.lovehouse.feature.chat.LocalChatMessage
+import fyi.b612.lovehouse.feature.chat.LocalChatMessageRepository
+import fyi.b612.lovehouse.feature.chat.uniqueCanonicalThreadId
 import fyi.b612.lovehouse.feature.chat.positionNavigationTarget
 import fyi.b612.lovehouse.feature.chat.recordDirectConversationEntryRead
 import fyi.b612.lovehouse.feature.chat.recordEventReadAfterTargetVisible
@@ -29,6 +32,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class W4CEventReadSemanticsTest {
+    @Test
+    fun `legacy execution mapping resolves only one canonical thread and never guesses ambiguity`() {
+        assertNull(uniqueCanonicalThreadId(emptyList()))
+        assertNull(uniqueCanonicalThreadId(listOf("canonical-a", "canonical-b")))
+        assertNull(uniqueCanonicalThreadId(listOf("")))
+        assertEquals("canonical-a", uniqueCanonicalThreadId(listOf("canonical-a")))
+
+        val aliases = InMemoryConversationPersonaStore()
+        val repository = object : LocalChatMessageRepository {
+            override fun messages(threadId: String): List<LocalChatMessage> = emptyList()
+            override fun upsert(message: LocalChatMessage) = Unit
+            override fun canonicalThreadIdForLocalThread(localThreadId: String): String? =
+                uniqueCanonicalThreadId(listOf("canonical-legacy"))
+        }
+        val store = ChatSessionStore(messageRepository = repository, conversationPersonas = aliases)
+        val local = store.createThread(ChatPersona("custom", "Custom", "C", "custom"), temporary = false)
+
+        assertEquals("canonical-legacy", store.canonicalThreadIdForLocalThread(local.threadId))
+        assertNull(store.canonicalThreadIdForLocalThread("missing-local"))
+    }
+
     @Test
     fun `direct read resolves only a known canonical alias for non built in chat`() {
         val aliases = InMemoryConversationPersonaStore()

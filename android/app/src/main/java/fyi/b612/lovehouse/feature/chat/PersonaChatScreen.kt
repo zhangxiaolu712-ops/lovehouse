@@ -429,10 +429,9 @@ fun ChatShellScreen(
         else -> null
     }
     val canonicalThreadId = runtimeConfig?.threadId
-    val readCanonicalThreadId = canonicalThreadId ?: store.canonicalThreadIdForLocalThread(threadId)
     // Freeze at navigation entry. An alias created by sending a later message must not widen the entry cutoff.
     val entryReadCanonicalThreadId = rememberSaveable(threadId, sourceEventId) {
-        readCanonicalThreadId.orEmpty()
+        (canonicalThreadId ?: store.canonicalThreadIdForLocalThread(threadId)).orEmpty()
     }.takeIf(String::isNotBlank)
     val eventFeed by serverEvents.feed.collectAsState()
     val eventPresentation by ServerEventPresentationState.state.collectAsState()
