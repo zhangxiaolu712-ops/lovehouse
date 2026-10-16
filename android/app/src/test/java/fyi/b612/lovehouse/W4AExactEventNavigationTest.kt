@@ -5,7 +5,12 @@ import fyi.b612.lovehouse.feature.chat.ChatMessageUi
 import fyi.b612.lovehouse.feature.chat.ChatProcessEvent
 import fyi.b612.lovehouse.feature.chat.ChatProcessKind
 import fyi.b612.lovehouse.feature.chat.ChatProcessStatus
-import fyi.b612.lovehouse.feature.chat.EXACT_NAVIGATION_FOCUS_MILLIS
+import fyi.b612.lovehouse.feature.chat.NavigationFocusPhase
+import fyi.b612.lovehouse.feature.chat.holdsViewport
+import fyi.b612.lovehouse.feature.chat.initialNavigationFocusPhase
+import fyi.b612.lovehouse.feature.chat.isNavigationTargetVisible
+import fyi.b612.lovehouse.feature.chat.matchesNavigationConfirmation
+import fyi.b612.lovehouse.feature.chat.positionNavigationTarget
 import fyi.b612.lovehouse.feature.chat.findChatEventNavigationTarget
 import fyi.b612.lovehouse.feature.events.NotificationEventTargetResolution
 import fyi.b612.lovehouse.feature.events.ServerEvent
@@ -21,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -168,19 +174,179 @@ class W4AExactEventNavigationTest {
     }
 
     @Test
-    fun `exact navigation focus is temporary and dismisses on natural chat interactions`() {
+    fun `navigation focus owns the viewport until a real user interaction`() {
+        assertEquals(NavigationFocusPhase.Idle, initialNavigationFocusPhase(null))
+        assertEquals(NavigationFocusPhase.Pending, initialNavigationFocusPhase(MESSAGE_ID))
+        assertTrue(NavigationFocusPhase.Pending.holdsViewport())
+        assertTrue(NavigationFocusPhase.Positioning.holdsViewport())
+        assertTrue(NavigationFocusPhase.Active.holdsViewport())
+        assertFalse(NavigationFocusPhase.Idle.holdsViewport())
+        assertFalse(NavigationFocusPhase.Dismissed.holdsViewport())
+    }
+
+    @Test
+    fun `focus activates only once the target row is actually on screen`() {
+        assertFalse(isNavigationTargetVisible(listOf("local-1", "local-2"), "local-target"))
+        assertTrue(isNavigationTargetVisible(listOf("local-1", "local-target"), "local-target"))
+    }
+
+    @Test
+    fun `resolved confirmation still restores the approval focus card`() {
+        val approved = confirmationEvent().copy(status = "approved")
+        val denied = confirmationEvent().copy(status = "denied")
+        assertTrue(approved.matchesNavigationConfirmation(MESSAGE_ID, TOOL_ACTION_ID))
+        assertTrue(denied.matchesNavigationConfirmation(MESSAGE_ID, TOOL_ACTION_ID))
+        assertFalse(approved.matchesNavigationConfirmation(MESSAGE_ID, "0199db1d-6c00-7005-8005-000000000005"))
+        assertFalse(replyEvent().matchesNavigationConfirmation(MESSAGE_ID, TOOL_ACTION_ID))
+    }
+
+    @Test
+    fun `programmatic actions never dismiss navigation focus`() {
         val root = File(System.getProperty("user.dir"))
         val chat = File(root, "src/main/java/fyi/b612/lovehouse/feature/chat/PersonaChatScreen.kt").readText()
 
-        assertEquals(6_000L, EXACT_NAVIGATION_FOCUS_MILLIS)
-        assertTrue(chat.contains("delay(EXACT_NAVIGATION_FOCUS_MILLIS)"))
-        assertTrue(chat.contains("if (screenImeVisible) dismissExactNavigationFocus()"))
-        assertTrue(chat.contains("isUserDragging ->"))
+        // No timer, no IME level check and no focus restoration may end the focus.
+        assertFalse(chat.contains("EXACT_NAVIGATION_FOCUS_MILLIS"))
+        assertFalse(chat.contains("if (screenImeVisible) dismissExactNavigationFocus()"))
+        assertFalse(chat.contains("if (focusState.isFocused) onInputInteraction()"))
+        // Bottom-follow is suspended while navigation owns the viewport.
+        assertTrue(chat.contains("if (navigationFocusPhase.holdsViewport()) return@LaunchedEffect"))
+        assertTrue(chat.contains("if (navigationHoldsViewport) {"))
+        // Focus is activated only after the scrolled target is confirmed visible.
+        assertTrue(chat.contains("listState.scrollToItem(index)"))
+        assertTrue(chat.contains("isNavigationTargetVisible(listState.layoutInfo.visibleItemsInfo.map { it.key }, localMessageId)"))
+        // Real user interactions still dismiss everything together.
+        assertTrue(chat.contains("if (isUserDragging) dismissExactNavigationFocus()"))
+        assertTrue(chat.contains("currentOnInputInteraction()"))
         assertTrue(chat.contains("onInputInteraction = dismissExactNavigationFocus"))
-        assertTrue(chat.contains("navigationFocusDismissed && it.id == sourceEventId"))
         assertTrue(chat.contains("focusedNavigationMessageId = null"))
         assertTrue(chat.contains("focusedNavigationToolActionId = null"))
         assertTrue(chat.contains("navigationConfirmation = null"))
+    }
+
+    @Test
+    fun `navigation focus hints use terracotta message focus and deep green Tool Action focus`() {
+        val root = File(System.getProperty("user.dir"))
+        val chat = File(root, "src/main/java/fyi/b612/lovehouse/feature/chat/PersonaChatScreen.kt").readText()
+        val events = File(root, "src/main/java/fyi/b612/lovehouse/feature/events/ServerEventsScreen.kt").readText()
+
+        assertTrue(chat.contains("NavigationFocusTerracotta = Color(0xFFC96442)"))
+        assertTrue(chat.contains("NavigationFocusDeepGreen = Color(0xFF2F6A55)"))
+        assertTrue(chat.contains("navigationFocused = focused"))
+        assertTrue(events.contains("定位自通知 · ${'$'}{event.statusLabel()}"))
+    }
+
+    @Test
+    fun `off-screen historical target scrolls by identity until it is in the viewport`() = runBlocking {
+        // 40 messages, viewport of 6 rows parked at the bottom; target sits far above it.
+        val messages = (0 until 40).map { historyMessage(it) }.toMutableList()
+        val viewport = FakeViewport(size = 6, itemCount = { messages.size }).apply { parkAtBottom() }
+        val targetCanonical = canonicalId(5)
+        assertFalse(viewport.isVisible(messages.indexOfFirst { it.canonicalMessageId == targetCanonical }))
+
+        var historyLoads = 0
+        val target = positionNavigationTarget(
+            locate = { findChatEventNavigationTarget(messages, targetCanonical) },
+            loadHistory = { historyLoads++ },
+            scrollTo = { viewport.scrollTo(it) },
+            awaitVisible = { key -> viewport.isVisible(messages.indexOfFirst { it.messageId == key }) },
+        )
+
+        assertEquals("local-5", target?.localMessageId)
+        assertEquals(5, target?.messageIndex)
+        assertTrue(viewport.isVisible(5))
+        assertEquals(0, historyLoads)
+    }
+
+    @Test
+    fun `target outside the loaded window is loaded first and then positioned by its new index`() = runBlocking {
+        // Only the latest 20 messages are loaded; the target (#3) arrives with the history prepend.
+        val messages = (20 until 40).map { historyMessage(it) }.toMutableList()
+        val viewport = FakeViewport(size = 6, itemCount = { messages.size }).apply { parkAtBottom() }
+        val targetCanonical = canonicalId(3)
+        val scrolledTo = mutableListOf<Int>()
+
+        val target = positionNavigationTarget(
+            locate = { findChatEventNavigationTarget(messages, targetCanonical) },
+            loadHistory = { messages.addAll(0, (0 until 20).map { historyMessage(it) }) },
+            scrollTo = { index -> scrolledTo += index; viewport.scrollTo(index) },
+            awaitVisible = { key -> viewport.isVisible(messages.indexOfFirst { it.messageId == key }) },
+        )
+
+        assertEquals("local-3", target?.localMessageId)
+        assertEquals(listOf(3), scrolledTo)
+        assertTrue(viewport.isVisible(3))
+    }
+
+    @Test
+    fun `prepend during positioning re-resolves the index from the stable identity`() = runBlocking {
+        val messages = (10 until 40).map { historyMessage(it) }.toMutableList()
+        val viewport = FakeViewport(size = 6, itemCount = { messages.size }).apply { parkAtBottom() }
+        val targetCanonical = canonicalId(12)
+        var prepended = false
+        val scrolledTo = mutableListOf<Int>()
+
+        val target = positionNavigationTarget(
+            locate = { findChatEventNavigationTarget(messages, targetCanonical) },
+            loadHistory = {},
+            scrollTo = { index ->
+                scrolledTo += index
+                viewport.scrollTo(index)
+                if (!prepended) {
+                    prepended = true
+                    messages.addAll(0, (0 until 10).map { historyMessage(it) })
+                }
+            },
+            awaitVisible = { key -> viewport.isVisible(messages.indexOfFirst { it.messageId == key }) },
+        )
+
+        assertEquals(listOf(2, 12), scrolledTo)
+        assertEquals(12, target?.messageIndex)
+        assertTrue(viewport.isVisible(12))
+    }
+
+    @Test
+    fun `missing target after history load never scrolls to a guessed position`() = runBlocking {
+        val messages = (0 until 30).map { historyMessage(it) }.toMutableList()
+        var scrolled = false
+        val target = positionNavigationTarget(
+            locate = { findChatEventNavigationTarget(messages, canonicalId(99)) },
+            loadHistory = {},
+            scrollTo = { scrolled = true },
+            awaitVisible = { true },
+        )
+        assertNull(target)
+        assertFalse(scrolled)
+    }
+
+    @Test
+    fun `composer layout cannot pull the list back to the bottom while navigation positions`() {
+        val root = File(System.getProperty("user.dir"))
+        val chat = File(root, "src/main/java/fyi/b612/lovehouse/feature/chat/PersonaChatScreen.kt").readText()
+
+        assertTrue(chat.contains("if (followLatest && !navigationFocusPhase.holdsViewport() && messages.isNotEmpty())"))
+        assertTrue(chat.contains("loadHistory = { canonicalThreadId?.let { store.rehydrateThreadFromPersistence(threadId, it) } }"))
+        assertFalse(chat.contains("isScrollInProgress"))
+    }
+
+    private fun canonicalId(n: Int) = "0199db1d-6c00-7009-8009-%012d".format(n)
+
+    private fun historyMessage(n: Int) = ChatMessageUi(
+        messageId = "local-$n",
+        canonicalMessageId = canonicalId(n),
+        author = if (n % 2 == 0) "Codex" else "我",
+        avatar = "C",
+        body = "message $n",
+        time = "now",
+        mine = n % 2 != 0,
+    )
+
+    /** Minimal stand-in for a LazyList viewport: [first, first + size) rows are visible. */
+    private class FakeViewport(private val size: Int, private val itemCount: () -> Int) {
+        private var first = 0
+        fun parkAtBottom() { first = (itemCount() - size).coerceAtLeast(0) }
+        fun scrollTo(index: Int) { first = index.coerceIn(0, (itemCount() - size).coerceAtLeast(0)) }
+        fun isVisible(index: Int) = index >= 0 && index in first until first + size
     }
 
     private fun replyEvent() = ServerEvent(

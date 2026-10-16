@@ -20,7 +20,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -78,6 +80,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -114,7 +118,6 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import fyi.b612.lovehouse.R
@@ -145,7 +148,9 @@ import fyi.b612.lovehouse.feature.events.ServerEventLoadResult
 import fyi.b612.lovehouse.feature.events.ServerEventPresentationState
 import fyi.b612.lovehouse.feature.events.ServerEventRepository
 import fyi.b612.lovehouse.feature.events.pendingConfirmationForThread
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -155,10 +160,12 @@ import kotlin.math.roundToInt
 private val PersonaInk = Color(0xFF3E4847)
 private val PersonaMuted = Color(0xFF7F8B88)
 private val PersonaAccent = Color(0xFF718E87)
+// Navigation focus hints: terracotta for "you are here", deep green for the exact Tool Action.
+private val NavigationFocusTerracotta = Color(0xFFC96442)
+private val NavigationFocusDeepGreen = Color(0xFF2F6A55)
 
 internal const val CHAT_TEXT_SIZE_KEY = "chat_appearance_text_size_sp_v1"
 internal const val CHAT_BUBBLE_SCALE_KEY = "chat_appearance_bubble_scale_v1"
-internal const val EXACT_NAVIGATION_FOCUS_MILLIS = 6_000L
 
 internal data class ChatAppearanceSettings(
     val textSizeSp: Float = 14f,
@@ -456,11 +463,8 @@ fun ChatShellScreen(
     var focusedNavigationMessageId by remember(threadId, targetMessageId) { mutableStateOf<String?>(null) }
     var focusedNavigationToolActionId by remember(threadId, targetToolActionId) { mutableStateOf<String?>(null) }
     var navigationConfirmation by remember(threadId, sourceEventId) { mutableStateOf<ServerEvent?>(null) }
-    var navigationFocusDismissed by remember(threadId, targetMessageId, targetToolActionId, sourceEventId) {
-        mutableStateOf(false)
-    }
-    var navigationTargetHandled by remember(threadId, targetMessageId, targetToolActionId, sourceEventId) {
-        mutableStateOf(false)
+    var navigationFocusPhase by remember(threadId, targetMessageId, targetToolActionId, sourceEventId) {
+        mutableStateOf(initialNavigationFocusPhase(targetMessageId))
     }
     var followLatest by remember(threadId) { mutableStateOf(true) }
     var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
@@ -562,49 +566,65 @@ fun ChatShellScreen(
     }
     val chatScope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    val screenDensity = LocalDensity.current
-    val screenImeVisible = WindowInsets.ime.getBottom(screenDensity) > 0
+    val currentMessages by rememberUpdatedState(messages)
+    // Only real user gestures call this. Programmatic scroll, list restore, recomposition and
+    // focus/IME restoration never do, so focus survives until the Owner actually interacts.
     val dismissExactNavigationFocus = {
-        focusedNavigationMessageId = null
-        focusedNavigationToolActionId = null
-        navigationConfirmation = null
-        navigationFocusDismissed = true
+        if (navigationFocusPhase.holdsViewport()) {
+            focusedNavigationMessageId = null
+            focusedNavigationToolActionId = null
+            navigationConfirmation = null
+            navigationFocusPhase = NavigationFocusPhase.Dismissed
+        }
     }
     ChatNavigationBarTint(visualContext)
 
-    LaunchedEffect(targetMessageId, targetToolActionId, sourceEventId, messages.size) {
-        if (navigationTargetHandled || targetMessageId == null) return@LaunchedEffect
-        val target = findChatEventNavigationTarget(messages, targetMessageId, targetToolActionId)
-        navigationTargetHandled = true
+    // Navigation Focus lifecycle:
+    // Pending → (target loaded) Positioning → programmatic scroll → target visible → Active → user dismiss.
+    LaunchedEffect(targetMessageId, targetToolActionId, sourceEventId) {
+        if (navigationFocusPhase != NavigationFocusPhase.Pending || targetMessageId == null) return@LaunchedEffect
+        val abandon = { notice: String ->
+            navigationFocusPhase = NavigationFocusPhase.Idle
+            actionNotice = notice
+            followLatest = true
+        }
+        navigationFocusPhase = NavigationFocusPhase.Positioning
+        followLatest = false
+        val confirmation = if (sourceEventId != null && targetToolActionId != null) {
+            (serverEvents.get(sourceEventId) as? ServerEventLoadResult.Found)?.event
+                ?.takeIf { it.matchesNavigationConfirmation(targetMessageId, targetToolActionId) }
+        } else {
+            null
+        }
+        if (navigationFocusPhase != NavigationFocusPhase.Positioning) return@LaunchedEffect
+        val target = withTimeoutOrNull(NAVIGATION_POSITIONING_TIMEOUT_MILLIS) {
+            positionNavigationTarget(
+                locate = { findChatEventNavigationTarget(currentMessages, targetMessageId, targetToolActionId) },
+                loadHistory = { canonicalThreadId?.let { store.rehydrateThreadFromPersistence(threadId, it) } },
+                scrollTo = { index ->
+                    snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > index }
+                    listState.scrollToItem(index)
+                },
+                awaitVisible = { localMessageId ->
+                    snapshotFlow {
+                        isNavigationTargetVisible(listState.layoutInfo.visibleItemsInfo.map { it.key }, localMessageId)
+                    }.first { it }
+                },
+            )
+        }
+        if (navigationFocusPhase != NavigationFocusPhase.Positioning) return@LaunchedEffect
         if (target == null) {
-            actionNotice = "目标消息暂时无法定位。"
+            abandon("目标消息暂时无法定位。")
             return@LaunchedEffect
         }
-        followLatest = false
-        showJumpToLatest = target.messageIndex < messages.lastIndex
+        showJumpToLatest = target.messageIndex < currentMessages.lastIndex
         focusedNavigationMessageId = target.localMessageId
         focusedNavigationToolActionId = targetToolActionId
-        navigationFocusDismissed = false
-        listState.scrollToItem(target.messageIndex)
-        if (sourceEventId != null && targetToolActionId != null) {
-            val event = (serverEvents.get(sourceEventId) as? ServerEventLoadResult.Found)?.event
-            navigationConfirmation = event?.takeIf {
-                it.kind == ServerEventKind.ConfirmationRequired &&
-                    it.messageId == targetMessageId &&
-                    it.toolActionId == targetToolActionId
-            }
-            if (navigationConfirmation == null) actionNotice = "审批上下文暂时无法定位。"
+        navigationConfirmation = confirmation
+        if (sourceEventId != null && targetToolActionId != null && confirmation == null) {
+            actionNotice = "审批上下文暂时无法定位。"
         }
-    }
-
-    LaunchedEffect(focusedNavigationMessageId, navigationConfirmation?.id) {
-        if (focusedNavigationMessageId == null && navigationConfirmation == null) return@LaunchedEffect
-        delay(EXACT_NAVIGATION_FOCUS_MILLIS)
-        dismissExactNavigationFocus()
-    }
-
-    LaunchedEffect(screenImeVisible) {
-        if (screenImeVisible) dismissExactNavigationFocus()
+        navigationFocusPhase = NavigationFocusPhase.Active
     }
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
@@ -683,19 +703,26 @@ fun ChatShellScreen(
     }
 
     LaunchedEffect(isUserDragging, isAtBottom) {
+        // collectIsDraggedAsState only reports finger drags; scrollToItem never emits a DragInteraction.
+        if (isUserDragging) dismissExactNavigationFocus()
+        // While navigation owns the viewport, the "at bottom" signal comes from our own positioning
+        // (or the pre-layout empty list), so it must not re-enable bottom-follow.
+        if (navigationFocusPhase.holdsViewport()) return@LaunchedEffect
         when {
             isAtBottom -> {
                 followLatest = true
                 showJumpToLatest = false
             }
-            isUserDragging -> {
-                followLatest = false
-                dismissExactNavigationFocus()
-            }
+            isUserDragging -> followLatest = false
         }
     }
-    LaunchedEffect(messages.size, latestMessageRevision) {
+    val navigationHoldsViewport = navigationFocusPhase.holdsViewport()
+    LaunchedEffect(messages.size, latestMessageRevision, navigationHoldsViewport) {
         if (messages.isEmpty()) return@LaunchedEffect
+        if (navigationHoldsViewport) {
+            if (!isAtBottom) showJumpToLatest = true
+            return@LaunchedEffect
+        }
         if (followLatest || isAtBottom) {
             listState.scrollToItem(messages.lastIndex)
             showJumpToLatest = false
@@ -829,14 +856,28 @@ fun ChatShellScreen(
                     }
                 }
             }
-            val visibleConfirmation = navigationConfirmation?.takeUnless { navigationFocusDismissed }
-                ?: pendingConfirmation?.takeUnless { navigationFocusDismissed && it.id == sourceEventId }
-            visibleConfirmation?.let { event ->
-                ChatConfirmationCard(
-                    event = event,
-                    repository = serverEvents,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                )
+            val visibleConfirmation = navigationConfirmation?.takeIf { navigationFocusPhase == NavigationFocusPhase.Active }
+                ?: pendingConfirmation?.takeUnless {
+                    navigationFocusPhase == NavigationFocusPhase.Dismissed && it.id == sourceEventId
+                }
+            // Hold the last card so it can fade out instead of vanishing.
+            val heldConfirmation = remember { mutableStateOf<Pair<ServerEvent, Boolean>?>(null) }
+            if (visibleConfirmation != null) {
+                heldConfirmation.value = visibleConfirmation to (visibleConfirmation.id == navigationConfirmation?.id)
+            }
+            AnimatedVisibility(
+                visible = visibleConfirmation != null,
+                enter = fadeIn(tween(220)) + expandVertically(tween(220)),
+                exit = fadeOut(tween(260)) + shrinkVertically(tween(260)),
+            ) {
+                heldConfirmation.value?.let { (event, focused) ->
+                    ChatConfirmationCard(
+                        event = event,
+                        repository = serverEvents,
+                        navigationFocused = focused,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
             }
             actionNotice?.let { Text(it, Modifier.align(Alignment.CenterHorizontally).padding(vertical = 2.dp), color = PersonaMuted, fontSize = 8.sp) }
             if (selectedMessages.isNotEmpty()) MultiSelectBar(selectedMessages.size, onCancel = { selectedMessages = emptySet() }) {
@@ -845,7 +886,10 @@ fun ChatShellScreen(
                 value = input,
                 attachments = attachmentDraft.attachments,
                 visualContext = visualContext,
-                onValueChange = { input = it },
+                onValueChange = {
+                    input = it
+                    dismissExactNavigationFocus()
+                },
                 onInputInteraction = dismissExactNavigationFocus,
                 onRemoveAttachment = { target -> attachmentDraft = attachmentDraft.remove(target) },
                 onSend = { submitMessage(input) },
@@ -870,7 +914,11 @@ fun ChatShellScreen(
                     actionNotice = "本轮请求 ${merged.sorted().joinToString()}；Bridge 仍会重新校验权限与作用域"
                 },
                 onHeightChanged = {
-                    if (followLatest && messages.isNotEmpty()) chatScope.launch { listState.scrollToItem(messages.lastIndex) }
+                    // The composer's first layout must not drag the list back to the bottom while
+                    // navigation is positioning an older target.
+                    if (followLatest && !navigationFocusPhase.holdsViewport() && messages.isNotEmpty()) {
+                        chatScope.launch { listState.scrollToItem(messages.lastIndex) }
+                    }
                 },
             )
         }
@@ -1195,6 +1243,51 @@ private fun ChatProcessEvent.isToolTimelineEvent(): Boolean = when (kind) {
     else -> false
 }
 
+internal const val NAVIGATION_POSITIONING_TIMEOUT_MILLIS = 5_000L
+
+internal enum class NavigationFocusPhase { Idle, Pending, Positioning, Active, Dismissed }
+
+internal fun initialNavigationFocusPhase(targetMessageId: String?): NavigationFocusPhase =
+    if (targetMessageId == null) NavigationFocusPhase.Idle else NavigationFocusPhase.Pending
+
+/** Navigation owns the viewport from target receipt until a real user interaction dismisses it. */
+internal fun NavigationFocusPhase.holdsViewport(): Boolean =
+    this == NavigationFocusPhase.Pending || this == NavigationFocusPhase.Positioning || this == NavigationFocusPhase.Active
+
+internal fun isNavigationTargetVisible(visibleItemKeys: List<Any>, localMessageId: String): Boolean =
+    visibleItemKeys.any { it == localMessageId }
+
+/** Resolved confirmations still qualify: resolved only forbids a second decision, not navigation. */
+internal fun ServerEvent.matchesNavigationConfirmation(messageId: String, toolActionId: String): Boolean =
+    kind == ServerEventKind.ConfirmationRequired && this.messageId == messageId && this.toolActionId == toolActionId
+
+/**
+ * Brings an exact canonical target into the viewport. The index always comes from the stable
+ * identity in the current list (never a count, offset or time guess) and is re-resolved after
+ * each suspension, so history loaded/prepended in between cannot misplace the scroll.
+ * Returns the target only once its row is actually visible.
+ */
+internal suspend fun positionNavigationTarget(
+    locate: () -> ChatEventNavigationTarget?,
+    loadHistory: suspend () -> Unit,
+    scrollTo: suspend (index: Int) -> Unit,
+    awaitVisible: suspend (localMessageId: String) -> Boolean,
+): ChatEventNavigationTarget? {
+    if (locate() == null) loadHistory()
+    var target = locate() ?: return null
+    repeat(NAVIGATION_POSITIONING_ATTEMPTS) {
+        scrollTo(target.messageIndex)
+        val settled = locate() ?: return null
+        if (settled.messageIndex == target.messageIndex) {
+            return settled.takeIf { awaitVisible(it.localMessageId) }
+        }
+        target = settled
+    }
+    return null
+}
+
+private const val NAVIGATION_POSITIONING_ATTEMPTS = 3
+
 internal data class ChatEventNavigationTarget(
     val messageIndex: Int,
     val localMessageId: String,
@@ -1229,6 +1322,7 @@ internal fun findChatEventNavigationTarget(
             val failed = processTimelineIsFailed(event)
             val focused = focusedToolActionId != null && event.toolActionId == focusedToolActionId
             val connectorColor = PersonaMuted.copy(alpha = .28f)
+            val focusAmount by animateFloatAsState(if (focused) 1f else 0f, tween(280), label = "toolActionFocus")
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1257,7 +1351,16 @@ internal fun findChatEventNavigationTarget(
                     }
                     .testTag("process-timeline-item:${event.id}")
                     .clip(RoundedCornerShape(8.dp))
-                    .background(if (focused) PersonaAccent.copy(alpha = .16f) else Color.Transparent)
+                    .background(NavigationFocusDeepGreen.copy(alpha = .13f * focusAmount))
+                    .border(.8.dp, NavigationFocusDeepGreen.copy(alpha = .5f * focusAmount), RoundedCornerShape(8.dp))
+                    .drawBehind {
+                        if (focusAmount > 0f) {
+                            drawRect(
+                                color = NavigationFocusDeepGreen.copy(alpha = focusAmount),
+                                size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height),
+                            )
+                        }
+                    }
                     .clickable(enabled = interactive) {
                         if (toolEvent) onOpenToolDetail(event)
                         else expandedEventIds = toggleProcessTimelineExpansion(expandedEventIds, event)
@@ -1368,8 +1471,21 @@ private fun BreathingDots() {
                 },
                 onLongClick = onToggleSelection,
             )
+            // Arrival: rise slightly past full strength, settle; dismissal: fade out.
+            val navigationGlow = remember { Animatable(0f) }
+            LaunchedEffect(navigationFocused) {
+                if (navigationFocused) {
+                    navigationGlow.animateTo(1.3f, tween(240))
+                    navigationGlow.animateTo(1f, tween(360))
+                } else {
+                    navigationGlow.animateTo(0f, tween(320))
+                }
+            }
             val bubbleBorder = when {
-                navigationFocused -> BorderStroke(1.5.dp, PersonaAccent)
+                navigationGlow.value > .01f -> BorderStroke(
+                    (1.2f + .8f * navigationGlow.value).dp,
+                    NavigationFocusTerracotta.copy(alpha = navigationGlow.value.coerceAtMost(1f)),
+                )
                 selected -> BorderStroke(1.5.dp, PersonaAccent)
                 style != BubbleStyle.None -> BorderStroke(.8.dp, Color.White.copy(alpha = .62f))
                 else -> null
@@ -1508,6 +1624,7 @@ private fun PersonaComposer(
     onHeightChanged: () -> Unit,
 ) {
     val context = LocalContext.current
+    val currentOnInputInteraction by rememberUpdatedState(onInputInteraction)
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
     val focusManager = LocalFocusManager.current
@@ -1681,15 +1798,14 @@ private fun PersonaComposer(
                             value = value,
                             onValueChange = onValueChange,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp, max = 96.dp)
-                                .pointerInput(onInputInteraction) {
+                                .pointerInput(Unit) {
                                     awaitEachGesture {
                                         awaitFirstDown(requireUnconsumed = false)
-                                        onInputInteraction()
+                                        currentOnInputInteraction()
                                         waitForUpOrCancellation()
                                     }
                                 }
                                 .onFocusChanged { focusState ->
-                                    if (focusState.isFocused) onInputInteraction()
                                     if (focusState.isFocused && !inputFocused) composerExpanded = true
                                     if (!focusState.isFocused) composerExpanded = false
                                     inputFocused = focusState.isFocused
