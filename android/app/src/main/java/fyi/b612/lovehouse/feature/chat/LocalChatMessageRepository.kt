@@ -246,6 +246,15 @@ class SQLiteLocalChatMessageRepository(
         assistantMessageId: String,
         eventId: String,
         detail: ToolDetailEnvelope,
+    ): CachedToolDetail? = upsert(threadId, assistantMessageId, eventId, detail, null)
+
+    @Synchronized
+    override fun upsert(
+        threadId: String,
+        assistantMessageId: String,
+        eventId: String,
+        detail: ToolDetailEnvelope,
+        relation: ToolActionRelation?,
     ): CachedToolDetail? {
         if (threadId.isBlank() || assistantMessageId.isBlank() || !hasValidToolDetailIdentity(eventId, detail)) return null
         val now = nowEpochMillis()
@@ -272,11 +281,18 @@ class SQLiteLocalChatMessageRepository(
                 put("created_at_epoch_ms", createdAt)
                 put("expires_at_epoch_ms", expiresAt)
                 put("truncated", if (merged.truncated) 1 else 0)
+                relation?.let {
+                    put("tool_action_id", it.toolActionId)
+                    put("execution_id", it.executionId)
+                    put("canonical_assistant_message_id", it.assistantMessageId)
+                    put("canonical_thread_id", it.canonicalThreadId)
+                    put("provider_raw_call_id", it.providerRawCallId)
+                }
             }
             db.insertWithOnConflict(TABLE_TOOL_DETAILS, null, values, SQLiteDatabase.CONFLICT_REPLACE)
                 .also { rowId -> check(rowId != -1L) { "Could not persist safe tool detail" } }
             db.setTransactionSuccessful()
-            CachedToolDetail(threadId, assistantMessageId, eventId, merged, createdAt, expiresAt)
+            CachedToolDetail(threadId, assistantMessageId, eventId, merged, createdAt, expiresAt, relation)
         } finally {
             db.endTransaction()
         }
@@ -356,7 +372,20 @@ class SQLiteLocalChatMessageRepository(
             detail = parsed,
             createdAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("created_at_epoch_ms")),
             expiresAtEpochMillis = cursor.getLong(cursor.getColumnIndexOrThrow("expires_at_epoch_ms")),
+            relation = readToolActionRelation(cursor),
         )
+    }
+
+    private fun readToolActionRelation(cursor: android.database.Cursor): ToolActionRelation? {
+        fun nullable(name: String): String? = cursor.getColumnIndex(name).takeIf { it >= 0 && !cursor.isNull(it) }
+            ?.let(cursor::getString)
+            ?.takeIf(String::isNotBlank)
+        val toolActionId = nullable("tool_action_id") ?: return null
+        val executionId = nullable("execution_id") ?: return null
+        val assistantMessageId = nullable("canonical_assistant_message_id") ?: return null
+        val canonicalThreadId = nullable("canonical_thread_id") ?: return null
+        val providerRawCallId = nullable("provider_raw_call_id") ?: return null
+        return ToolActionRelation(toolActionId, executionId, assistantMessageId, canonicalThreadId, providerRawCallId)
     }
 
     private fun ToolDetailEnvelope.detailKind(): String = when (this) {
@@ -409,6 +438,11 @@ class SQLiteLocalChatMessageRepository(
                 put("title", event.title)
                 put("status", event.status.name)
                 event.detail?.let { put("detail", it) } ?: putNull("detail")
+                event.toolActionId?.let { put("tool_action_id", it) }
+                event.executionId?.let { put("execution_id", it) }
+                event.assistantMessageId?.let { put("canonical_assistant_message_id", it) }
+                event.canonicalThreadId?.let { put("canonical_thread_id", it) }
+                event.providerRawCallId?.let { put("provider_raw_call_id", it) }
             })
         }
     }
@@ -433,12 +467,20 @@ class SQLiteLocalChatMessageRepository(
                 }.getOrNull() ?: continue
                 val assistantMessageId = cursor.getString(cursor.getColumnIndexOrThrow("assistant_message_id"))
                 val detailIndex = cursor.getColumnIndexOrThrow("detail")
+                fun nullable(name: String): String? = cursor.getColumnIndexOrThrow(name).let { index ->
+                    if (cursor.isNull(index)) null else cursor.getString(index)
+                }
                 events.getOrPut(assistantMessageId, ::mutableListOf).add(ChatProcessEvent(
                     id = cursor.getString(cursor.getColumnIndexOrThrow("event_id")),
                     kind = kind,
                     title = cursor.getString(cursor.getColumnIndexOrThrow("title")),
                     status = status,
                     detail = if (cursor.isNull(detailIndex)) null else cursor.getString(detailIndex),
+                    toolActionId = nullable("tool_action_id"),
+                    executionId = nullable("execution_id"),
+                    assistantMessageId = nullable("canonical_assistant_message_id"),
+                    canonicalThreadId = nullable("canonical_thread_id"),
+                    providerRawCallId = nullable("provider_raw_call_id"),
                 ))
             }
         }
@@ -570,6 +612,10 @@ class SQLiteLocalChatMessageRepository(
             if (migratedVersion == 6 && newVersion >= 7) {
                 migrateMessageIdentity(db)
                 migratedVersion = 7
+            }
+            if (migratedVersion == 7 && newVersion >= 8) {
+                addToolActionRelationColumns(db)
+                migratedVersion = 8
             }
             if (migratedVersion != newVersion) {
                 error("A non-destructive chat history migration is required from version $oldVersion to $newVersion")
@@ -746,6 +792,11 @@ class SQLiteLocalChatMessageRepository(
                     title TEXT NOT NULL,
                     status TEXT NOT NULL,
                     detail TEXT,
+                    tool_action_id TEXT,
+                    execution_id TEXT,
+                    canonical_assistant_message_id TEXT,
+                    canonical_thread_id TEXT,
+                    provider_raw_call_id TEXT,
                     PRIMARY KEY (assistant_message_id, event_id)
                 )
                 """.trimIndent(),
@@ -767,12 +818,26 @@ class SQLiteLocalChatMessageRepository(
                     created_at_epoch_ms INTEGER NOT NULL,
                     expires_at_epoch_ms INTEGER NOT NULL,
                     truncated INTEGER NOT NULL CHECK(truncated IN (0, 1)),
+                    tool_action_id TEXT,
+                    execution_id TEXT,
+                    canonical_assistant_message_id TEXT,
+                    canonical_thread_id TEXT,
+                    provider_raw_call_id TEXT,
                     PRIMARY KEY (assistant_message_id, event_id)
                 )
                 """.trimIndent(),
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS chat_tool_details_thread_idx ON $TABLE_TOOL_DETAILS(thread_id, assistant_message_id)")
             db.execSQL("CREATE INDEX IF NOT EXISTS chat_tool_details_expiry_idx ON $TABLE_TOOL_DETAILS(expires_at_epoch_ms)")
+        }
+
+        private fun addToolActionRelationColumns(db: SQLiteDatabase) {
+            for (table in listOf(TABLE_PROCESS_EVENTS, TABLE_TOOL_DETAILS)) {
+                for (column in listOf("tool_action_id", "execution_id", "canonical_assistant_message_id",
+                    "canonical_thread_id", "provider_raw_call_id")) {
+                    if (!columnExists(db, table, column)) db.execSQL("ALTER TABLE $table ADD COLUMN $column TEXT")
+                }
+            }
         }
 
         private fun migratePreviewAttachments(db: SQLiteDatabase) {
@@ -804,7 +869,7 @@ class SQLiteLocalChatMessageRepository(
 
     private companion object {
         const val DATABASE_NAME = "lovehouse_chat.db"
-        const val DATABASE_VERSION = 7
+        const val DATABASE_VERSION = 8
         const val TABLE_MESSAGES = "chat_messages"
         const val TABLE_ATTACHMENTS = "chat_message_attachments"
         const val TABLE_EXECUTIONS = "chat_executions"
@@ -832,10 +897,14 @@ class SQLiteLocalChatMessageRepository(
         )
         val PROCESS_EVENT_COLUMNS = arrayOf(
             "assistant_message_id", "event_id", "position", "kind", "title", "status", "detail",
+            "tool_action_id", "execution_id", "canonical_assistant_message_id", "canonical_thread_id",
+            "provider_raw_call_id",
         )
         val TOOL_DETAIL_COLUMNS = arrayOf(
             "thread_id", "assistant_message_id", "event_id", "call_id", "detail_kind",
             "schema_version", "safe_payload", "created_at_epoch_ms", "expires_at_epoch_ms", "truncated",
+            "tool_action_id", "execution_id", "canonical_assistant_message_id", "canonical_thread_id",
+            "provider_raw_call_id",
         )
     }
 }

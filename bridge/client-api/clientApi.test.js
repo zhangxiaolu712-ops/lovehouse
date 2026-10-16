@@ -602,7 +602,9 @@ test('recoverable Chat preserves phone message ids through identity registration
   const directory = await mkdtemp(path.join(os.tmpdir(), 'lovehouse-message-identity-execution-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = new FileChatExecutionStore({ filePath: path.join(directory, 'executions.json') })
-  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {} })
+  const deliveredActions = []
+  const chatExecutionCoordinator = new ChatExecutionCoordinator({ store, log: {},
+    toolActionProducer: { async produce(action) { deliveredActions.push(action); return action } } })
   const registrations = []
   const appIdentityVerifier = {
     async verifySession(_cookie, messageIdentity) {
@@ -610,7 +612,16 @@ test('recoverable Chat preserves phone message ids through identity registration
       return { id: 'stable-app-account-id', email: 'owner@example.com' }
     },
   }
-  const base = await startHarness(t, { chatExecutionCoordinator, appIdentityVerifier })
+  const base = await startHarness(t, { chatExecutionCoordinator, appIdentityVerifier, adapters: {
+    claude: fakeAdapter('claude', { async chat({ onEvent, onText }) {
+      onEvent('tool_call', { call_id: 'toolu_identity_1', tool_type: 'claude_tool', name: 'Read' })
+      onEvent('tool_result', { call_id: 'toolu_identity_1', summary: 'done',
+        relation_provenance: { source_call_id: `mcp-live:${'c'.repeat(64)}` } })
+      onText('reply')
+      return { usage: null }
+    } }),
+    codex: fakeAdapter('codex'),
+  } })
   const executionId = '98989898-9898-4898-8898-989898989898'
   const requestBody = chatBody({
     execution_id: executionId,
@@ -623,7 +634,7 @@ test('recoverable Chat preserves phone message ids through identity registration
     body: JSON.stringify(requestBody),
   })
   assert.equal(response.status, 200)
-  await response.text()
+  const events = parseSse(await response.text())
 
   assert.deepEqual(registrations, [{
     thread_id: THREAD_ID,
@@ -634,6 +645,20 @@ test('recoverable Chat preserves phone message ids through identity registration
   assert.equal(stored.user_message_id, USER_MESSAGE_ID)
   assert.equal(stored.assistant_message_id, ASSISTANT_MESSAGE_ID)
   assert.equal(stored.thread_id, THREAD_ID)
+  const toolEvents = events.filter(item => ['tool_call', 'tool_result'].includes(item.event))
+  assert.equal(toolEvents.length, 2)
+  assert.match(toolEvents[0].data.tool_action_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  assert.equal(toolEvents[1].data.tool_action_id, toolEvents[0].data.tool_action_id)
+  assert.equal(toolEvents[0].data.execution_id, executionId)
+  assert.equal(toolEvents[0].data.assistant_message_id, ASSISTANT_MESSAGE_ID)
+  assert.equal(toolEvents[0].data.thread_id, THREAD_ID)
+  assert.equal(toolEvents[0].data.provider_raw_call_id, 'toolu_identity_1')
+  assert.equal(deliveredActions.at(-1).lifecycle_state, 'succeeded')
+  assert.equal(deliveredActions.at(-1).tool_identity, 'Read')
+  assert.equal(deliveredActions.at(-1).mcp_source_call_id, `mcp-live:${'c'.repeat(64)}`)
+  assert.deepEqual(deliveredActions.at(-1).provider_metadata, { tool_type: 'claude_tool' })
+  assert.equal(stored.tool_actions.toolu_identity_1.tool_action_id, toolEvents[0].data.tool_action_id)
 })
 
 test('canonical message identity fails closed without verified App Account while legacy Chat stays compatible', async t => {
@@ -1207,7 +1232,7 @@ test('Codex adapter does not forward Login auth and preserves the sidecar SSE co
         'event: context_breakdown\ndata: {"recent_chat":{"enabled":true,"available":true,"source":"codex_native_thread","estimated_tokens":null},"memory":{"enabled":false,"available":false,"estimated_tokens":0},"worldbook":{"enabled":false,"available":false,"estimated_tokens":0},"persona":{"enabled":false,"available":false,"estimated_tokens":0},"current_message":{"enabled":true,"available":true,"estimated_tokens":2},"reasoning":{"enabled":true,"available":true,"status":"completed","summary":"Native summary","source":"codex_native_thread","active_context":true,"resumes_with_thread":true,"compaction":"codex_native"},"estimated_tokens":2}',
         'event: session\ndata: {"session_id":"22222222-2222-4222-8222-222222222222"}',
         'event: tool_call\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"running","lifecycle":"updated","command":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":12,"command":"pwd","unknown":"drop"}}',
-        'event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","aggregated_output":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":16,"command":"pwd","output":"/tmp","exit_code":0,"status":"completed","raw_payload":"drop"}}',
+        `event: tool_result\ndata: {"call_id":"item-1","tool_type":"command","name":"shell","status":"success","lifecycle":"completed","summary":"Command completed","relation_provenance":{"source_call_id":"mcp-live:${'d'.repeat(64)}"},"aggregated_output":"must-not-pass","tool_detail":{"schema_version":1,"call_id":"item-1","detail_kind":"command","created_at":"2026-10-01T00:00:00.000Z","truncated":false,"original_length":16,"command":"pwd","output":"/tmp","exit_code":0,"status":"completed","raw_payload":"drop"}}`,
         'event: text\ndata: {"text":"hello"}',
         'event: reasoning_status\ndata: {"available":false,"status":"unavailable","summary":null,"source":"codex_cli"}',
         'event: usage\ndata: {"estimated_input_tokens":2,"actual_input_tokens":3,"cached_input_tokens":2,"actual_output_tokens":4,"reasoning_output_tokens":1,"total_tokens":7,"cumulative_input_tokens":103,"cumulative_cached_input_tokens":82,"cumulative_output_tokens":24,"cumulative_reasoning_output_tokens":6,"cumulative_total_tokens":127,"previous_cumulative_input_tokens":100,"previous_cumulative_cached_input_tokens":80,"previous_cumulative_output_tokens":20,"previous_cumulative_reasoning_output_tokens":5,"baseline_status":"known","usage_source":"codex_cli_cumulative_delta"}',
@@ -1239,6 +1264,8 @@ test('Codex adapter does not forward Login auth and preserves the sidecar SSE co
   assert.equal(events[3].data.tool_detail.command, 'pwd')
   assert.equal(events[4].data.tool_detail.output, '/tmp')
   assert.equal(events[4].data.tool_detail.raw_payload, undefined)
+  assert.deepEqual(events[4].data.relation_provenance,
+    { source_call_id: `mcp-live:${'d'.repeat(64)}` })
   assert.equal(JSON.stringify(events).includes('session_id'), false)
   assert.equal(events[0].data.capabilities.reasoning_summary, 'detailed')
   assert.equal(events[2].data.reasoning.summary, 'Native summary')

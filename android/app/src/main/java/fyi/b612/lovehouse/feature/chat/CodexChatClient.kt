@@ -56,6 +56,11 @@ data class ChatProcessEvent(
     val status: ChatProcessStatus,
     val detail: String? = null,
     val toolDetail: ToolDetailEnvelope? = null,
+    val toolActionId: String? = null,
+    val executionId: String? = null,
+    val assistantMessageId: String? = null,
+    val canonicalThreadId: String? = null,
+    val providerRawCallId: String? = null,
 )
 
 sealed class ToolDetailValue {
@@ -466,21 +471,30 @@ class HttpCodexChatClient(
                         val eventId = toolProcessEventId(name, callId)
                         val toolDetail = parseToolDetailEnvelope(json, callId)
                         toolCalls[eventId] = CodexToolCallEvidence(name, "running")
-                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolCall, toolTitle(name), ChatProcessStatus.Running, jsonString(json, "summary"), toolDetail))
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolCall, toolTitle(name), ChatProcessStatus.Running, jsonString(json, "summary"), toolDetail,
+                            jsonString(json, "tool_action_id")?.takeIf(::isMessageId), jsonString(json, "execution_id"),
+                            jsonString(json, "assistant_message_id")?.takeIf(::isMessageId), jsonString(json, "thread_id"),
+                            jsonString(json, "provider_raw_call_id")))
                     }
                     "tool_result" -> jsonString(json, "name")?.let { name ->
                         val callId = jsonString(json, "call_id")
                         val eventId = toolProcessEventId(name, callId)
                         val toolDetail = parseToolDetailEnvelope(json, callId)
                         toolCalls[eventId] = CodexToolCallEvidence(name, "success")
-                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolResult, toolTitle(name), ChatProcessStatus.Succeeded, jsonString(json, "summary"), toolDetail))
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolResult, toolTitle(name), ChatProcessStatus.Succeeded, jsonString(json, "summary"), toolDetail,
+                            jsonString(json, "tool_action_id")?.takeIf(::isMessageId), jsonString(json, "execution_id"),
+                            jsonString(json, "assistant_message_id")?.takeIf(::isMessageId), jsonString(json, "thread_id"),
+                            jsonString(json, "provider_raw_call_id")))
                     }
                     "tool_error" -> jsonString(json, "name")?.let { name ->
                         val callId = jsonString(json, "call_id")
                         val eventId = toolProcessEventId(name, callId)
                         val toolDetail = parseToolDetailEnvelope(json, callId)
                         toolCalls[eventId] = CodexToolCallEvidence(name, "rejected")
-                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolError, toolTitle(name), ChatProcessStatus.Failed, jsonString(json, "message"), toolDetail))
+                        onProcess(ChatProcessEvent(eventId, ChatProcessKind.ToolError, toolTitle(name), ChatProcessStatus.Failed, jsonString(json, "message"), toolDetail,
+                            jsonString(json, "tool_action_id")?.takeIf(::isMessageId), jsonString(json, "execution_id"),
+                            jsonString(json, "assistant_message_id")?.takeIf(::isMessageId), jsonString(json, "thread_id"),
+                            jsonString(json, "provider_raw_call_id")))
                     }
                     "reasoning_status" -> jsonString(json, "summary")?.takeIf(String::isNotBlank)?.let { summary ->
                         onProcess(ChatProcessEvent("reasoning", ChatProcessKind.ReasoningStatus, "思考状态", ChatProcessStatus.Running, summary))

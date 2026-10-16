@@ -10,6 +10,7 @@ import { createFileOAuthClientRegistry } from './oauthClientRegistry.js'
 import { createFileRefreshTokenStore } from './oauthRefreshStore.js'
 import { createAppIdentityVerifier } from './appIdentityVerifier.js'
 import { createReplyCompletedEventProducer } from './serverEventProducer.js'
+import { createToolActionProducer } from './toolActionProducer.js'
 import {
   sendMessage as claudeSend,
   abortWindow,
@@ -145,6 +146,10 @@ const replyCompletedEventProducer = APP_IDENTITY_VERIFY_URL && APP_IDENTITY_INTE
       identityEndpoint: APP_IDENTITY_VERIFY_URL,
       internalKey: APP_IDENTITY_INTERNAL_KEY,
     })
+  : null
+const toolActionProducer = APP_IDENTITY_VERIFY_URL && APP_IDENTITY_INTERNAL_KEY
+  ? createToolActionProducer({ identityEndpoint: APP_IDENTITY_VERIFY_URL,
+      internalKey: APP_IDENTITY_INTERNAL_KEY })
   : null
 const CODEX_CHAT_INTERNAL_URL = process.env.CODEX_CHAT_INTERNAL_URL
   || 'http://127.0.0.1:3002/api/codex'
@@ -474,6 +479,7 @@ const verifyClientOwner = createClientOwnerAuth({ verifyOwnerToken, checkRate })
 const chatExecutionCoordinator = new ChatExecutionCoordinator({
   store: new FileChatExecutionStore({ filePath: CHAT_EXECUTION_STORE_PATH }),
   replyCompletedProducer: replyCompletedEventProducer,
+  toolActionProducer,
 })
 
 app.post('/chat', verifyOwnerBearer, (req, res) => {

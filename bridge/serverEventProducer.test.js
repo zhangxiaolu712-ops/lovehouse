@@ -6,6 +6,7 @@ import { createReplyCompletedEventProducer } from './serverEventProducer.js'
 const INPUT = {
   appAccountId: 'account-a',
   executionId: '11111111-1111-4111-8111-111111111111',
+  assistantMessageId: '0199db1d-6c00-7002-8002-000000000002',
   threadId: '22222222-2222-4222-8222-222222222222',
 }
 
@@ -22,6 +23,9 @@ test('reply-completed producer sends only stable identifiers through internal au
           app_account_id: INPUT.appAccountId,
           origin_id: INPUT.executionId,
           thread_id: INPUT.threadId,
+          execution_id: INPUT.executionId,
+          message_id: INPUT.assistantMessageId,
+          relation_status: 'linked',
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     },
@@ -34,9 +38,10 @@ test('reply-completed producer sends only stable identifiers through internal au
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     app_account_id: INPUT.appAccountId,
     execution_id: INPUT.executionId,
+    assistant_message_id: INPUT.assistantMessageId,
     thread_id: INPUT.threadId,
   })
-  assert.equal(calls[0].options.body.includes('assistant'), false)
+  assert.equal(calls[0].options.body.includes('private assistant reply'), false)
   assert.equal(calls[0].options.body.includes('prompt'), false)
 })
 

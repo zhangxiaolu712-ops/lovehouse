@@ -18,6 +18,7 @@ import {
   normalizeRuntimeTrace,
   runtimeFailureCategory,
 } from '../chat-runtime/runtimeProvenance.js'
+import { toolRelationProvenance } from '../chat-runtime/toolRelationProvenance.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -624,12 +625,14 @@ export class CodexCliRuntimeAdapter {
               })
             }
             const outcome = toolOutcome(event.item, descriptor)
+            const relationProvenance = toolRelationProvenance(event.item.result)
             const toolDetail = normalizeCodexToolDetail(
               event.item, toolDetails.get(descriptor.call_id) || null,
             )
             if (toolDetail) toolDetails.set(descriptor.call_id, toolDetail)
             onEvent(outcome.status === 'failed' ? 'tool_error' : 'tool_result', {
               ...outcome,
+              ...(relationProvenance ? { relation_provenance: relationProvenance } : {}),
               ...(toolDetail ? { tool_detail: toolDetail } : {}),
             })
           }

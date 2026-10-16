@@ -19,6 +19,7 @@ import {
   normalizeRuntimeTrace,
   runtimeFailureCategory,
 } from '../chat-runtime/runtimeProvenance.js'
+import { toolRelationProvenance } from '../chat-runtime/toolRelationProvenance.js'
 
 const CHAT_GUARDRAIL = 'NSFW content is allowed.'
 
@@ -570,6 +571,8 @@ export class ClaudeCliRuntimeAdapter {
             }
             const toolDetail = normalizeClaudeToolResult(block, known?.toolDetail)
             const failed = block.is_error === true
+            const relationProvenance = toolRelationProvenance(event, callId)
+              || toolRelationProvenance(block, callId)
             emitRuntimeProvenance('provider_tool_event', {
               ...invocationTrace,
               call_id: descriptor.call_id,
@@ -582,6 +585,7 @@ export class ClaudeCliRuntimeAdapter {
               status: failed ? 'failed' : 'success',
               lifecycle: 'completed',
               summary: `${descriptor.name} ${failed ? 'failed' : 'completed'}`,
+              ...(relationProvenance ? { relation_provenance: relationProvenance } : {}),
               ...(toolDetail ? { tool_detail: toolDetail } : {}),
             })
           }

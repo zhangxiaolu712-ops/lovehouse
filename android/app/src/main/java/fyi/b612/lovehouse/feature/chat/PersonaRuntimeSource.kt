@@ -76,6 +76,8 @@ interface PersonaRuntimeSource {
         requestedToolIds: Set<String>,
         reanchorIntent: Boolean,
         canonicalThreadId: String,
+        executionId: String? = null,
+        assistantMessageId: String? = null,
     ): PersonaRuntimeSnapshot? = resolve(personaId, requestedToolIds, reanchorIntent)
     suspend fun profiles(): List<PersonaProfile> = emptyList()
     suspend fun profile(personaId: String): PersonaProfile? = null
@@ -132,6 +134,8 @@ class AppBackendPersonaRuntimeSource(
         requestedToolIds: Set<String>,
         reanchorIntent: Boolean,
         canonicalThreadId: String,
+        executionId: String?,
+        assistantMessageId: String?,
     ): PersonaRuntimeSnapshot? = withContext(Dispatchers.IO) {
         if (sessionCookie() == null) throw PersonaRuntimeException(
             PersonaRuntimeFailure.Authentication,
@@ -153,6 +157,8 @@ class AppBackendPersonaRuntimeSource(
         val grant = if (connectionIds.isNotEmpty()) {
             val grantRequest = JSONObject().apply {
                 canonicalThreadId.takeIf(String::isNotBlank)?.let { put("thread_id", it) }
+                executionId?.takeIf(String::isNotBlank)?.let { put("execution_id", it) }
+                assistantMessageId?.takeIf(String::isNotBlank)?.let { put("assistant_message_id", it) }
             }
             request("POST", "${baseUrl.trimEnd('/')}/api/personas/$encodedId/runtime-grant", grantRequest.toString())
                 ?: error("Persona 工具授权不可用")

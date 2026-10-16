@@ -151,6 +151,39 @@ test('execution created without verified identity never backfills owner on recon
   assert.equal(repeated.record.app_account_id, undefined)
 })
 
+test('one provider call keeps one canonical Tool Action id across lifecycle and restart', async t => {
+  const { store, filePath } = await fixture(t)
+  const identity = {
+    ownerUserId: OWNER,
+    appAccountId: 'account-a',
+    executionId: '77777777-7777-4777-8777-777777777777',
+    threadId: THREAD,
+    provider: 'claude',
+    inputFingerprint: chatExecutionFingerprint({ turn: 'tool-action' }),
+    userMessageId: '0199db1d-6c00-7001-8001-000000000001',
+    assistantMessageId: '0199db1d-6c00-7002-8002-000000000002',
+  }
+  await store.reserve(identity)
+  const action = { tool_action_id: '0199db1d-6c00-7003-8003-000000000003',
+    app_account_id: 'account-a', execution_id: identity.executionId,
+    assistant_message_id: identity.assistantMessageId, thread_id: THREAD,
+    tool_identity: 'Read', provider_source: 'claude_cli', provider_raw_call_id: 'toolu_1',
+    lifecycle_state: 'running', provider_metadata: { tool_type: 'claude_tool' } }
+  await store.recordToolAction({ ownerUserId: OWNER, executionId: identity.executionId }, action)
+  await store.recordToolAction({ ownerUserId: OWNER, executionId: identity.executionId },
+    { ...action, lifecycle_state: 'succeeded' })
+  const restored = new FileChatExecutionStore({ filePath, cleanupIntervalMs: 0 })
+  const record = await restored.get({ ownerUserId: OWNER, executionId: identity.executionId })
+  assert.equal(record.tool_actions.toolu_1.tool_action_id, action.tool_action_id)
+  assert.equal(record.tool_actions.toolu_1.lifecycle_state, 'succeeded')
+  await assert.rejects(store.recordToolAction({ ownerUserId: OWNER, executionId: identity.executionId },
+    { ...action, tool_action_id: '0199db1d-6c00-7004-8004-000000000004' }),
+  error => error.code === 'TOOL_ACTION_IDENTITY_CONFLICT')
+  await assert.rejects(store.recordToolAction({ ownerUserId: OWNER, executionId: identity.executionId },
+    { ...action, tool_identity: 'DifferentTool' }),
+  error => error.code === 'TOOL_ACTION_IDENTITY_CONFLICT')
+})
+
 test('authoritative completion produces one owner-scoped attention event without exposing reply content', async t => {
   const { store } = await fixture(t)
   const deliveries = []
@@ -168,6 +201,8 @@ test('authoritative completion produces one owner-scoped attention event without
     threadId: THREAD,
     provider: 'claude',
     inputFingerprint: chatExecutionFingerprint({ turn: 2 }),
+    userMessageId: '0199db1d-6c00-7001-8001-000000000001',
+    assistantMessageId: '0199db1d-6c00-7002-8002-000000000002',
     async execute() {
       return { text: 'private assistant reply', hidden: 'private provider payload' }
     },
@@ -180,6 +215,7 @@ test('authoritative completion produces one owner-scoped attention event without
   assert.deepEqual(deliveries, [{
     appAccountId: 'account-a',
     executionId: input.executionId,
+    assistantMessageId: input.assistantMessageId,
     threadId: THREAD,
   }])
   assert.equal(JSON.stringify(deliveries).includes('private assistant reply'), false)

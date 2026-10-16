@@ -16,7 +16,7 @@ import {
   normalizeRuntimeTrace,
   runtimeFailureCategory,
 } from '../../services/chat-runtime/runtimeProvenance.js'
-import { isUuidV7 } from '../messageIdentity.js'
+import { isUuidV7, newUuidV7 } from '../messageIdentity.js'
 
 export const CLIENT_API_VERSION = 1
 export const CLIENT_STREAM_EVENTS = Object.freeze([
@@ -827,6 +827,9 @@ export function installClientApi(app, {
           assistantMessageId: normalized.assistantMessageId,
           async execute(publish) {
             let assistantText = ''
+            const toolActions = new Map()
+            let toolEventQueue = Promise.resolve()
+            const providerSource = resolved.persona.runtime?.runtime_type || resolved.persona.default_runtime
             emitRuntimeProvenance('bridge_provider_dispatch', runtimeTrace)
             try {
               const result = await resolved.adapter.chat({
@@ -847,10 +850,41 @@ export function installClientApi(app, {
                 },
                 onEvent(event, payload) {
                   if (ADAPTER_STREAM_EVENTS.has(event) && payload && typeof payload === 'object') {
-                    publish({ event, payload })
+                    if (['tool_call', 'tool_result', 'tool_error'].includes(event) &&
+                      typeof payload.call_id === 'string' && payload.call_id !== 'unknown') {
+                      const currentAction = toolActions.get(payload.call_id)
+                      const toolActionId = currentAction?.toolActionId || newUuidV7()
+                      const toolIdentity = currentAction?.toolIdentity || payload.name || 'tool'
+                      const toolType = currentAction?.toolType || payload.tool_type || 'tool'
+                      toolActions.set(payload.call_id, { toolActionId, toolIdentity, toolType })
+                      const enriched = { ...payload, tool_action_id: toolActionId,
+                        execution_id: normalized.executionId,
+                        assistant_message_id: normalized.assistantMessageId,
+                        thread_id: normalized.threadId,
+                        provider_source: providerSource,
+                        provider_raw_call_id: payload.call_id }
+                      toolEventQueue = toolEventQueue.then(async () => {
+                        await chatExecutionCoordinator.recordToolAction({ ownerUserId: req.userId,
+                          executionId: normalized.executionId, action: {
+                            tool_action_id: toolActionId, app_account_id: appAccountId,
+                            execution_id: normalized.executionId,
+                            assistant_message_id: normalized.assistantMessageId,
+                            thread_id: normalized.threadId,
+                            tool_identity: toolIdentity, provider_source: providerSource,
+                            provider_raw_call_id: payload.call_id,
+                            ...(payload.relation_provenance?.source_call_id
+                              ? { mcp_source_call_id: payload.relation_provenance.source_call_id } : {}),
+                            lifecycle_state: event === 'tool_call' ? 'running'
+                              : (event === 'tool_result' ? 'succeeded' : 'failed'),
+                            provider_metadata: { tool_type: toolType },
+                          } })
+                        publish({ event, payload: enriched })
+                      })
+                    } else publish({ event, payload })
                   }
                 },
               })
+              await toolEventQueue
               emitRuntimeProvenance('bridge_provider_completed', { ...runtimeTrace, status: 'success' })
               return {
                 text: assistantText,
