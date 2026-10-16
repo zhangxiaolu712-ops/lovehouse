@@ -5,7 +5,11 @@ import fyi.b612.lovehouse.feature.chat.ChatMessageUi
 import fyi.b612.lovehouse.feature.chat.ChatProcessEvent
 import fyi.b612.lovehouse.feature.chat.ChatProcessKind
 import fyi.b612.lovehouse.feature.chat.ChatProcessStatus
-import fyi.b612.lovehouse.feature.chat.EXACT_NAVIGATION_FOCUS_MILLIS
+import fyi.b612.lovehouse.feature.chat.NavigationFocusPhase
+import fyi.b612.lovehouse.feature.chat.holdsViewport
+import fyi.b612.lovehouse.feature.chat.initialNavigationFocusPhase
+import fyi.b612.lovehouse.feature.chat.isNavigationTargetVisible
+import fyi.b612.lovehouse.feature.chat.matchesNavigationConfirmation
 import fyi.b612.lovehouse.feature.chat.findChatEventNavigationTarget
 import fyi.b612.lovehouse.feature.events.NotificationEventTargetResolution
 import fyi.b612.lovehouse.feature.events.ServerEvent
@@ -21,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -168,16 +173,51 @@ class W4AExactEventNavigationTest {
     }
 
     @Test
-    fun `exact navigation focus is temporary and dismisses on natural chat interactions`() {
+    fun `navigation focus owns the viewport until a real user interaction`() {
+        assertEquals(NavigationFocusPhase.Idle, initialNavigationFocusPhase(null))
+        assertEquals(NavigationFocusPhase.Pending, initialNavigationFocusPhase(MESSAGE_ID))
+        assertTrue(NavigationFocusPhase.Pending.holdsViewport())
+        assertTrue(NavigationFocusPhase.Positioning.holdsViewport())
+        assertTrue(NavigationFocusPhase.Active.holdsViewport())
+        assertFalse(NavigationFocusPhase.Idle.holdsViewport())
+        assertFalse(NavigationFocusPhase.Dismissed.holdsViewport())
+    }
+
+    @Test
+    fun `focus activates only once the target row is actually on screen`() {
+        assertFalse(isNavigationTargetVisible(listOf("local-1", "local-2"), "local-target"))
+        assertTrue(isNavigationTargetVisible(listOf("local-1", "local-target"), "local-target"))
+    }
+
+    @Test
+    fun `resolved confirmation still restores the approval focus card`() {
+        val approved = confirmationEvent().copy(status = "approved")
+        val denied = confirmationEvent().copy(status = "denied")
+        assertTrue(approved.matchesNavigationConfirmation(MESSAGE_ID, TOOL_ACTION_ID))
+        assertTrue(denied.matchesNavigationConfirmation(MESSAGE_ID, TOOL_ACTION_ID))
+        assertFalse(approved.matchesNavigationConfirmation(MESSAGE_ID, "0199db1d-6c00-7005-8005-000000000005"))
+        assertFalse(replyEvent().matchesNavigationConfirmation(MESSAGE_ID, TOOL_ACTION_ID))
+    }
+
+    @Test
+    fun `programmatic actions never dismiss navigation focus`() {
         val root = File(System.getProperty("user.dir"))
         val chat = File(root, "src/main/java/fyi/b612/lovehouse/feature/chat/PersonaChatScreen.kt").readText()
 
-        assertEquals(6_000L, EXACT_NAVIGATION_FOCUS_MILLIS)
-        assertTrue(chat.contains("delay(EXACT_NAVIGATION_FOCUS_MILLIS)"))
-        assertTrue(chat.contains("if (screenImeVisible) dismissExactNavigationFocus()"))
-        assertTrue(chat.contains("isUserDragging ->"))
+        // No timer, no IME level check and no focus restoration may end the focus.
+        assertFalse(chat.contains("EXACT_NAVIGATION_FOCUS_MILLIS"))
+        assertFalse(chat.contains("if (screenImeVisible) dismissExactNavigationFocus()"))
+        assertFalse(chat.contains("if (focusState.isFocused) onInputInteraction()"))
+        // Bottom-follow is suspended while navigation owns the viewport.
+        assertTrue(chat.contains("if (navigationFocusPhase.holdsViewport()) return@LaunchedEffect"))
+        assertTrue(chat.contains("if (navigationHoldsViewport) {"))
+        // Focus is activated only after the scrolled target is confirmed visible.
+        assertTrue(chat.contains("listState.scrollToItem(target.messageIndex)"))
+        assertTrue(chat.contains("isNavigationTargetVisible(listState.layoutInfo.visibleItemsInfo.map { it.key }"))
+        // Real user interactions still dismiss everything together.
+        assertTrue(chat.contains("if (isUserDragging) dismissExactNavigationFocus()"))
+        assertTrue(chat.contains("currentOnInputInteraction()"))
         assertTrue(chat.contains("onInputInteraction = dismissExactNavigationFocus"))
-        assertTrue(chat.contains("navigationFocusDismissed && it.id == sourceEventId"))
         assertTrue(chat.contains("focusedNavigationMessageId = null"))
         assertTrue(chat.contains("focusedNavigationToolActionId = null"))
         assertTrue(chat.contains("navigationConfirmation = null"))
