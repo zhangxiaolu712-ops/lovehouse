@@ -581,17 +581,12 @@ fun ChatShellScreen(
 
     // Navigation Focus lifecycle:
     // Pending → (target loaded) Positioning → programmatic scroll → target visible → Active → user dismiss.
-    LaunchedEffect(targetMessageId, targetToolActionId, sourceEventId, messages.isEmpty()) {
+    LaunchedEffect(targetMessageId, targetToolActionId, sourceEventId) {
         if (navigationFocusPhase != NavigationFocusPhase.Pending || targetMessageId == null) return@LaunchedEffect
-        if (currentMessages.isEmpty()) return@LaunchedEffect
         val abandon = { notice: String ->
             navigationFocusPhase = NavigationFocusPhase.Idle
             actionNotice = notice
             followLatest = true
-        }
-        if (findChatEventNavigationTarget(currentMessages, targetMessageId, targetToolActionId) == null) {
-            abandon("目标消息暂时无法定位。")
-            return@LaunchedEffect
         }
         navigationFocusPhase = NavigationFocusPhase.Positioning
         followLatest = false
@@ -602,21 +597,23 @@ fun ChatShellScreen(
             null
         }
         if (navigationFocusPhase != NavigationFocusPhase.Positioning) return@LaunchedEffect
-        // Re-resolve after the suspension: new messages may have shifted the index.
-        val target = findChatEventNavigationTarget(currentMessages, targetMessageId, targetToolActionId)
-        if (target == null) {
-            abandon("目标消息暂时无法定位。")
-            return@LaunchedEffect
+        val target = withTimeoutOrNull(NAVIGATION_POSITIONING_TIMEOUT_MILLIS) {
+            positionNavigationTarget(
+                locate = { findChatEventNavigationTarget(currentMessages, targetMessageId, targetToolActionId) },
+                loadHistory = { canonicalThreadId?.let { store.rehydrateThreadFromPersistence(threadId, it) } },
+                scrollTo = { index ->
+                    snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > index }
+                    listState.scrollToItem(index)
+                },
+                awaitVisible = { localMessageId ->
+                    snapshotFlow {
+                        isNavigationTargetVisible(listState.layoutInfo.visibleItemsInfo.map { it.key }, localMessageId)
+                    }.first { it }
+                },
+            )
         }
-        val visible = withTimeoutOrNull(NAVIGATION_POSITIONING_TIMEOUT_MILLIS) {
-            snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > target.messageIndex }
-            listState.scrollToItem(target.messageIndex)
-            snapshotFlow {
-                isNavigationTargetVisible(listState.layoutInfo.visibleItemsInfo.map { it.key }, target.localMessageId)
-            }.first { it }
-        } ?: false
         if (navigationFocusPhase != NavigationFocusPhase.Positioning) return@LaunchedEffect
-        if (!visible) {
+        if (target == null) {
             abandon("目标消息暂时无法定位。")
             return@LaunchedEffect
         }
@@ -917,7 +914,11 @@ fun ChatShellScreen(
                     actionNotice = "本轮请求 ${merged.sorted().joinToString()}；Bridge 仍会重新校验权限与作用域"
                 },
                 onHeightChanged = {
-                    if (followLatest && messages.isNotEmpty()) chatScope.launch { listState.scrollToItem(messages.lastIndex) }
+                    // The composer's first layout must not drag the list back to the bottom while
+                    // navigation is positioning an older target.
+                    if (followLatest && !navigationFocusPhase.holdsViewport() && messages.isNotEmpty()) {
+                        chatScope.launch { listState.scrollToItem(messages.lastIndex) }
+                    }
                 },
             )
         }
@@ -1242,7 +1243,7 @@ private fun ChatProcessEvent.isToolTimelineEvent(): Boolean = when (kind) {
     else -> false
 }
 
-internal const val NAVIGATION_POSITIONING_TIMEOUT_MILLIS = 3_000L
+internal const val NAVIGATION_POSITIONING_TIMEOUT_MILLIS = 5_000L
 
 internal enum class NavigationFocusPhase { Idle, Pending, Positioning, Active, Dismissed }
 
@@ -1259,6 +1260,33 @@ internal fun isNavigationTargetVisible(visibleItemKeys: List<Any>, localMessageI
 /** Resolved confirmations still qualify: resolved only forbids a second decision, not navigation. */
 internal fun ServerEvent.matchesNavigationConfirmation(messageId: String, toolActionId: String): Boolean =
     kind == ServerEventKind.ConfirmationRequired && this.messageId == messageId && this.toolActionId == toolActionId
+
+/**
+ * Brings an exact canonical target into the viewport. The index always comes from the stable
+ * identity in the current list (never a count, offset or time guess) and is re-resolved after
+ * each suspension, so history loaded/prepended in between cannot misplace the scroll.
+ * Returns the target only once its row is actually visible.
+ */
+internal suspend fun positionNavigationTarget(
+    locate: () -> ChatEventNavigationTarget?,
+    loadHistory: suspend () -> Unit,
+    scrollTo: suspend (index: Int) -> Unit,
+    awaitVisible: suspend (localMessageId: String) -> Boolean,
+): ChatEventNavigationTarget? {
+    if (locate() == null) loadHistory()
+    var target = locate() ?: return null
+    repeat(NAVIGATION_POSITIONING_ATTEMPTS) {
+        scrollTo(target.messageIndex)
+        val settled = locate() ?: return null
+        if (settled.messageIndex == target.messageIndex) {
+            return settled.takeIf { awaitVisible(it.localMessageId) }
+        }
+        target = settled
+    }
+    return null
+}
+
+private const val NAVIGATION_POSITIONING_ATTEMPTS = 3
 
 internal data class ChatEventNavigationTarget(
     val messageIndex: Int,
