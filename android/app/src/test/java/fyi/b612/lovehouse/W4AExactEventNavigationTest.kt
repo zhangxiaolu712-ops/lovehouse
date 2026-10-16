@@ -20,6 +20,10 @@ import fyi.b612.lovehouse.feature.events.ServerEventFeedState
 import fyi.b612.lovehouse.feature.events.ServerEventKind
 import fyi.b612.lovehouse.feature.events.ServerEventLoadResult
 import fyi.b612.lovehouse.feature.events.ServerEventRepository
+import fyi.b612.lovehouse.feature.events.ServerEventReadState
+import fyi.b612.lovehouse.feature.events.ServerEventPageResult
+import fyi.b612.lovehouse.feature.events.ServerEventReadResult
+import fyi.b612.lovehouse.feature.events.ServerEventConversationReadResult
 import fyi.b612.lovehouse.feature.events.resolveNotificationEventTarget
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -388,6 +392,12 @@ class W4AExactEventNavigationTest {
             decisions += eventId to decision
             return ServerEventDecisionResult.Recorded(event)
         }
+        override suspend fun page(readState: ServerEventReadState, limit: Int, cursor: String?): ServerEventPageResult =
+            error("W4A resolver must not list read state")
+        override suspend fun markRead(eventId: String): ServerEventReadResult =
+            error("W4A resolver must not mark read")
+        override suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult =
+            error("W4A resolver must not batch-read")
     }
 
     private companion object {

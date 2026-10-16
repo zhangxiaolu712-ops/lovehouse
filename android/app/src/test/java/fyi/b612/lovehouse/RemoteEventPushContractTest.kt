@@ -12,6 +12,10 @@ import fyi.b612.lovehouse.feature.events.ServerEventFeedState
 import fyi.b612.lovehouse.feature.events.ServerEventKind
 import fyi.b612.lovehouse.feature.events.ServerEventLoadResult
 import fyi.b612.lovehouse.feature.events.ServerEventRepository
+import fyi.b612.lovehouse.feature.events.ServerEventReadState
+import fyi.b612.lovehouse.feature.events.ServerEventPageResult
+import fyi.b612.lovehouse.feature.events.ServerEventReadResult
+import fyi.b612.lovehouse.feature.events.ServerEventConversationReadResult
 import fyi.b612.lovehouse.feature.events.eventNotificationDeepLink
 import fyi.b612.lovehouse.feature.events.pushInstallationEndpoint
 import fyi.b612.lovehouse.feature.events.pushNotificationTarget
@@ -233,5 +237,11 @@ class RemoteEventPushContractTest {
             eventId: String,
             decision: ServerEventDecision,
         ): ServerEventDecisionResult = error("notification resolver must not decide")
+        override suspend fun page(readState: ServerEventReadState, limit: Int, cursor: String?): ServerEventPageResult =
+            error("notification resolver must not list read state")
+        override suspend fun markRead(eventId: String): ServerEventReadResult =
+            error("notification resolver must not mark read")
+        override suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult =
+            error("notification resolver must not batch-read")
     }
 }

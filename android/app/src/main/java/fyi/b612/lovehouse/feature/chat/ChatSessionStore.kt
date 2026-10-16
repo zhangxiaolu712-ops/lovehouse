@@ -136,6 +136,10 @@ class ChatSessionStore(
     }
 
     fun thread(threadId: String): ChatThreadSummary? = threads.firstOrNull { it.threadId == threadId }
+    /** A persisted runtime alias identifies the canonical thread of a non-built-in local thread. */
+    fun canonicalThreadIdForLocalThread(localThreadId: String): String? =
+        localThreadId.takeIf { thread(it) != null }?.let(conversationPersonas::canonicalThreadId)
+
     fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? {
         if (thread(canonicalThreadId) != null) return canonicalThreadId
         conversationPersonas.localAliasForCanonicalThread(canonicalThreadId)

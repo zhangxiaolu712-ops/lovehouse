@@ -9,6 +9,10 @@ import fyi.b612.lovehouse.feature.events.ServerEventKind
 import fyi.b612.lovehouse.feature.events.ServerEventLoadResult
 import fyi.b612.lovehouse.feature.events.ServerEventPresentationSnapshot
 import fyi.b612.lovehouse.feature.events.ServerEventRepository
+import fyi.b612.lovehouse.feature.events.ServerEventReadState
+import fyi.b612.lovehouse.feature.events.ServerEventPageResult
+import fyi.b612.lovehouse.feature.events.ServerEventReadResult
+import fyi.b612.lovehouse.feature.events.ServerEventConversationReadResult
 import fyi.b612.lovehouse.feature.events.applyChatConfirmationDecision
 import fyi.b612.lovehouse.feature.events.pendingConfirmationForThread
 import fyi.b612.lovehouse.feature.events.resolveNotificationEventTarget
@@ -231,5 +235,11 @@ class Phase3bConfirmationUxTest {
             decisions += eventId to decision
             return decisionResult
         }
+        override suspend fun page(readState: ServerEventReadState, limit: Int, cursor: String?): ServerEventPageResult =
+            error("confirmation UX must not list read state")
+        override suspend fun markRead(eventId: String): ServerEventReadResult =
+            error("confirmation UX must not mark read")
+        override suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult =
+            error("confirmation UX must not batch-read")
     }
 }
