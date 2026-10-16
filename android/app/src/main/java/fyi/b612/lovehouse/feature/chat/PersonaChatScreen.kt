@@ -114,6 +114,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import fyi.b612.lovehouse.R
@@ -157,6 +158,7 @@ private val PersonaAccent = Color(0xFF718E87)
 
 internal const val CHAT_TEXT_SIZE_KEY = "chat_appearance_text_size_sp_v1"
 internal const val CHAT_BUBBLE_SCALE_KEY = "chat_appearance_bubble_scale_v1"
+internal const val EXACT_NAVIGATION_FOCUS_MILLIS = 6_000L
 
 internal data class ChatAppearanceSettings(
     val textSizeSp: Float = 14f,
@@ -454,6 +456,9 @@ fun ChatShellScreen(
     var focusedNavigationMessageId by remember(threadId, targetMessageId) { mutableStateOf<String?>(null) }
     var focusedNavigationToolActionId by remember(threadId, targetToolActionId) { mutableStateOf<String?>(null) }
     var navigationConfirmation by remember(threadId, sourceEventId) { mutableStateOf<ServerEvent?>(null) }
+    var navigationFocusDismissed by remember(threadId, targetMessageId, targetToolActionId, sourceEventId) {
+        mutableStateOf(false)
+    }
     var navigationTargetHandled by remember(threadId, targetMessageId, targetToolActionId, sourceEventId) {
         mutableStateOf(false)
     }
@@ -557,6 +562,14 @@ fun ChatShellScreen(
     }
     val chatScope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
+    val screenDensity = LocalDensity.current
+    val screenImeVisible = WindowInsets.ime.getBottom(screenDensity) > 0
+    val dismissExactNavigationFocus = {
+        focusedNavigationMessageId = null
+        focusedNavigationToolActionId = null
+        navigationConfirmation = null
+        navigationFocusDismissed = true
+    }
     ChatNavigationBarTint(visualContext)
 
     LaunchedEffect(targetMessageId, targetToolActionId, sourceEventId, messages.size) {
@@ -571,6 +584,7 @@ fun ChatShellScreen(
         showJumpToLatest = target.messageIndex < messages.lastIndex
         focusedNavigationMessageId = target.localMessageId
         focusedNavigationToolActionId = targetToolActionId
+        navigationFocusDismissed = false
         listState.scrollToItem(target.messageIndex)
         if (sourceEventId != null && targetToolActionId != null) {
             val event = (serverEvents.get(sourceEventId) as? ServerEventLoadResult.Found)?.event
@@ -581,6 +595,16 @@ fun ChatShellScreen(
             }
             if (navigationConfirmation == null) actionNotice = "审批上下文暂时无法定位。"
         }
+    }
+
+    LaunchedEffect(focusedNavigationMessageId, navigationConfirmation?.id) {
+        if (focusedNavigationMessageId == null && navigationConfirmation == null) return@LaunchedEffect
+        delay(EXACT_NAVIGATION_FOCUS_MILLIS)
+        dismissExactNavigationFocus()
+    }
+
+    LaunchedEffect(screenImeVisible) {
+        if (screenImeVisible) dismissExactNavigationFocus()
     }
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
@@ -664,7 +688,10 @@ fun ChatShellScreen(
                 followLatest = true
                 showJumpToLatest = false
             }
-            isUserDragging -> followLatest = false
+            isUserDragging -> {
+                followLatest = false
+                dismissExactNavigationFocus()
+            }
         }
     }
     LaunchedEffect(messages.size, latestMessageRevision) {
@@ -701,7 +728,10 @@ fun ChatShellScreen(
                 Modifier.weight(1f).fillMaxWidth().clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                ) { expandedActionMessageId = null },
+                ) {
+                    expandedActionMessageId = null
+                    dismissExactNavigationFocus()
+                },
             ) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -732,16 +762,30 @@ fun ChatShellScreen(
                             selectionMode = selectedMessages.isNotEmpty(),
                             actionsExpanded = expandedActionMessageId == message.messageId,
                             onToggleActions = {
+                                dismissExactNavigationFocus()
                                 expandedActionMessageId = if (expandedActionMessageId == message.messageId) null else message.messageId
                             },
                             onToggleSelection = {
+                                dismissExactNavigationFocus()
                                 expandedActionMessageId = null
                                 selectedMessages = if (message.messageId in selectedMessages) selectedMessages - message.messageId else selectedMessages + message.messageId
                             },
-                            onForward = { forwardingIds = setOf(message.messageId); panel = PersonaPanel.ForwardTarget },
-                            onOpenBundle = { openedBundle = message; panel = PersonaPanel.ForwardBundle },
-                            onOpenWorkflow = { message.taskId?.let { openWorkflowTaskId = it } },
+                            onForward = {
+                                dismissExactNavigationFocus()
+                                forwardingIds = setOf(message.messageId)
+                                panel = PersonaPanel.ForwardTarget
+                            },
+                            onOpenBundle = {
+                                dismissExactNavigationFocus()
+                                openedBundle = message
+                                panel = PersonaPanel.ForwardBundle
+                            },
+                            onOpenWorkflow = {
+                                dismissExactNavigationFocus()
+                                message.taskId?.let { openWorkflowTaskId = it }
+                            },
                             onOpenToolDetail = { event ->
+                                dismissExactNavigationFocus()
                                 val request = ToolDetailSheetRequest(message.messageId, event.id, processTimelineTitle(event))
                                 toolDetailSheet = ToolDetailSheetState(request = request)
                                 chatScope.launch {
@@ -758,6 +802,7 @@ fun ChatShellScreen(
                                 }
                             },
                             onAction = { action ->
+                                dismissExactNavigationFocus()
                                 actionNotice = when (action) {
                                     "复制" -> { clipboard.setText(AnnotatedString(message.body)); "已复制" }
                                     "重试" -> "重试尚未接入"
@@ -784,7 +829,9 @@ fun ChatShellScreen(
                     }
                 }
             }
-            (navigationConfirmation ?: pendingConfirmation)?.let { event ->
+            val visibleConfirmation = navigationConfirmation?.takeUnless { navigationFocusDismissed }
+                ?: pendingConfirmation?.takeUnless { navigationFocusDismissed && it.id == sourceEventId }
+            visibleConfirmation?.let { event ->
                 ChatConfirmationCard(
                     event = event,
                     repository = serverEvents,
@@ -799,6 +846,7 @@ fun ChatShellScreen(
                 attachments = attachmentDraft.attachments,
                 visualContext = visualContext,
                 onValueChange = { input = it },
+                onInputInteraction = dismissExactNavigationFocus,
                 onRemoveAttachment = { target -> attachmentDraft = attachmentDraft.remove(target) },
                 onSend = { submitMessage(input) },
                 onToolAction = { action ->
@@ -1447,6 +1495,7 @@ private fun PersonaComposer(
     attachments: List<ChatAttachment>,
     visualContext: ChatVisualContext,
     onValueChange: (String) -> Unit,
+    onInputInteraction: () -> Unit,
     onRemoveAttachment: (ChatAttachment) -> Unit,
     onSend: () -> Unit,
     onToolAction: (String) -> Unit,
@@ -1632,7 +1681,15 @@ private fun PersonaComposer(
                             value = value,
                             onValueChange = onValueChange,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp, max = 96.dp)
+                                .pointerInput(onInputInteraction) {
+                                    awaitEachGesture {
+                                        awaitFirstDown(requireUnconsumed = false)
+                                        onInputInteraction()
+                                        waitForUpOrCancellation()
+                                    }
+                                }
                                 .onFocusChanged { focusState ->
+                                    if (focusState.isFocused) onInputInteraction()
                                     if (focusState.isFocused && !inputFocused) composerExpanded = true
                                     if (!focusState.isFocused) composerExpanded = false
                                     inputFocused = focusState.isFocused

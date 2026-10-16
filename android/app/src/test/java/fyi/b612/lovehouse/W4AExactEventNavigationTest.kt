@@ -5,6 +5,7 @@ import fyi.b612.lovehouse.feature.chat.ChatMessageUi
 import fyi.b612.lovehouse.feature.chat.ChatProcessEvent
 import fyi.b612.lovehouse.feature.chat.ChatProcessKind
 import fyi.b612.lovehouse.feature.chat.ChatProcessStatus
+import fyi.b612.lovehouse.feature.chat.EXACT_NAVIGATION_FOCUS_MILLIS
 import fyi.b612.lovehouse.feature.chat.findChatEventNavigationTarget
 import fyi.b612.lovehouse.feature.events.NotificationEventTargetResolution
 import fyi.b612.lovehouse.feature.events.ServerEvent
@@ -164,6 +165,22 @@ class W4AExactEventNavigationTest {
         assertTrue(chat.contains("findChatEventNavigationTarget"))
         assertTrue(chat.contains("focusedNavigationToolActionId"))
         assertTrue(events.contains("目标消息暂时无法定位"))
+    }
+
+    @Test
+    fun `exact navigation focus is temporary and dismisses on natural chat interactions`() {
+        val root = File(System.getProperty("user.dir"))
+        val chat = File(root, "src/main/java/fyi/b612/lovehouse/feature/chat/PersonaChatScreen.kt").readText()
+
+        assertEquals(6_000L, EXACT_NAVIGATION_FOCUS_MILLIS)
+        assertTrue(chat.contains("delay(EXACT_NAVIGATION_FOCUS_MILLIS)"))
+        assertTrue(chat.contains("if (screenImeVisible) dismissExactNavigationFocus()"))
+        assertTrue(chat.contains("isUserDragging ->"))
+        assertTrue(chat.contains("onInputInteraction = dismissExactNavigationFocus"))
+        assertTrue(chat.contains("navigationFocusDismissed && it.id == sourceEventId"))
+        assertTrue(chat.contains("focusedNavigationMessageId = null"))
+        assertTrue(chat.contains("focusedNavigationToolActionId = null"))
+        assertTrue(chat.contains("navigationConfirmation = null"))
     }
 
     private fun replyEvent() = ServerEvent(
