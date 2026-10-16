@@ -162,12 +162,20 @@ private fun LoveHouseContent(
 
         composable(
             route = AppDestination.ChatThread.route,
-            arguments = listOf(navArgument("threadId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("threadId") { type = NavType.StringType },
+                navArgument("targetMessageId") { type = NavType.StringType; defaultValue = "" },
+                navArgument("targetToolActionId") { type = NavType.StringType; defaultValue = "" },
+                navArgument("sourceEventId") { type = NavType.StringType; defaultValue = "" },
+            ),
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.ChatThread.deepLink }),
         ) { entry ->
             val threadId = entry.arguments?.getString("threadId").orEmpty()
             ChatShellScreen(
                 threadId = threadId,
+                targetMessageId = entry.arguments?.getString("targetMessageId")?.takeIf(String::isNotBlank),
+                targetToolActionId = entry.arguments?.getString("targetToolActionId")?.takeIf(String::isNotBlank),
+                sourceEventId = entry.arguments?.getString("sourceEventId")?.takeIf(String::isNotBlank),
                 store = chatStore,
                 localStorage = dependencies.localStorage,
                 effectiveToolResolver = dependencies.effectiveTools,
@@ -232,7 +240,9 @@ private fun LoveHouseContent(
         ) {
             ServerEventsScreen(
                 repository = dependencies.serverEvents,
-                onOpenEvent = { eventId -> navController.navigate("events/${Uri.encode(eventId)}") },
+                onOpenEvent = { eventId ->
+                    navController.navigate("events/${Uri.encode(eventId)}?openTarget=true&targetUnavailable=false")
+                },
                 onBack = { navController.popBackStack() },
             )
         }
@@ -242,6 +252,7 @@ private fun LoveHouseContent(
             arguments = listOf(
                 navArgument("eventId") { type = NavType.StringType },
                 navArgument("openTarget") { type = NavType.BoolType; defaultValue = false },
+                navArgument("targetUnavailable") { type = NavType.BoolType; defaultValue = false },
             ),
             deepLinks = listOf(
                 navDeepLink { uriPattern = AppDestination.EventDetail.deepLink },
@@ -250,6 +261,7 @@ private fun LoveHouseContent(
         ) { entry ->
             val eventId = entry.arguments?.getString("eventId").orEmpty()
             val openTarget = entry.arguments?.getBoolean("openTarget") ?: false
+            val targetUnavailable = entry.arguments?.getBoolean("targetUnavailable") ?: false
             if (openTarget) {
                 NotificationEventTargetResolver(
                     eventId = eventId,
@@ -259,20 +271,31 @@ private fun LoveHouseContent(
                         chatStore.recoverPendingExecutionsOnce()
                         chatStore.rehydrateThreadFromPersistence(localThreadId, canonicalThreadId)
                     },
-                    onOpenChat = { localThreadId ->
-                        navController.navigate("chat/thread/${Uri.encode(localThreadId)}") {
+                    containsTarget = chatStore::hasEventNavigationTarget,
+                    onOpenChat = { target ->
+                        val route = eventChatRoute(
+                            canonicalThreadId = target.canonicalThreadId,
+                            messageId = target.messageId,
+                            toolActionId = target.toolActionId,
+                            sourceEventId = target.sourceEventId,
+                            resolveLocalThreadId = { target.localThreadId },
+                            encodeRouteSegment = Uri::encode,
+                        ) ?: return@NotificationEventTargetResolver
+                        navController.navigate(route) {
                             popUpTo(navController.graph.findStartDestination().id)
                             launchSingleTop = true
                         }
                     },
                     onOpenConfirmation = { confirmationEventId ->
-                        navController.navigate("events/${Uri.encode(confirmationEventId)}") {
+                        navController.navigate(
+                            "events/${Uri.encode(confirmationEventId)}?openTarget=false&targetUnavailable=true",
+                        ) {
                             popUpTo(navController.graph.findStartDestination().id)
                             launchSingleTop = true
                         }
                     },
                     onFallback = {
-                        navController.navigate("events/${Uri.encode(eventId)}") {
+                        navController.navigate("events/${Uri.encode(eventId)}?openTarget=false&targetUnavailable=true") {
                             popUpTo(navController.graph.findStartDestination().id)
                             launchSingleTop = true
                         }
@@ -282,9 +305,13 @@ private fun LoveHouseContent(
                 ServerEventDetailScreen(
                     eventId = eventId,
                     repository = dependencies.serverEvents,
-                    onOpenThread = { canonicalThreadId ->
+                    targetUnavailable = targetUnavailable,
+                    onOpenTarget = { event ->
                         eventChatRoute(
-                            canonicalThreadId = canonicalThreadId,
+                            canonicalThreadId = event.threadId ?: return@ServerEventDetailScreen false,
+                            messageId = event.messageId ?: return@ServerEventDetailScreen false,
+                            toolActionId = event.toolActionId,
+                            sourceEventId = event.id,
                             resolveLocalThreadId = chatStore::localThreadIdForCanonicalThread,
                             encodeRouteSegment = Uri::encode,
                         )?.let { route ->

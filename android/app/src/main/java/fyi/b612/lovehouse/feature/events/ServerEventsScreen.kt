@@ -82,27 +82,17 @@ fun ServerEventsScreen(
 fun ServerEventDetailScreen(
     eventId: String,
     repository: ServerEventRepository,
-    onOpenThread: (String) -> Boolean,
+    onOpenTarget: (ServerEvent) -> Boolean,
     onBack: () -> Unit,
-    autoOpenTarget: Boolean = false,
+    targetUnavailable: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var state by remember(eventId) { mutableStateOf<ServerEventLoadResult?>(null) }
     var feedback by remember(eventId) { mutableStateOf<String?>(null) }
     var deciding by remember(eventId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    var autoOpenAttempted by remember(eventId) { mutableStateOf(false) }
     suspend fun reload() { state = repository.get(eventId) }
     LaunchedEffect(eventId) { reload() }
-    LaunchedEffect(state, autoOpenTarget) {
-        val event = (state as? ServerEventLoadResult.Found)?.event
-        if (autoOpenTarget && !autoOpenAttempted && event?.kind == ServerEventKind.ReplyCompleted
-            && event.threadId != null
-        ) {
-            autoOpenAttempted = true
-            if (!onOpenThread(event.threadId)) feedback = "未找到对应的本地聊天"
-        }
-    }
     BackHandler(onBack = onBack)
     Column(modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         EventTopBar("动态详情", onBack, onRefresh = { scope.launch { reload() } })
@@ -119,15 +109,18 @@ fun ServerEventDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     item { ServerEventCard(event) }
-                    if (event.kind == ServerEventKind.ReplyCompleted && event.threadId != null) {
+                    if (targetUnavailable) {
+                        item { EventInfoPanel("目标消息暂时无法定位。事件仍保留在这里，没有跳到其他内容。") }
+                    }
+                    if (event.hasExactNavigationIdentity()) {
                         item {
                             Button(
                                 onClick = {
-                                    feedback = if (onOpenThread(event.threadId)) null else "未找到对应的本地聊天"
+                                    feedback = if (onOpenTarget(event)) null else "目标消息暂时无法定位。"
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("进入对应聊天")
+                                Text(if (event.kind == ServerEventKind.ConfirmationRequired) "定位对应工具行动" else "定位对应回复")
                             }
                             feedback?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp) }
                         }
@@ -179,6 +172,9 @@ internal sealed interface NotificationEventTargetResolution {
     data class Chat(
         val canonicalThreadId: String,
         val localThreadId: String,
+        val messageId: String,
+        val toolActionId: String?,
+        val sourceEventId: String,
     ) : NotificationEventTargetResolution
 
     data class Confirmation(val eventId: String) : NotificationEventTargetResolution
@@ -191,6 +187,7 @@ internal suspend fun resolveNotificationEventTarget(
     repository: ServerEventRepository,
     resolveLocalThreadId: (String) -> String?,
     rehydrateThread: suspend (localThreadId: String, canonicalThreadId: String) -> Boolean,
+    containsTarget: (localThreadId: String, messageId: String, toolActionId: String?) -> Boolean,
 ): NotificationEventTargetResolution {
     val event = (repository.get(eventId) as? ServerEventLoadResult.Found)?.event
         ?: return NotificationEventTargetResolution.Fallback
@@ -199,15 +196,30 @@ internal suspend fun resolveNotificationEventTarget(
         ServerEventKind.ReplyCompleted -> NotificationEventTargetResolution.Fallback
         ServerEventKind.Unknown -> return NotificationEventTargetResolution.Fallback
     }
-    if (event.threadId == null) {
+    val threadId = event.threadId
+    val messageId = event.messageId
+    val toolActionId = event.toolActionId
+    if (threadId == null || messageId == null ||
+        (event.kind == ServerEventKind.ConfirmationRequired &&
+            (toolActionId == null || event.relationStatus != "linked"))
+    ) {
         return fallback
     }
-    val localThreadId = resolveLocalThreadId(event.threadId)
+    val localThreadId = resolveLocalThreadId(threadId)
         ?: return fallback
-    if (!rehydrateThread(localThreadId, event.threadId)) {
+    if (!rehydrateThread(localThreadId, threadId)) {
         return fallback
     }
-    return NotificationEventTargetResolution.Chat(event.threadId, localThreadId)
+    if (!containsTarget(localThreadId, messageId, toolActionId)) {
+        return fallback
+    }
+    return NotificationEventTargetResolution.Chat(
+        canonicalThreadId = threadId,
+        localThreadId = localThreadId,
+        messageId = messageId,
+        toolActionId = toolActionId,
+        sourceEventId = event.id,
+    )
 }
 
 @Composable
@@ -216,7 +228,8 @@ internal fun NotificationEventTargetResolver(
     repository: ServerEventRepository,
     resolveLocalThreadId: (String) -> String?,
     rehydrateThread: suspend (localThreadId: String, canonicalThreadId: String) -> Boolean,
-    onOpenChat: (String) -> Unit,
+    containsTarget: (localThreadId: String, messageId: String, toolActionId: String?) -> Boolean,
+    onOpenChat: (NotificationEventTargetResolution.Chat) -> Unit,
     onOpenConfirmation: (String) -> Unit,
     onFallback: () -> Unit,
     modifier: Modifier = Modifier,
@@ -227,13 +240,21 @@ internal fun NotificationEventTargetResolver(
             repository = repository,
             resolveLocalThreadId = resolveLocalThreadId,
             rehydrateThread = rehydrateThread,
+            containsTarget = containsTarget,
         )) {
-            is NotificationEventTargetResolution.Chat -> onOpenChat(target.localThreadId)
+            is NotificationEventTargetResolution.Chat -> onOpenChat(target)
             is NotificationEventTargetResolution.Confirmation -> onOpenConfirmation(target.eventId)
             NotificationEventTargetResolution.Fallback -> onFallback()
         }
     }
     Box(modifier.fillMaxSize())
+}
+
+internal fun ServerEvent.hasExactNavigationIdentity(): Boolean = when (kind) {
+    ServerEventKind.ReplyCompleted -> threadId != null && messageId != null
+    ServerEventKind.ConfirmationRequired ->
+        relationStatus == "linked" && threadId != null && messageId != null && toolActionId != null
+    ServerEventKind.Unknown -> false
 }
 
 @Composable

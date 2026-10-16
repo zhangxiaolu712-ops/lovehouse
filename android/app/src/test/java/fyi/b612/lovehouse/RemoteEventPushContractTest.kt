@@ -109,12 +109,21 @@ class RemoteEventPushContractTest {
                 rehydrated = local to canonical
                 true
             },
+            containsTarget = { local, message, tool ->
+                local == localThreadId && message == REPLY_MESSAGE_ID && tool == null
+            },
         )
 
         assertEquals(1, repository.getCalls)
         assertEquals(localThreadId to canonicalThreadId, rehydrated)
         assertEquals(
-            NotificationEventTargetResolution.Chat(canonicalThreadId, localThreadId),
+            NotificationEventTargetResolution.Chat(
+                canonicalThreadId,
+                localThreadId,
+                REPLY_MESSAGE_ID,
+                null,
+                INSTALLATION_ID,
+            ),
             result,
         )
     }
@@ -129,6 +138,7 @@ class RemoteEventPushContractTest {
             repository = repository,
             resolveLocalThreadId = { null },
             rehydrateThread = { _, _ -> rehydrateCalls += 1; true },
+            containsTarget = { _, _, _ -> error("missing mapping must not inspect target") },
         )
 
         assertEquals(1, repository.getCalls)
@@ -190,6 +200,7 @@ class RemoteEventPushContractTest {
 
     private companion object {
         const val INSTALLATION_ID = "11111111-1111-4111-8111-111111111111"
+        const val REPLY_MESSAGE_ID = "0199db1d-6c00-7002-8002-000000000002"
 
         fun replyCompleted(threadId: String) = ServerEvent(
             id = INSTALLATION_ID,
@@ -197,6 +208,8 @@ class RemoteEventPushContractTest {
             rawKind = "reply_completed",
             source = "chat",
             threadId = threadId,
+            executionId = "33333333-3333-4333-8333-333333333333",
+            messageId = REPLY_MESSAGE_ID,
             safeSummary = "聊天回复已完成",
             status = "active",
             createdAt = "2026-09-28T00:00:00.000Z",

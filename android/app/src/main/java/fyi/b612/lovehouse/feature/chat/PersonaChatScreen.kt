@@ -138,6 +138,9 @@ import fyi.b612.lovehouse.feature.settings.ToolCapability
 import fyi.b612.lovehouse.feature.settings.EffectiveToolResolver
 import fyi.b612.lovehouse.feature.settings.EffectiveToolSet
 import fyi.b612.lovehouse.feature.events.ChatConfirmationCard
+import fyi.b612.lovehouse.feature.events.ServerEvent
+import fyi.b612.lovehouse.feature.events.ServerEventKind
+import fyi.b612.lovehouse.feature.events.ServerEventLoadResult
 import fyi.b612.lovehouse.feature.events.ServerEventPresentationState
 import fyi.b612.lovehouse.feature.events.ServerEventRepository
 import fyi.b612.lovehouse.feature.events.pendingConfirmationForThread
@@ -348,6 +351,9 @@ private enum class BubbleStyle(val title: String, val subtitle: String) {
 @Composable
 fun ChatShellScreen(
     threadId: String,
+    targetMessageId: String? = null,
+    targetToolActionId: String? = null,
+    sourceEventId: String? = null,
     store: ChatSessionStore,
     localStorage: LocalStorage,
     effectiveToolResolver: EffectiveToolResolver,
@@ -445,6 +451,12 @@ fun ChatShellScreen(
     var actionNotice by remember { mutableStateOf<String?>(null) }
     var expandedActionMessageId by remember(threadId) { mutableStateOf<String?>(null) }
     var toolDetailSheet by remember(threadId) { mutableStateOf<ToolDetailSheetState?>(null) }
+    var focusedNavigationMessageId by remember(threadId, targetMessageId) { mutableStateOf<String?>(null) }
+    var focusedNavigationToolActionId by remember(threadId, targetToolActionId) { mutableStateOf<String?>(null) }
+    var navigationConfirmation by remember(threadId, sourceEventId) { mutableStateOf<ServerEvent?>(null) }
+    var navigationTargetHandled by remember(threadId, targetMessageId, targetToolActionId, sourceEventId) {
+        mutableStateOf(false)
+    }
     var followLatest by remember(threadId) { mutableStateOf(true) }
     var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
@@ -546,6 +558,30 @@ fun ChatShellScreen(
     val chatScope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     ChatNavigationBarTint(visualContext)
+
+    LaunchedEffect(targetMessageId, targetToolActionId, sourceEventId, messages.size) {
+        if (navigationTargetHandled || targetMessageId == null) return@LaunchedEffect
+        val target = findChatEventNavigationTarget(messages, targetMessageId, targetToolActionId)
+        navigationTargetHandled = true
+        if (target == null) {
+            actionNotice = "目标消息暂时无法定位。"
+            return@LaunchedEffect
+        }
+        followLatest = false
+        showJumpToLatest = target.messageIndex < messages.lastIndex
+        focusedNavigationMessageId = target.localMessageId
+        focusedNavigationToolActionId = targetToolActionId
+        listState.scrollToItem(target.messageIndex)
+        if (sourceEventId != null && targetToolActionId != null) {
+            val event = (serverEvents.get(sourceEventId) as? ServerEventLoadResult.Found)?.event
+            navigationConfirmation = event?.takeIf {
+                it.kind == ServerEventKind.ConfirmationRequired &&
+                    it.messageId == targetMessageId &&
+                    it.toolActionId == targetToolActionId
+            }
+            if (navigationConfirmation == null) actionNotice = "审批上下文暂时无法定位。"
+        }
+    }
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
         if (sending || uploadingAttachments || (outgoing.isBlank() && attachmentDraft.attachments.isEmpty())) return@submit
@@ -684,6 +720,8 @@ fun ChatShellScreen(
                         }
                         MessageBubble(
                             message = message,
+                            navigationFocused = focusedNavigationMessageId == message.messageId,
+                            focusedToolActionId = focusedNavigationToolActionId,
                             startsGroup = startsGroup,
                             spacingAfter = spacingAfter,
                             task = message.taskId?.let(store::task),
@@ -746,7 +784,7 @@ fun ChatShellScreen(
                     }
                 }
             }
-            pendingConfirmation?.let { event ->
+            (navigationConfirmation ?: pendingConfirmation)?.let { event ->
                 ChatConfirmationCard(
                     event = event,
                     repository = serverEvents,
@@ -1109,8 +1147,26 @@ private fun ChatProcessEvent.isToolTimelineEvent(): Boolean = when (kind) {
     else -> false
 }
 
+internal data class ChatEventNavigationTarget(
+    val messageIndex: Int,
+    val localMessageId: String,
+)
+
+internal fun findChatEventNavigationTarget(
+    messages: List<ChatMessageUi>,
+    canonicalMessageId: String,
+    toolActionId: String? = null,
+): ChatEventNavigationTarget? {
+    val index = messages.indexOfFirst { message ->
+        message.canonicalMessageId == canonicalMessageId &&
+            (toolActionId == null || message.processEvents.any { it.toolActionId == toolActionId })
+    }
+    return index.takeIf { it >= 0 }?.let { ChatEventNavigationTarget(it, messages[it].messageId) }
+}
+
 @Composable internal fun ProcessTimeline(
     events: List<ChatProcessEvent>,
+    focusedToolActionId: String? = null,
     onOpenToolDetail: (ChatProcessEvent) -> Unit = {},
 ) {
     var expandedEventIds by remember { mutableStateOf(emptySet<String>()) }
@@ -1123,6 +1179,7 @@ private fun ChatProcessEvent.isToolTimelineEvent(): Boolean = when (kind) {
             val hasInlineDetail = !toolEvent && !event.detail.isNullOrBlank()
             val interactive = toolEvent || hasInlineDetail
             val failed = processTimelineIsFailed(event)
+            val focused = focusedToolActionId != null && event.toolActionId == focusedToolActionId
             val connectorColor = PersonaMuted.copy(alpha = .28f)
             Row(
                 Modifier
@@ -1152,6 +1209,7 @@ private fun ChatProcessEvent.isToolTimelineEvent(): Boolean = when (kind) {
                     }
                     .testTag("process-timeline-item:${event.id}")
                     .clip(RoundedCornerShape(8.dp))
+                    .background(if (focused) PersonaAccent.copy(alpha = .16f) else Color.Transparent)
                     .clickable(enabled = interactive) {
                         if (toolEvent) onOpenToolDetail(event)
                         else expandedEventIds = toggleProcessTimelineExpansion(expandedEventIds, event)
@@ -1213,6 +1271,8 @@ private fun BreathingDots() {
 
 @Composable private fun MessageBubble(
     message: ChatMessageUi,
+    navigationFocused: Boolean,
+    focusedToolActionId: String?,
     startsGroup: Boolean,
     spacingAfter: Dp,
     task: RemoteAgentTask?,
@@ -1248,7 +1308,7 @@ private fun BreathingDots() {
                 if (!message.mine) Text(message.time, color = PersonaMuted, fontSize = 7.5.sp)
             }
             if (!message.mine && message.processEvents.isNotEmpty()) {
-                ProcessTimeline(message.processEvents, onOpenToolDetail)
+                ProcessTimeline(message.processEvents, focusedToolActionId, onOpenToolDetail)
             }
             val bubbleModifier = Modifier.combinedClickable(
                 onClick = {
@@ -1261,6 +1321,7 @@ private fun BreathingDots() {
                 onLongClick = onToggleSelection,
             )
             val bubbleBorder = when {
+                navigationFocused -> BorderStroke(1.5.dp, PersonaAccent)
                 selected -> BorderStroke(1.5.dp, PersonaAccent)
                 style != BubbleStyle.None -> BorderStroke(.8.dp, Color.White.copy(alpha = .62f))
                 else -> null

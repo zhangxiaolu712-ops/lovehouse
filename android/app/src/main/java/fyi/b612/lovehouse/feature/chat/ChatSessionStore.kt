@@ -62,6 +62,7 @@ data class ChatMessageUi(
     val deliveryError: String? = null,
     val attachments: List<ChatAttachment> = emptyList(),
     val processEvents: List<ChatProcessEvent> = emptyList(),
+    val canonicalMessageId: String? = null,
 )
 
 internal fun mergeProcessEvent(
@@ -172,6 +173,16 @@ class ChatSessionStore(
             updateThread(localThreadId) { it.copy(preview = latest.body, updatedAt = latest.time) }
         }
         return true
+    }
+
+    fun hasEventNavigationTarget(
+        localThreadId: String,
+        canonicalMessageId: String,
+        toolActionId: String? = null,
+    ): Boolean {
+        val message = messages(localThreadId).firstOrNull { it.canonicalMessageId == canonicalMessageId }
+            ?: return false
+        return toolActionId == null || message.processEvents.any { it.toolActionId == toolActionId }
     }
     fun persona(threadId: String): ChatPersona? = thread(threadId)?.personaId?.let { personaId ->
         personas.firstOrNull { it.personaId == personaId }
@@ -916,6 +927,7 @@ class ChatSessionStore(
         val assistantAvatar = if (message.sender == ClaudeRuntime.personaId) "C" else "⌘"
         return ChatMessageUi(
             messageId = message.localMessageId,
+            canonicalMessageId = message.messageId,
             author = if (mine) "我" else assistantName,
             avatar = if (mine) "我" else assistantAvatar,
             body = message.content,
@@ -941,7 +953,12 @@ class ChatSessionStore(
         deliveryStatus: LocalChatDeliveryStatus = LocalChatDeliveryStatus.Sent,
         createdAtEpochMillis: Long? = null,
     ) = ChatMessageUi(
-        id, author, avatar, body, time, mine,
+        messageId = id,
+        author = author,
+        avatar = avatar,
+        body = body,
+        time = time,
+        mine = mine,
         thoughtDuration = thoughtDuration,
         thoughtSummary = thoughtSummary,
         workflowEventId = workflowEventId,

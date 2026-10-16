@@ -78,12 +78,27 @@ class Phase3bConfirmationUxTest {
                 rehydrated = local to canonical
                 true
             },
+            containsTarget = { local, message, tool ->
+                assertEquals("local-a", local)
+                assertEquals(event.messageId, message)
+                assertEquals(event.toolActionId, tool)
+                true
+            },
         )
 
         assertEquals(1, repository.getCalls)
         assertEquals(1, mappingCalls)
         assertEquals("local-a" to "canonical-a", rehydrated)
-        assertEquals(NotificationEventTargetResolution.Chat("canonical-a", "local-a"), result)
+        assertEquals(
+            NotificationEventTargetResolution.Chat(
+                "canonical-a",
+                "local-a",
+                event.messageId!!,
+                event.toolActionId,
+                event.id,
+            ),
+            result,
+        )
     }
 
     @Test
@@ -96,6 +111,7 @@ class Phase3bConfirmationUxTest {
             repository = repository,
             resolveLocalThreadId = { error("missing thread must not be mapped") },
             rehydrateThread = { _, _ -> error("missing thread must not be rehydrated") },
+            containsTarget = { _, _, _ -> error("missing thread must not inspect a target") },
         )
 
         assertEquals(NotificationEventTargetResolution.Confirmation(event.id), result)
@@ -111,6 +127,7 @@ class Phase3bConfirmationUxTest {
             repository = repository,
             resolveLocalThreadId = { null },
             rehydrateThread = { _, _ -> error("missing mapping must not be rehydrated") },
+            containsTarget = { _, _, _ -> error("missing mapping must not inspect a target") },
         )
 
         assertEquals(NotificationEventTargetResolution.Confirmation(event.id), result)
@@ -126,6 +143,7 @@ class Phase3bConfirmationUxTest {
             repository = repository,
             resolveLocalThreadId = { "local-a" },
             rehydrateThread = { _, _ -> false },
+            containsTarget = { _, _, _ -> error("failed rehydrate must not inspect a target") },
         )
 
         assertEquals(NotificationEventTargetResolution.Confirmation(event.id), result)
@@ -172,6 +190,10 @@ class Phase3bConfirmationUxTest {
         rawKind = "confirmation_required",
         source = "mcp",
         threadId = threadId,
+        executionId = threadId?.let { "11111111-1111-4111-8111-111111111111" },
+        messageId = threadId?.let { "0199db1d-6c00-7002-8002-000000000002" },
+        toolActionId = threadId?.let { "0199db1d-6c00-7003-8003-000000000003" },
+        relationStatus = if (threadId == null) "pending_tool_action" else "linked",
         safeSummary = "AI 请求使用工具：read_livingroom",
         status = "pending",
         createdAt = "2026-09-28T00:00:00.000Z",
