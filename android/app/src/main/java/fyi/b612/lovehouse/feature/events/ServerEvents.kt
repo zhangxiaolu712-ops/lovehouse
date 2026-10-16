@@ -26,6 +26,11 @@ enum class ServerEventDecision(val wireValue: String) {
     Denied("denied"),
 }
 
+enum class ServerEventReadState {
+    UNREAD,
+    READ,
+}
+
 data class ServerEvent(
     val id: String,
     val kind: ServerEventKind,
@@ -43,6 +48,8 @@ data class ServerEvent(
     val createdAt: String,
     val expiresAt: String?,
     val decidedAt: String?,
+    val readState: ServerEventReadState = ServerEventReadState.UNREAD,
+    val readAt: String? = null,
 ) {
     val canDecide: Boolean
         get() = kind == ServerEventKind.ConfirmationRequired && status == "pending"
@@ -71,19 +78,44 @@ sealed interface ServerEventDecisionResult {
     data class Error(val message: String) : ServerEventDecisionResult
 }
 
+data class ServerEventPage(val events: List<ServerEvent>, val nextCursor: String?)
+
+sealed interface ServerEventPageResult {
+    data class Ready(val page: ServerEventPage) : ServerEventPageResult
+    data object AuthenticationRequired : ServerEventPageResult
+    data class Error(val message: String) : ServerEventPageResult
+}
+
+sealed interface ServerEventReadResult {
+    data class Recorded(val event: ServerEvent) : ServerEventReadResult
+    data object AuthenticationRequired : ServerEventReadResult
+    data object NotFound : ServerEventReadResult
+    data class Error(val message: String) : ServerEventReadResult
+}
+
+sealed interface ServerEventConversationReadResult {
+    data class Recorded(val threadId: String, val cutoffAt: String, val markedReadCount: Int) : ServerEventConversationReadResult
+    data object AuthenticationRequired : ServerEventConversationReadResult
+    data class Error(val message: String) : ServerEventConversationReadResult
+}
+
 interface ServerEventRepository {
     val feed: StateFlow<ServerEventFeedState>
     suspend fun refresh()
     suspend fun get(eventId: String): ServerEventLoadResult
     suspend fun decide(eventId: String, decision: ServerEventDecision): ServerEventDecisionResult
+    suspend fun page(readState: ServerEventReadState, limit: Int = 50, cursor: String? = null): ServerEventPageResult
+    suspend fun markRead(eventId: String): ServerEventReadResult
+    suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult
 }
-
-internal data class ServerEventPage(val events: List<ServerEvent>, val nextCursor: String?)
 
 internal interface ServerEventApi {
     suspend fun list(status: String, limit: Int, cursor: String? = null): ServerEventPage
+    suspend fun list(readState: ServerEventReadState, limit: Int, cursor: String? = null): ServerEventPage
     suspend fun get(eventId: String): ServerEvent
     suspend fun decide(eventId: String, decision: ServerEventDecision)
+    suspend fun markRead(eventId: String): ServerEvent
+    suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult.Recorded
 }
 
 internal class ServerEventApiException(
@@ -123,6 +155,24 @@ class AndroidServerEventRepository internal constructor(
         } catch (error: Throwable) {
             mutableFeed.value = ServerEventFeedState.Error(error.safeMessage())
         }
+    }
+
+    override suspend fun page(
+        readState: ServerEventReadState,
+        limit: Int,
+        cursor: String?,
+    ): ServerEventPageResult = try {
+        require(limit in 1..100) { "Invalid event page size" }
+        ServerEventPageResult.Ready(api.list(readState, limit, cursor))
+    } catch (error: ServerEventApiException) {
+        if (error.status == HttpURLConnection.HTTP_UNAUTHORIZED) {
+            onAuthenticationRequired()
+            ServerEventPageResult.AuthenticationRequired
+        } else {
+            ServerEventPageResult.Error("动态暂时无法加载，请稍后重试")
+        }
+    } catch (error: Throwable) {
+        ServerEventPageResult.Error("动态暂时无法加载，请稍后重试")
     }
 
     override suspend fun get(eventId: String): ServerEventLoadResult = try {
@@ -175,6 +225,44 @@ class AndroidServerEventRepository internal constructor(
         }
     }
 
+    override suspend fun markRead(eventId: String): ServerEventReadResult = try {
+        val event = api.markRead(eventId)
+        if (event.id != eventId || event.readState != ServerEventReadState.READ) {
+            ServerEventReadResult.Error("已读状态尚未确认，请刷新动态")
+        } else {
+            ServerEventReadResult.Recorded(event)
+        }
+    } catch (error: ServerEventApiException) {
+        when (error.status) {
+            HttpURLConnection.HTTP_UNAUTHORIZED -> {
+                onAuthenticationRequired()
+                ServerEventReadResult.AuthenticationRequired
+            }
+            HttpURLConnection.HTTP_NOT_FOUND -> ServerEventReadResult.NotFound
+            else -> ServerEventReadResult.Error("已读状态暂时无法更新，请稍后重试")
+        }
+    } catch (error: Throwable) {
+        ServerEventReadResult.Error("网络不可用，已读状态尚未确认")
+    }
+
+    override suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult = try {
+        val result = api.markConversationRead(threadId)
+        if (result.threadId != threadId || result.cutoffAt.isBlank() || result.markedReadCount < 0) {
+            ServerEventConversationReadResult.Error("已读状态尚未确认，请刷新动态")
+        } else {
+            result
+        }
+    } catch (error: ServerEventApiException) {
+        if (error.status == HttpURLConnection.HTTP_UNAUTHORIZED) {
+            onAuthenticationRequired()
+            ServerEventConversationReadResult.AuthenticationRequired
+        } else {
+            ServerEventConversationReadResult.Error("已读状态暂时无法更新，请稍后重试")
+        }
+    } catch (error: Throwable) {
+        ServerEventConversationReadResult.Error("网络不可用，已读状态尚未确认")
+    }
+
     private companion object {
         const val FEED_LIMIT = 50
     }
@@ -185,8 +273,16 @@ internal class HttpServerEventApi(
     private val sessionCookie: () -> String?,
 ) : ServerEventApi {
     override suspend fun list(status: String, limit: Int, cursor: String?): ServerEventPage = withContext(Dispatchers.IO) {
+        listWithQuery("status=${urlEncode(status)}", limit, cursor)
+    }
+
+    override suspend fun list(readState: ServerEventReadState, limit: Int, cursor: String?): ServerEventPage = withContext(Dispatchers.IO) {
+        listWithQuery("read_state=${readState.name}", limit, cursor)
+    }
+
+    private fun listWithQuery(filter: String, limit: Int, cursor: String?): ServerEventPage {
         val query = buildList {
-            add("status=${urlEncode(status)}")
+            add(filter)
             add("limit=$limit")
             cursor?.let { add("cursor=${urlEncode(it)}") }
         }.joinToString("&")
@@ -197,7 +293,7 @@ internal class HttpServerEventApi(
                 values.optJSONObject(index)?.let { add(it.toServerEvent()) }
             }
         }
-        ServerEventPage(events, payload.optNullableString("next_cursor"))
+        return ServerEventPage(events, payload.optNullableString("next_cursor"))
     }
 
     override suspend fun get(eventId: String): ServerEvent = withContext(Dispatchers.IO) {
@@ -212,6 +308,24 @@ internal class HttpServerEventApi(
         )
         Unit
     }
+
+    override suspend fun markRead(eventId: String): ServerEvent = withContext(Dispatchers.IO) {
+        request("POST", "/api/events/${urlEncode(eventId)}/read").getJSONObject("event").toServerEvent()
+    }
+
+    override suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult.Recorded =
+        withContext(Dispatchers.IO) {
+            val payload = request(
+                method = "POST",
+                path = "/api/events/read-conversation",
+                body = JSONObject().put("thread_id", threadId).toString(),
+            )
+            ServerEventConversationReadResult.Recorded(
+                threadId = payload.getString("thread_id"),
+                cutoffAt = payload.getString("cutoff_at"),
+                markedReadCount = payload.getInt("marked_read_count"),
+            )
+        }
 
     private fun request(method: String, path: String, body: String? = null): JSONObject {
         val cookie = sessionCookie()?.takeIf(String::isNotBlank)
@@ -258,7 +372,7 @@ internal fun serverEventEndpoint(baseUrl: String, eventId: String? = null, decis
     return if (decision) "$detail/decision" else detail
 }
 
-private fun JSONObject.toServerEvent(): ServerEvent {
+internal fun JSONObject.toServerEvent(): ServerEvent {
     val rawKind = getString("kind")
     return ServerEvent(
         id = getString("id"),
@@ -277,6 +391,8 @@ private fun JSONObject.toServerEvent(): ServerEvent {
         createdAt = getString("created_at"),
         expiresAt = optNullableString("expires_at"),
         decidedAt = optNullableString("decided_at"),
+        readState = ServerEventReadState.valueOf(optString("read_state", "UNREAD")),
+        readAt = optNullableString("read_at"),
     )
 }
 

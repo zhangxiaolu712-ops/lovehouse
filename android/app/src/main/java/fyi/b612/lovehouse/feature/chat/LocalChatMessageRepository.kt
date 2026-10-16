@@ -50,9 +50,14 @@ interface LocalChatMessageRepository {
     fun upsert(messages: List<LocalChatMessage>) = messages.forEach(::upsert)
     fun replaceProcessEvents(threadId: String, assistantMessageId: String, events: List<ChatProcessEvent>) = Unit
     fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? = null
+    fun canonicalThreadIdForLocalThread(localThreadId: String): String? = null
     fun pendingExecutions(): List<LocalChatExecution> = emptyList()
     fun upsertExecution(execution: LocalChatExecution) = Unit
 }
+
+/** A local conversation is safe to bulk-mark only when its execution history has one canonical ID. */
+internal fun uniqueCanonicalThreadId(distinctIds: List<String>): String? =
+    distinctIds.singleOrNull()?.takeIf(String::isNotBlank)
 
 object NoOpLocalChatMessageRepository : LocalChatMessageRepository {
     override fun messages(threadId: String): List<LocalChatMessage> = emptyList()
@@ -60,6 +65,7 @@ object NoOpLocalChatMessageRepository : LocalChatMessageRepository {
     override fun upsert(messages: List<LocalChatMessage>) = Unit
     override fun replaceProcessEvents(threadId: String, assistantMessageId: String, events: List<ChatProcessEvent>) = Unit
     override fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? = null
+    override fun canonicalThreadIdForLocalThread(localThreadId: String): String? = null
     override fun pendingExecutions(): List<LocalChatExecution> = emptyList()
     override fun upsertExecution(execution: LocalChatExecution) = Unit
 }
@@ -174,6 +180,24 @@ class SQLiteLocalChatMessageRepository(
             "1",
         ).use { cursor ->
             cursor.takeIf { it.moveToFirst() }?.getString(0)
+        }
+
+    @Synchronized
+    override fun canonicalThreadIdForLocalThread(localThreadId: String): String? =
+        database.readableDatabase.query(
+            TABLE_EXECUTIONS,
+            arrayOf("canonical_thread_id"),
+            "local_thread_id = ?",
+            arrayOf(localThreadId),
+            "canonical_thread_id",
+            null,
+            null,
+            "2",
+        ).use { cursor ->
+            val distinctIds = buildList {
+                while (cursor.moveToNext()) add(cursor.getString(0))
+            }
+            uniqueCanonicalThreadId(distinctIds)
         }
 
     @Synchronized

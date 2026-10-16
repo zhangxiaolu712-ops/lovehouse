@@ -83,6 +83,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -147,6 +148,8 @@ import fyi.b612.lovehouse.feature.events.ServerEventKind
 import fyi.b612.lovehouse.feature.events.ServerEventLoadResult
 import fyi.b612.lovehouse.feature.events.ServerEventPresentationState
 import fyi.b612.lovehouse.feature.events.ServerEventRepository
+import fyi.b612.lovehouse.feature.events.ServerEventReadResult
+import fyi.b612.lovehouse.feature.events.ServerEventConversationReadResult
 import fyi.b612.lovehouse.feature.events.pendingConfirmationForThread
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -426,6 +429,10 @@ fun ChatShellScreen(
         else -> null
     }
     val canonicalThreadId = runtimeConfig?.threadId
+    // Freeze at navigation entry. An alias created by sending a later message must not widen the entry cutoff.
+    val entryReadCanonicalThreadId = rememberSaveable(threadId, sourceEventId) {
+        (canonicalThreadId ?: store.canonicalThreadIdForLocalThread(threadId)).orEmpty()
+    }.takeIf(String::isNotBlank)
     val eventFeed by serverEvents.feed.collectAsState()
     val eventPresentation by ServerEventPresentationState.state.collectAsState()
     val pendingConfirmation = pendingConfirmationForThread(eventFeed, canonicalThreadId)
@@ -466,6 +473,8 @@ fun ChatShellScreen(
     var navigationFocusPhase by remember(threadId, targetMessageId, targetToolActionId, sourceEventId) {
         mutableStateOf(initialNavigationFocusPhase(targetMessageId))
     }
+    // Saved only for this navigation entry: Activity recreation must not create a second cutoff.
+    var directEntryReadStarted by rememberSaveable(threadId, sourceEventId) { mutableStateOf(false) }
     var followLatest by remember(threadId) { mutableStateOf(true) }
     var showJumpToLatest by remember(threadId) { mutableStateOf(false) }
     var openWorkflowTaskId by remember { mutableStateOf<String?>(null) }
@@ -558,6 +567,17 @@ fun ChatShellScreen(
             else -> actionNotice = "其他附件类型尚未接入"
         }
     }
+    LaunchedEffect(entryReadCanonicalThreadId, sourceEventId) {
+        // Capture the server cutoff at entry, before later arrivals can be consumed by a delayed read.
+        if (shouldStartDirectConversationRead(entryReadCanonicalThreadId, sourceEventId, directEntryReadStarted)) {
+            directEntryReadStarted = true
+            when (val result = recordDirectConversationEntryRead(entryReadCanonicalThreadId, sourceEventId, serverEvents)) {
+                ServerEventConversationReadResult.AuthenticationRequired -> actionNotice = "请先登录 LoveHouse App Account"
+                is ServerEventConversationReadResult.Error -> actionNotice = result.message
+                else -> Unit
+            }
+        }
+    }
     val listState = rememberLazyListState()
     val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
     val isAtBottom by remember { derivedStateOf { !listState.canScrollForward } }
@@ -625,6 +645,12 @@ fun ChatShellScreen(
             actionNotice = "审批上下文暂时无法定位。"
         }
         navigationFocusPhase = NavigationFocusPhase.Active
+        when (val result = recordEventReadAfterTargetVisible(sourceEventId, target, serverEvents)) {
+            ServerEventReadResult.AuthenticationRequired -> actionNotice = "请先登录 LoveHouse App Account"
+            ServerEventReadResult.NotFound -> actionNotice = "这条动态已不可访问，已读状态未更新"
+            is ServerEventReadResult.Error -> actionNotice = result.message
+            else -> Unit
+        }
     }
 
     val submitMessage: (String) -> Unit = submit@{ outgoing ->
@@ -1304,6 +1330,28 @@ internal fun findChatEventNavigationTarget(
     }
     return index.takeIf { it >= 0 }?.let { ChatEventNavigationTarget(it, messages[it].messageId) }
 }
+
+/** The Event is read only after W4A has returned a target that is visible in the viewport. */
+internal suspend fun recordEventReadAfterTargetVisible(
+    sourceEventId: String?,
+    visibleTarget: ChatEventNavigationTarget?,
+    repository: ServerEventRepository,
+): ServerEventReadResult? = if (sourceEventId == null || visibleTarget == null) null else
+    repository.markRead(sourceEventId)
+
+/** A direct chat entry captures one server-side cutoff; Event navigation does not batch-read. */
+internal suspend fun recordDirectConversationEntryRead(
+    canonicalThreadId: String?,
+    sourceEventId: String?,
+    repository: ServerEventRepository,
+): ServerEventConversationReadResult? = if (canonicalThreadId == null || sourceEventId != null) null else
+    repository.markConversationRead(canonicalThreadId)
+
+internal fun shouldStartDirectConversationRead(
+    canonicalThreadId: String?,
+    sourceEventId: String?,
+    alreadyStartedForEntry: Boolean,
+): Boolean = canonicalThreadId != null && sourceEventId == null && !alreadyStartedForEntry
 
 @Composable internal fun ProcessTimeline(
     events: List<ChatProcessEvent>,

@@ -136,6 +136,13 @@ class ChatSessionStore(
     }
 
     fun thread(threadId: String): ChatThreadSummary? = threads.firstOrNull { it.threadId == threadId }
+    /** Resolve only a persisted runtime alias or a unique canonical ID in execution history. */
+    fun canonicalThreadIdForLocalThread(localThreadId: String): String? {
+        if (thread(localThreadId) == null) return null
+        return conversationPersonas.canonicalThreadId(localThreadId)
+            ?: runCatching { messageRepository.canonicalThreadIdForLocalThread(localThreadId) }.getOrNull()
+    }
+
     fun localThreadIdForCanonicalThread(canonicalThreadId: String): String? {
         if (thread(canonicalThreadId) != null) return canonicalThreadId
         conversationPersonas.localAliasForCanonicalThread(canonicalThreadId)
