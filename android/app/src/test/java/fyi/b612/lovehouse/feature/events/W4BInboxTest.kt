@@ -70,6 +70,21 @@ class W4BInboxTest {
     }
 
     @Test
+    fun `approval reads only the existing safe tool name metadata`() {
+        val approval = JSONObject(
+            """{"id":"event-1","kind":"confirmation_required","safe_summary":"AI 请求使用工具：read_status","status":"pending","created_at":"2026-10-17T12:00:00Z","metadata":{"tool_name":"read_status","provider_metadata":{"raw_arguments":"do not display"}}}""",
+        ).toServerEvent()
+        assertEquals("read_status", approval.toolName)
+        assertEquals("AI 请求使用工具：read_status", approval.safeSummary)
+        assertEquals("pending", approval.status)
+
+        val legacy = JSONObject(
+            """{"id":"event-2","kind":"confirmation_required","safe_summary":"等待确认","status":"expired","created_at":"2026-10-17T12:00:00Z","metadata":{}}""",
+        ).toServerEvent()
+        assertNull(legacy.toolName)
+    }
+
+    @Test
     fun `repository bounds limit and query before calling the server`() = runBlocking {
         val api = InboxFakeApi()
         val repository = AndroidServerEventRepository(api) {}
@@ -123,6 +138,9 @@ class W4BInboxTest {
         // No local read truth on Android.
         assertFalse(inbox.contains("isReadLocal"))
         assertFalse(inbox.contains("localSeen"))
+        assertTrue(inbox.contains("event.toolName"))
+        assertTrue(inbox.contains("event.safeSummary"))
+        assertFalse(inbox.contains("搜对话关键词"))
         // Notification entry and W4A exact navigation stay intact.
         assertTrue(navigation.contains("NotificationEventTargetResolver"))
         assertTrue(navigation.contains("eventChatRoute("))

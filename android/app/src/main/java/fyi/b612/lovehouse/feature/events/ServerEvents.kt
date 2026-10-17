@@ -50,6 +50,7 @@ data class ServerEvent(
     val decidedAt: String?,
     val readState: ServerEventReadState = ServerEventReadState.UNREAD,
     val readAt: String? = null,
+    val toolName: String? = null,
 ) {
     val canDecide: Boolean
         get() = kind == ServerEventKind.ConfirmationRequired && status == "pending"
@@ -563,6 +564,7 @@ internal fun JSONObject.toServerEvent(): ServerEvent {
         decidedAt = optNullableString("decided_at"),
         readState = ServerEventReadState.valueOf(optString("read_state", "UNREAD")),
         readAt = optNullableString("read_at"),
+        toolName = optJSONObject("metadata")?.optNullableString("tool_name"),
     )
 }
 

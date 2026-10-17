@@ -199,6 +199,7 @@ private fun EventDetailBody(event: ServerEvent, conversation: String?, targetUna
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (approval) {
                 EventMeta("对话", listOfNotNull(conversation ?: "对话", inboxIdTail(event.messageId)).joinToString(" · "))
+                EventMeta("工具", event.toolName ?: "未提供")
                 EventMeta("工具行动", inboxIdTail(event.toolActionId) ?: "—")
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     TcText("状态", 12f, color = Tc.Ink2, modifier = Modifier.width(56.dp))

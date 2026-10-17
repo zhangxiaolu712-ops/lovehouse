@@ -581,7 +581,7 @@ internal fun InboxHome(
                             }
                             if (attention.events.isEmpty() && history.events.isEmpty()) item {
                                 if (query.isNotEmpty()) {
-                                    IbEmpty("没搜到", "换个词试试，比如对话里的关键词或工具名。")
+                                    IbEmpty("没搜到", "换个事件摘要关键词试试。")
                                 } else {
                                     IbEmpty("这里空空的", "暂时没有新消息。")
                                 }
@@ -697,7 +697,7 @@ private fun IbSearchBar(value: String, onValueChange: (String) -> Unit, onSubmit
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(Modifier.weight(1f)) {
-            IbTextField(value, onValueChange, "搜对话关键词、工具名…", onDone = onSubmit)
+            IbTextField(value, onValueChange, "搜事件摘要…", onDone = onSubmit)
         }
         IbButton("搜索", onSubmit, style = IbButtonStyle.Primary, small = true)
     }
@@ -787,6 +787,7 @@ private fun InboxRow(
                     if (approval) inboxStatusLabel(event.status).let { (text, style) -> IbPill(text, style) }
                 }
                 if (approval) {
+                    TcText("工具 · ${event.toolName ?: "未提供"}", 12f, lineHeight = 1.5f, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     TcText(event.safeSummary, 11f, color = Tc.Ink2, family = Tc.Mono, lineHeight = 1.5f, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 } else {
                     TcText("回复完成", 12f, lineHeight = 1.5f, maxLines = 1)
