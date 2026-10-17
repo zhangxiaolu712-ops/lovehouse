@@ -158,7 +158,7 @@ class RemoteEventPushContractTest {
         assertTrue(navigation.contains("if (openTarget)"))
         assertTrue(navigation.contains("NotificationEventTargetResolver"))
         assertTrue(navigation.contains("ServerEventDetailScreen"))
-        assertTrue(screen.contains("EventTopBar(\"动态详情\""))
+        assertTrue(screen.contains("IbTopBar(total = null, onBack = onBack"))
         assertTrue(screen.contains("Box(modifier.fillMaxSize())"))
     }
 

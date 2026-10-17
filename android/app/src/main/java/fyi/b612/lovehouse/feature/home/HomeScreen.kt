@@ -194,6 +194,7 @@ fun HomeScreen(
     localStorage: LocalStorage,
     modifier: Modifier = Modifier,
     onOpenSchedule: () -> Unit = {},
+    onOpenInbox: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val appearance = LocalLoveHouseAppearance.current
@@ -305,7 +306,7 @@ fun HomeScreen(
                         .onGloballyPositioned { editor.updatePlaceableBounds(it.boundsInRoot()) },
                 ) {
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize(), pageSpacing = 12.dp, userScrollEnabled = editor.draggingId == null, key = { it }) { page ->
-                        DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, onOpenSchedule, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
+                        DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, onOpenSchedule, onOpenInbox, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
                     }
                     DesktopPageIndicator(pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
                 }
@@ -331,7 +332,7 @@ fun HomeScreen(
                 pageSpacing = 12.dp,
                 key = { it },
             ) { page ->
-                DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, onOpenSchedule, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
+                DesktopPage(page, editor, onOpenChat, onOpenSettings, onOpenLab, onOpenSchedule, onOpenInbox, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp).padding(top = if (editor.isEditing) 54.dp else 0.dp))
             }
 
             DesktopPageIndicator(pagerState.currentPage)
@@ -410,11 +411,11 @@ private fun DesktopPageIndicator(currentPage: Int, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenChat: () -> Unit, onOpenSettings: () -> Unit, onOpenLab: () -> Unit, onOpenSchedule: () -> Unit, modifier: Modifier) {
+private fun DesktopPage(page: Int, editor: DesktopEditor, onOpenChat: () -> Unit, onOpenSettings: () -> Unit, onOpenLab: () -> Unit, onOpenSchedule: () -> Unit, onOpenInbox: () -> Unit, modifier: Modifier) {
     DynamicGridPage(page, editor, modifier) { geometry ->
         FirstDesktopItems(page, editor, geometry, onOpenSchedule)
         SecondDesktopItems(page, editor, geometry)
-        ThirdDesktopItems(page, editor, geometry)
+        ThirdDesktopItems(page, editor, geometry, onOpenInbox)
         FourthDesktopItems(page, editor, geometry, onOpenLab)
         FifthDesktopItems(page, editor, geometry)
         DockDesktopItems(page, editor, geometry, onOpenChat, onOpenSettings)
@@ -564,10 +565,12 @@ private fun SecondDesktopItems(renderPage: Int, editor: DesktopEditor, geometry:
 }
 
 @Composable
-private fun ThirdDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry) {
-        listOf("▤" to "世界书", "🎨" to "画廊", "▣" to "相册", "◎" to "小圈").forEachIndexed { column, item ->
-            GridDesktopApp(item.first, item.second, renderPage, editor, GridPlacement(2, 0, column, 1, 1), geometry)
-        }
+private fun ThirdDesktopItems(renderPage: Int, editor: DesktopEditor, geometry: GridGeometry, onOpenInbox: () -> Unit) {
+        GridDesktopApp("▤", "世界书", renderPage, editor, GridPlacement(2, 0, 0, 1, 1), geometry)
+        // itemId keeps the former "画廊" id so a layout the Owner already arranged is preserved.
+        GridDesktopApp("✉", "收件箱", renderPage, editor, GridPlacement(2, 0, 1, 1, 1), geometry, itemId = "page:2:app:🎨:画廊", onClick = onOpenInbox)
+        GridDesktopApp("▣", "相册", renderPage, editor, GridPlacement(2, 0, 2, 1, 1), geometry)
+        GridDesktopApp("◎", "小圈", renderPage, editor, GridPlacement(2, 0, 3, 1, 1), geometry)
         GridGlassPanel("p3-health", renderPage, editor, GridPlacement(2, 1, 0, 2, 2), geometry, 20.dp) {
                 Text("♡ ─── ♡", color = DesktopMuted, fontSize = 10.sp)
                 Text("—", color = DesktopInk, fontFamily = FontFamily.Serif, fontSize = 34.sp)
