@@ -90,6 +90,10 @@ private fun LoveHouseContent(
             claudeWebHistoryImporter = dependencies.claudeWebHistoryImporter,
         )
     }
+    // Readable conversation label for Inbox rows; the canonical thread ID itself never reaches the UI.
+    val conversationLabel: (String?) -> String? = { canonicalThreadId ->
+        canonicalThreadId?.let(chatStore::localThreadIdForCanonicalThread)?.let(chatStore::thread)?.title
+    }
     val notificationIntentTarget by NotificationIntentHandoff.pending.collectAsState()
     LaunchedEffect(notificationIntentTarget?.deliveryId) {
         val target = notificationIntentTarget ?: return@LaunchedEffect
@@ -140,6 +144,7 @@ private fun LoveHouseContent(
                 onOpenSettings = { navController.navigate(AppDestination.Settings.route) },
                 onOpenLab = { navController.navigate(AppDestination.Lab.route) },
                 onOpenSchedule = { navController.navigate(AppDestination.Schedule.route) },
+                onOpenInbox = { navController.navigate(AppDestination.Events.route) { launchSingleTop = true } },
                 localStorage = dependencies.localStorage,
             )
         }
@@ -228,9 +233,7 @@ private fun LoveHouseContent(
                 secretVault = dependencies.secretVault,
                 personaRuntimeSource = dependencies.personaRuntimeSource,
                 selfCheck = dependencies.selfCheck,
-                serverEvents = dependencies.serverEvents,
                 onOpenConnectionControl = { navController.navigate(AppDestination.ConnectionControl.route) },
-                onOpenEvents = { navController.navigate(AppDestination.Events.route) },
             )
         }
 
@@ -238,12 +241,13 @@ private fun LoveHouseContent(
             route = AppDestination.Events.route,
             deepLinks = listOf(navDeepLink { uriPattern = AppDestination.Events.deepLink }),
         ) {
+            // Desktop → 收件箱 (first-level). Rows open the Detail page; "去对话" there reuses W4A exact navigation.
             ServerEventsScreen(
                 repository = dependencies.serverEvents,
+                conversationLabel = conversationLabel,
                 onOpenEvent = { eventId ->
-                    navController.navigate("events/${Uri.encode(eventId)}?openTarget=true&targetUnavailable=false")
+                    navController.navigate("events/${Uri.encode(eventId)}?openTarget=false&targetUnavailable=false")
                 },
-                onBack = { navController.popBackStack() },
             )
         }
 
@@ -305,6 +309,7 @@ private fun LoveHouseContent(
                 ServerEventDetailScreen(
                     eventId = eventId,
                     repository = dependencies.serverEvents,
+                    conversationLabel = conversationLabel,
                     targetUnavailable = targetUnavailable,
                     onOpenTarget = { event ->
                         eventChatRoute(
@@ -319,7 +324,15 @@ private fun LoveHouseContent(
                             true
                         } ?: false
                     },
-                    onBack = { navController.popBackStack() },
+                    onBack = {
+                        // Detail always returns to Inbox Home, also when it was opened straight from a notification.
+                        if (!navController.popBackStack(AppDestination.Events.route, inclusive = false)) {
+                            navController.navigate(AppDestination.Events.route) {
+                                popUpTo(AppDestination.EventDetail.route) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
+                    },
                 )
             }
         }

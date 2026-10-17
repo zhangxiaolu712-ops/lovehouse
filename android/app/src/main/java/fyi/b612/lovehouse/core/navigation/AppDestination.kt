@@ -12,7 +12,8 @@ enum class AppDestination(
     Memory("memory", "记忆", "忆", "lovehouse://memory", true),
     Engineering("engineering", "工程", "工", "lovehouse://engineering", true),
     Settings("settings", "设置", "设", "lovehouse://settings", true),
-    Events("events", "动态", "动", "lovehouse://events", false),
+    // Route and deep link stay "events" so notifications and existing links keep working.
+    Events("events", "收件箱", "收", "lovehouse://events", false),
     EventDetail(
         "events/{eventId}?openTarget={openTarget}&targetUnavailable={targetUnavailable}",
         "动态详情",

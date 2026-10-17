@@ -50,6 +50,7 @@ data class ServerEvent(
     val decidedAt: String?,
     val readState: ServerEventReadState = ServerEventReadState.UNREAD,
     val readAt: String? = null,
+    val toolName: String? = null,
 ) {
     val canDecide: Boolean
         get() = kind == ServerEventKind.ConfirmationRequired && status == "pending"
@@ -99,6 +100,49 @@ sealed interface ServerEventConversationReadResult {
     data class Error(val message: String) : ServerEventConversationReadResult
 }
 
+/** W4B Inbox: attention = unread information + pending decisions; history = the rest. */
+enum class InboxSection(val wireValue: String) {
+    Attention("attention"),
+    History("history"),
+}
+
+enum class InboxKind(val wireValue: String) {
+    All("all"),
+    ReplyCompleted("reply_completed"),
+    ConfirmationRequired("confirmation_required"),
+}
+
+/** Authoritative per-kind counts from the server, never derived from the loaded window. */
+data class InboxCounts(
+    val replyUnread: Int,
+    val replyRead: Int,
+    val approvalPending: Int,
+    val approvalHistory: Int,
+) {
+    fun count(kind: InboxKind, section: InboxSection): Int = when (kind) {
+        InboxKind.All -> if (section == InboxSection.Attention) replyUnread + approvalPending else replyRead + approvalHistory
+        InboxKind.ReplyCompleted -> if (section == InboxSection.Attention) replyUnread else replyRead
+        InboxKind.ConfirmationRequired -> if (section == InboxSection.Attention) approvalPending else approvalHistory
+    }
+}
+
+sealed interface InboxCountsResult {
+    data class Ready(val counts: InboxCounts) : InboxCountsResult
+    data object AuthenticationRequired : InboxCountsResult
+    data class Error(val message: String) : InboxCountsResult
+}
+
+sealed interface InboxBulkReadResult {
+    data class Recorded(val cutoffAt: String, val markedReadCount: Int) : InboxBulkReadResult
+    data object Protected : InboxBulkReadResult
+    data object AuthenticationRequired : InboxBulkReadResult
+    data class Error(val message: String) : InboxBulkReadResult
+}
+
+const val INBOX_DEFAULT_LIMIT = 30
+const val INBOX_MAX_LIMIT = 100
+const val INBOX_MAX_QUERY_LENGTH = 100
+
 interface ServerEventRepository {
     val feed: StateFlow<ServerEventFeedState>
     suspend fun refresh()
@@ -107,6 +151,15 @@ interface ServerEventRepository {
     suspend fun page(readState: ServerEventReadState, limit: Int = 50, cursor: String? = null): ServerEventPageResult
     suspend fun markRead(eventId: String): ServerEventReadResult
     suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult
+    suspend fun inbox(
+        section: InboxSection,
+        kind: InboxKind,
+        query: String? = null,
+        limit: Int = INBOX_DEFAULT_LIMIT,
+        cursor: String? = null,
+    ): ServerEventPageResult = ServerEventPageResult.Error("收件箱尚未接入")
+    suspend fun inboxCounts(): InboxCountsResult = InboxCountsResult.Error("收件箱尚未接入")
+    suspend fun bulkRead(kind: InboxKind): InboxBulkReadResult = InboxBulkReadResult.Error("收件箱尚未接入")
 }
 
 internal interface ServerEventApi {
@@ -116,6 +169,12 @@ internal interface ServerEventApi {
     suspend fun decide(eventId: String, decision: ServerEventDecision)
     suspend fun markRead(eventId: String): ServerEvent
     suspend fun markConversationRead(threadId: String): ServerEventConversationReadResult.Recorded
+    suspend fun inbox(section: InboxSection, kind: InboxKind, query: String?, limit: Int, cursor: String?): ServerEventPage =
+        throw ServerEventApiException(HttpURLConnection.HTTP_NOT_IMPLEMENTED, "INBOX_UNAVAILABLE", "收件箱尚未接入")
+    suspend fun inboxCounts(): InboxCounts =
+        throw ServerEventApiException(HttpURLConnection.HTTP_NOT_IMPLEMENTED, "INBOX_UNAVAILABLE", "收件箱尚未接入")
+    suspend fun bulkRead(kind: InboxKind): InboxBulkReadResult.Recorded =
+        throw ServerEventApiException(HttpURLConnection.HTTP_NOT_IMPLEMENTED, "INBOX_UNAVAILABLE", "收件箱尚未接入")
 }
 
 internal class ServerEventApiException(
@@ -263,6 +322,60 @@ class AndroidServerEventRepository internal constructor(
         ServerEventConversationReadResult.Error("网络不可用，已读状态尚未确认")
     }
 
+    override suspend fun inbox(
+        section: InboxSection,
+        kind: InboxKind,
+        query: String?,
+        limit: Int,
+        cursor: String?,
+    ): ServerEventPageResult = try {
+        require(limit in 1..INBOX_MAX_LIMIT) { "Invalid inbox page size" }
+        val normalizedQuery = query?.trim()?.takeIf(String::isNotEmpty)
+        require(normalizedQuery == null || normalizedQuery.length <= INBOX_MAX_QUERY_LENGTH) { "Inbox query is too long" }
+        ServerEventPageResult.Ready(api.inbox(section, kind, normalizedQuery, limit, cursor))
+    } catch (error: ServerEventApiException) {
+        if (error.status == HttpURLConnection.HTTP_UNAUTHORIZED) {
+            onAuthenticationRequired()
+            ServerEventPageResult.AuthenticationRequired
+        } else {
+            ServerEventPageResult.Error("收件箱暂时无法加载，请稍后重试")
+        }
+    } catch (error: IllegalArgumentException) {
+        ServerEventPageResult.Error("搜索词或条数超出范围")
+    } catch (error: Throwable) {
+        ServerEventPageResult.Error("收件箱暂时无法加载，请稍后重试")
+    }
+
+    override suspend fun inboxCounts(): InboxCountsResult = try {
+        InboxCountsResult.Ready(api.inboxCounts())
+    } catch (error: ServerEventApiException) {
+        if (error.status == HttpURLConnection.HTTP_UNAUTHORIZED) {
+            onAuthenticationRequired()
+            InboxCountsResult.AuthenticationRequired
+        } else {
+            InboxCountsResult.Error("数量暂时无法读取")
+        }
+    } catch (error: Throwable) {
+        InboxCountsResult.Error("数量暂时无法读取")
+    }
+
+    override suspend fun bulkRead(kind: InboxKind): InboxBulkReadResult = try {
+        val result = api.bulkRead(kind)
+        refresh()
+        result
+    } catch (error: ServerEventApiException) {
+        when {
+            error.status == HttpURLConnection.HTTP_UNAUTHORIZED -> {
+                onAuthenticationRequired()
+                InboxBulkReadResult.AuthenticationRequired
+            }
+            error.code == "BULK_READ_PROTECTED" -> InboxBulkReadResult.Protected
+            else -> InboxBulkReadResult.Error("全部已读暂时无法完成，请稍后重试")
+        }
+    } catch (error: Throwable) {
+        InboxBulkReadResult.Error("网络不可用，已读状态尚未确认")
+    }
+
     private companion object {
         const val FEED_LIMIT = 50
     }
@@ -327,6 +440,39 @@ internal class HttpServerEventApi(
             )
         }
 
+    override suspend fun inbox(
+        section: InboxSection,
+        kind: InboxKind,
+        query: String?,
+        limit: Int,
+        cursor: String?,
+    ): ServerEventPage = withContext(Dispatchers.IO) {
+        val payload = request("GET", "/api/events/inbox?${inboxQueryString(section, kind, query, limit, cursor)}")
+        val values = payload.optJSONArray("events")
+        val events = buildList {
+            if (values != null) for (index in 0 until values.length()) {
+                values.optJSONObject(index)?.let { add(it.toServerEvent()) }
+            }
+        }
+        ServerEventPage(events, payload.optNullableString("next_cursor"))
+    }
+
+    override suspend fun inboxCounts(): InboxCounts = withContext(Dispatchers.IO) {
+        request("GET", "/api/events/inbox/counts").getJSONObject("counts").toInboxCounts()
+    }
+
+    override suspend fun bulkRead(kind: InboxKind): InboxBulkReadResult.Recorded = withContext(Dispatchers.IO) {
+        val payload = request(
+            method = "POST",
+            path = "/api/events/read-bulk",
+            body = JSONObject().put("kind", kind.wireValue).toString(),
+        )
+        InboxBulkReadResult.Recorded(
+            cutoffAt = payload.getString("cutoff_at"),
+            markedReadCount = payload.getInt("marked_read_count"),
+        )
+    }
+
     private fun request(method: String, path: String, body: String? = null): JSONObject {
         val cookie = sessionCookie()?.takeIf(String::isNotBlank)
             ?: throw ServerEventApiException(HttpURLConnection.HTTP_UNAUTHORIZED, "APP_AUTH_REQUIRED", "请先登录 LoveHouse App Account")
@@ -372,6 +518,31 @@ internal fun serverEventEndpoint(baseUrl: String, eventId: String? = null, decis
     return if (decision) "$detail/decision" else detail
 }
 
+internal fun inboxQueryString(
+    section: InboxSection,
+    kind: InboxKind,
+    query: String?,
+    limit: Int,
+    cursor: String?,
+): String = buildList {
+    add("section=${section.wireValue}")
+    add("kind=${kind.wireValue}")
+    query?.let { add("q=${urlEncode(it)}") }
+    add("limit=$limit")
+    cursor?.let { add("cursor=${urlEncode(it)}") }
+}.joinToString("&")
+
+internal fun JSONObject.toInboxCounts(): InboxCounts {
+    val reply = getJSONObject("reply_completed")
+    val approval = getJSONObject("confirmation_required")
+    return InboxCounts(
+        replyUnread = reply.getInt("unread"),
+        replyRead = reply.getInt("read"),
+        approvalPending = approval.getInt("pending"),
+        approvalHistory = approval.getInt("history"),
+    )
+}
+
 internal fun JSONObject.toServerEvent(): ServerEvent {
     val rawKind = getString("kind")
     return ServerEvent(
@@ -393,6 +564,7 @@ internal fun JSONObject.toServerEvent(): ServerEvent {
         decidedAt = optNullableString("decided_at"),
         readState = ServerEventReadState.valueOf(optString("read_state", "UNREAD")),
         readAt = optNullableString("read_at"),
+        toolName = optJSONObject("metadata")?.optNullableString("tool_name"),
     )
 }
 
